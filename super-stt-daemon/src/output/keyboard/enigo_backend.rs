@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+use anyhow::Result;
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+pub struct EnigoBackend {
+    typing_chunk: usize,
+    backspace_batch_size: usize,
+    enigo: Enigo,
+}
+
+impl EnigoBackend {
+    pub fn new() -> Result<Self> {
+        let enigo = Enigo::new(&Settings::default())
+            .map_err(|e| anyhow::anyhow!("Failed to initialize enigo: {e}"))?;
+
+        Ok(Self {
+            typing_chunk: 64,
+            backspace_batch_size: 20,
+            enigo,
+        })
+    }
+
+    /// Synchronous: enigo's handle holds raw xkbcommon pointers (`!Send`) and
+    /// the work blocks (per-chunk sleeps between `text()` calls). The
+    /// [`Simulator`](super::Simulator) enum runs this under `block_in_place` so
+    /// the handle never crosses an `.await` point — no thread migration mid-type
+    /// (audit Tier 3 #35).
+    pub fn type_text(&mut self, text: &str) -> Result<()> {
+        let mut i = 0;
+        let chars: Vec<char> = text.chars().collect();
+        while i < chars.len() {
+            let end = (i + self.typing_chunk).min(chars.len());
+            let segment: String = chars[i..end].iter().collect();
+            self.enigo
+                .text(&segment)
+                .map_err(|e| anyhow::anyhow!("Failed to type segment: {e}"))?;
+            i = end;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        Ok(())
+    }
+
+    pub fn backspace_n(&mut self, n: usize) {
+        let mut remaining = n;
+        while remaining > 0 {
+            let batch_size = remaining.min(self.backspace_batch_size);
+            for _ in 0..batch_size {
+                let _ = self.enigo.key(Key::Backspace, Direction::Click);
+            }
+            remaining -= batch_size;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}

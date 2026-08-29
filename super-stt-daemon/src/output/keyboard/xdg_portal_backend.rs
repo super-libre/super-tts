@@ -1,0 +1,262 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+use anyhow::{Context, Result};
+use futures::StreamExt;
+use log::{debug, info};
+use std::collections::HashMap;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+
+const PORTAL_BUS: &str = "org.freedesktop.portal.Desktop";
+const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+const REMOTE_DESKTOP_IFACE: &str = "org.freedesktop.portal.RemoteDesktop";
+const REQUEST_IFACE: &str = "org.freedesktop.portal.Request";
+
+const XKB_KEY_BACKSPACE: i32 = 0xFF08;
+
+pub struct XdgPortalBackend {
+    /// The `RemoteDesktop` portal proxy, built once and reused for every keysym
+    /// press/release (audit 2 Tier 3 #1). `type_text` issues 2–4 keysym calls per
+    /// char and the preview loop re-types the growing transcript each tick, so
+    /// rebuilding the proxy per call meant constant D-Bus match-rule churn on the
+    /// interactive path. The proxy holds its own clone of the async connection, so
+    /// the portal session stays alive for the backend's lifetime.
+    proxy: zbus::Proxy<'static>,
+    session_path: OwnedObjectPath,
+}
+
+impl XdgPortalBackend {
+    /// Check whether the `RemoteDesktop` portal interface is available.
+    pub async fn is_available() -> bool {
+        let Ok(conn) = zbus::Connection::session().await else {
+            debug!("XDG Portal check: no session bus");
+            return false;
+        };
+
+        let Ok(proxy) =
+            zbus::Proxy::new(&conn, PORTAL_BUS, PORTAL_PATH, REMOTE_DESKTOP_IFACE).await
+        else {
+            debug!("XDG Portal check: failed to create proxy");
+            return false;
+        };
+
+        match proxy.get_property::<u32>("AvailableDeviceTypes").await {
+            Ok(types) => {
+                debug!("XDG Portal check: AvailableDeviceTypes = {types}");
+                // bit 0 = keyboard
+                types & 1 != 0
+            }
+            Err(e) => {
+                debug!("XDG Portal check: AvailableDeviceTypes failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Create a new portal session (async — call from the daemon's async context).
+    pub async fn new() -> Result<Self> {
+        let conn = zbus::Connection::session()
+            .await
+            .context("Failed to connect to session D-Bus")?;
+
+        let session_path = Self::setup_session(&conn).await?;
+
+        // Build the RemoteDesktop proxy once and reuse it for every keysym
+        // (audit 2 Tier 3 #1). The `&'static str` bus/path/interface constants
+        // make this a `Proxy<'static>`, and it clones the connection internally.
+        let proxy = zbus::Proxy::new(&conn, PORTAL_BUS, PORTAL_PATH, REMOTE_DESKTOP_IFACE)
+            .await
+            .context("Failed to create RemoteDesktop proxy")?;
+
+        info!("XDG Desktop Portal write method ready (session: {session_path})");
+
+        Ok(Self {
+            proxy,
+            session_path,
+        })
+    }
+
+    async fn setup_session(conn: &zbus::Connection) -> Result<OwnedObjectPath> {
+        let portal = zbus::Proxy::new(conn, PORTAL_BUS, PORTAL_PATH, REMOTE_DESKTOP_IFACE).await?;
+
+        // Step 1: CreateSession
+        let session_token = format!("superstt_s{}", std::process::id());
+
+        let mut opts = HashMap::<&str, Value<'_>>::new();
+        opts.insert("session_handle_token", Value::from(session_token.as_str()));
+
+        let results = portal_call(conn, &portal, "CreateSession", &(opts,), 10).await?;
+
+        let session_path: OwnedObjectPath = results
+            .get("session_handle")
+            .and_then(|v| TryInto::<String>::try_into(v.clone()).ok())
+            .and_then(|s| OwnedObjectPath::try_from(s).ok())
+            .context("No session_handle in CreateSession response")?;
+
+        debug!("Portal session created: {session_path}");
+
+        // Step 2: SelectDevices  (type 1 = keyboard)
+        let mut opts = HashMap::<&str, Value<'_>>::new();
+        opts.insert("types", Value::U32(1));
+
+        portal_call(
+            conn,
+            &portal,
+            "SelectDevices",
+            &(session_path.as_ref(), opts),
+            10,
+        )
+        .await?;
+
+        debug!("Portal keyboard device selected");
+
+        // Step 3: Start (may show authorization dialog)
+        let opts = HashMap::<&str, Value<'_>>::new();
+
+        portal_call(
+            conn,
+            &portal,
+            "Start",
+            &(session_path.as_ref(), "", opts),
+            30,
+        )
+        .await?;
+
+        info!("Portal session started — keyboard input authorised");
+        Ok(session_path)
+    }
+
+    /// Send a keysym press or release via the portal.
+    ///
+    /// Issued directly on the backend's owned async `Connection`. The typing
+    /// path is async end-to-end (audit Tier 3 #35), so this no longer spins up a
+    /// one-shot thread + current-thread runtime per keysym just to escape a sync
+    /// caller — it simply awaits the D-Bus call on the runtime.
+    async fn notify_keysym(&self, keysym: i32, state: u32) -> Result<()> {
+        let options: HashMap<&str, Value<'_>> = HashMap::new();
+        self.proxy
+            .call_noreply(
+                "NotifyKeyboardKeysym",
+                &(self.session_path.as_ref(), options, keysym, state),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("NotifyKeyboardKeysym failed: {e}"))
+    }
+
+    pub async fn type_text(&mut self, text: &str) -> Result<()> {
+        for ch in text.chars() {
+            let (needs_shift, keysym) = char_to_keysym(ch);
+            if needs_shift {
+                self.notify_keysym(XKB_KEY_SHIFT_L, 1).await?;
+            }
+            self.notify_keysym(keysym, 1).await?;
+            self.notify_keysym(keysym, 0).await?;
+            if needs_shift {
+                self.notify_keysym(XKB_KEY_SHIFT_L, 0).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn backspace_n(&mut self, n: usize) -> Result<()> {
+        for _ in 0..n {
+            self.notify_keysym(XKB_KEY_BACKSPACE, 1).await?;
+            self.notify_keysym(XKB_KEY_BACKSPACE, 0).await?;
+        }
+        Ok(())
+    }
+}
+
+/// Call a portal method and wait for the Response signal.
+async fn portal_call(
+    conn: &zbus::Connection,
+    portal: &zbus::Proxy<'_>,
+    method: &str,
+    body: &(impl serde::Serialize + zbus::zvariant::DynamicType),
+    timeout_secs: u64,
+) -> Result<HashMap<String, OwnedValue>> {
+    let request_path: OwnedObjectPath = portal
+        .call(method, body)
+        .await
+        .context(format!("Portal {method} call failed"))?;
+
+    debug!("Portal {method}: request path = {request_path}");
+
+    let req_proxy: zbus::Proxy<'_> =
+        zbus::Proxy::new(conn, PORTAL_BUS, request_path.as_str(), REQUEST_IFACE).await?;
+
+    let mut signals = req_proxy.receive_signal("Response").await?;
+
+    let signal = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), signals.next())
+        .await
+        .context("Timeout waiting for portal Response")?
+        .context("Signal stream ended without Response")?;
+
+    let body = signal.body();
+    let (code, results): (u32, HashMap<String, OwnedValue>) = body
+        .deserialize()
+        .context("Failed to deserialize portal Response")?;
+
+    debug!("Portal {method}: response code = {code}");
+
+    if code != 0 {
+        return Err(anyhow::anyhow!(
+            "Portal {method} failed (response code {code})"
+        ));
+    }
+
+    Ok(results)
+}
+
+const XKB_KEY_SHIFT_L: i32 = 0xFFE1;
+
+/// Whether a character requires Shift and what keysym to send.
+/// Returns `(needs_shift, keysym)`.
+fn char_to_keysym(ch: char) -> (bool, i32) {
+    // Uppercase letters → Shift + lowercase keysym. ASCII lowercase is always ≤ 0x7A < i32::MAX.
+    if ch.is_ascii_uppercase() {
+        return (true, i32::from(ch.to_ascii_lowercase() as u8));
+    }
+
+    // Characters that are Shift+<base key> on a US layout
+    let shifted = match ch {
+        '!' => Some(0x31), // 1
+        '@' => Some(0x32), // 2
+        '#' => Some(0x33), // 3
+        '$' => Some(0x34), // 4
+        '%' => Some(0x35), // 5
+        '^' => Some(0x36), // 6
+        '&' => Some(0x37), // 7
+        '*' => Some(0x38), // 8
+        '(' => Some(0x39), // 9
+        ')' => Some(0x30), // 0
+        '_' => Some(0x2D), // -
+        '+' => Some(0x3D), // =
+        '{' => Some(0x5B), // [
+        '}' => Some(0x5D), // ]
+        '|' => Some(0x5C), // backslash
+        ':' => Some(0x3B), // ;
+        '"' => Some(0x27), // '
+        '<' => Some(0x2C), // ,
+        '>' => Some(0x2E), // .
+        '?' => Some(0x2F), // /
+        '~' => Some(0x60), // `
+        _ => None,
+    };
+
+    if let Some(base) = shifted {
+        return (true, base);
+    }
+
+    let cp = ch as u32;
+    // cp ≤ 0x10_FFFF (Unicode max). For the direct-map range (≤ 0xFF) and
+    // the high-keysym range (0x0100_0000 | cp ≤ 0x011F_FFFF) the result
+    // fits in i32; TryFrom with saturating fallback preserves behavior for
+    // any realistic Unicode code point.
+    let keysym = match cp {
+        0x20..=0x7E | 0xA0..=0xFF => i32::try_from(cp).unwrap_or(i32::MAX),
+        0x0A => 0xFF0D,
+        0x09 => 0xFF09,
+        _ => i32::try_from(0x0100_0000_u32 | cp).unwrap_or(i32::MAX),
+    };
+    (false, keysym)
+}
