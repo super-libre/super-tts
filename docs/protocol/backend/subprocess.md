@@ -35,13 +35,13 @@ backend directory and the following environment:
 
 | Variable                   | Notes                                                                 |
 |----------------------------|-----------------------------------------------------------------------|
-| `SUPER_STT_BACKEND_SOCKET` | Pathname of the Unix socket to bind and serve the `/v1` routes on.    |
-| `SUPER_STT_BACKEND_DIR`    | Absolute path to the backend directory; model files live under it at the configured `dest` paths. |
+| `SUPER_TTS_BACKEND_SOCKET` | Pathname of the Unix socket to bind and serve the `/v1` routes on.    |
+| `SUPER_TTS_BACKEND_DIR`    | Absolute path to the backend directory; model files live under it at the configured `dest` paths. |
 
-On startup the backend binds `SUPER_STT_BACKEND_SOCKET`, begins serving
+On startup the backend binds `SUPER_TTS_BACKEND_SOCKET`, begins serving
 `/v1`, and reports `state: "starting"` from `GET /v1/status` until a
 `POST /v1/load` arrives. It resolves a model's files from
-`SUPER_STT_BACKEND_DIR` joined with the model's `dest`.
+`SUPER_TTS_BACKEND_DIR` joined with the model's `dest`.
 
 Secrets and options are not passed through the environment; the daemon
 injects them as request headers on each `/v1` request (see
@@ -113,9 +113,9 @@ authentication; it serves whatever connects on its socket. It may verify via
 
 - Declare `kind = "subprocess"` and an `entrypoint` in
   [backend.toml](./config.md).
-- Bind `SUPER_STT_BACKEND_SOCKET` (a pathname socket) and serve the
+- Bind `SUPER_TTS_BACKEND_SOCKET` (a pathname socket) and serve the
   [`/v1` routes](./contract.md#the-v1-contract).
-- Resolve model files under `SUPER_STT_BACKEND_DIR`; never attempt network
+- Resolve model files under `SUPER_TTS_BACKEND_DIR`; never attempt network
   access.
 - Drive `GET /v1/status` through `starting → loading → ready`, reporting load
   `progress` and the actual `device`.

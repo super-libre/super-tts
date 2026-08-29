@@ -18,7 +18,7 @@ and stop. Scopes are composable — request the set you need in a single
 [`POST /auth/request`](../endpoints/v1/auth/request.md); see [auth.md](../auth.md).
 
 All traffic is HTTP/1.1 over the Unix domain socket at
-`$XDG_RUNTIME_DIR/stt/super-stt-http.sock`. See [transport.md](../transport.md)
+`$XDG_RUNTIME_DIR/tts/super-tts-http.sock`. See [transport.md](../transport.md)
 for the wire-level details (HTTP framing, SSE mechanics, example client code).
 
 ## Endpoint reference
@@ -52,7 +52,7 @@ daemon-mic capture is already running returns `409 recording_in_progress`. To
 implement toggle behavior, consult `busy` on
 [`GET /status`](../endpoints/v1/status.md) (the `status` scope) and route to
 [`POST /transcribe/stop`](../endpoints/v1/transcribe/stop.md) when a capture is
-in progress. The `super-stt` CLI's `record` subcommand does exactly this.
+in progress. The `super-tts` CLI's `record` subcommand does exactly this.
 
 ## A typical transcription session
 

@@ -40,8 +40,8 @@ that issued the stop.
 
 ```http
 POST /transcribe/stop HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 No request body.

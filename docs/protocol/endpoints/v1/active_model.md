@@ -9,7 +9,7 @@ pair:
 
 - **`name`** — `whisper-1`, `voxtral-mini`, …
 - **`source`** — the repo id of the backend that serves the model
-  (e.g. `github.com/super-stt/openai`), as returned by
+  (e.g. `github.com/super-tts/openai`), as returned by
   [`GET /models`](./models.md). Empty/omitted resolves to the
   [active backend](./active_backend.md); with no active backend the call fails
   with `400 invalid_backend`.
@@ -47,13 +47,13 @@ visible via:
 
 ```http
 POST /active_model HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
   "model":    "whisper-1",
-  "source":   "github.com/super-stt/openai"
+  "source":   "github.com/super-tts/openai"
 }
 ```
 
@@ -101,8 +101,8 @@ switch, in a single payload so a settings UI can render the entire
 
 ```http
 GET /active_model HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -117,7 +117,7 @@ Authorization: Bearer stt_…64hex…
     // flight, and the new model once that switch succeeds.
     "current": {
       "model":    "voxtral-mini",
-      "source":   "github.com/super-stt/voxtral",
+      "source":   "github.com/super-tts/voxtral",
       "provider": "",               // always empty; see below
       "loaded":   true,
       "device":   "cuda"            // "cpu" / "cuda" / "rocm" / "metal"
@@ -180,8 +180,8 @@ real-time transcription session.
 
 ```http
 DELETE /active_model HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

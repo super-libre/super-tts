@@ -12,9 +12,9 @@ This document is part of the [backend protocol](./contract.md); see also
 configuration's fields are honored per transport.
 
 A JSON Schema for this file is generated from the canonical manifest types in
-`super-stt-registry-types` and published to GitHub Pages by CI (it is not
+`super-tts-registry-types` and published to GitHub Pages by CI (it is not
 committed to the repo). Backends in other repositories reference it at
-`https://jorge-menjivar.github.io/super-stt/backend.schema.json`.
+`https://jorge-menjivar.github.io/super-tts/backend.schema.json`.
 Add that URL as a `#:schema` comment line at the top of a `backend.toml` to get
 autocomplete and validation in taplo-based editors. Generate it locally with
 `just gen-schemas`, which writes to a gitignored `target/schemas/`.
@@ -48,7 +48,7 @@ Backend identity and packaging.
 
 ```toml
 [backend]
-source      = "github.com/super-stt/whisper"
+source      = "github.com/super-tts/whisper"
 name        = "Whisper (local)"
 version     = "0.1.0"
 kind        = "subprocess"
@@ -60,7 +60,7 @@ description = "Local Whisper speech-to-text."
 
 | Field        | Type   | Required        | Notes                                                                 |
 |--------------|--------|-----------------|-----------------------------------------------------------------------|
-| `id`         | string | for publication | Globally unique reverse-DNS identifier for the backend, e.g. `app.super-stt.voxtral`. Names the directory the backend is installed into. Required for a backend to be listed in the registry. |
+| `id`         | string | for publication | Globally unique reverse-DNS identifier for the backend, e.g. `app.super-tts.voxtral`. Names the directory the backend is installed into. Required for a backend to be listed in the registry. |
 | `source`     | string | yes             | Canonical repository id for this backend. Becomes the `source` of every model it provides (see [identity](./contract.md#model-identity)). Must be unique across installed backends. |
 | `name`       | string | yes             | Human-readable display name.                                          |
 | `version`    | string | yes             | Backend version (semver).                                            |
@@ -88,7 +88,7 @@ conscious declaration, not an omission.
 
 The reverse-DNS form namespaces a backend under a domain its author
 controls, so two unrelated authors may both publish a backend named
-`voxtral`: `app.super-stt.voxtral` and `com.example.voxtral` coexist.
+`voxtral`: `app.super-tts.voxtral` and `com.example.voxtral` coexist.
 
 `id` names the install directory. It is not part of model identity, which is
 the `(name, source)` pair described in [contract.md](./contract.md).
@@ -197,7 +197,7 @@ way still loads, with the option intact and the declared value dropped and
 logged — an author's mistake costs the user a setting, not the backend. Either
 way the value never takes effect, so a backend that needs a working endpoint out
 of the box carries it in the component and treats the option as an override.
-That is what the missing `x-stt-option-base_url` header means when the user has
+That is what the missing `x-tts-option-base_url` header means when the user has
 set nothing.
 
 The value the backend receives is **canonical**. The daemon parses it and
@@ -405,7 +405,7 @@ websocket = true
 
 | Field       | Type | Required | Notes                                                                              |
 |-------------|------|----------|------------------------------------------------------------------------------------|
-| `websocket` | bool | no       | Opt into the `super-stt:realtime/ws` import and the `super-stt:realtime/ws-server` export (see [wasm.md — Realtime](./wasm.md#realtime-websocket)). When `true`, the daemon wires those interfaces into the WASM component for every session on a realtime model. **wasm-only** — a `subprocess` backend declaring `websocket = true` is rejected at discovery. Default `false`. |
+| `websocket` | bool | no       | Opt into the `super-tts:realtime/ws` import and the `super-tts:realtime/ws-server` export (see [wasm.md — Realtime](./wasm.md#realtime-websocket)). When `true`, the daemon wires those interfaces into the WASM component for every session on a realtime model. **wasm-only** — a `subprocess` backend declaring `websocket = true` is rejected at discovery. Default `false`. |
 
 ## `[[models]]`
 
@@ -504,7 +504,7 @@ models ship `config.json`, `tokenizer.json`, and a single
 
 ```toml
 [backend]
-source      = "github.com/super-stt/whisper"
+source      = "github.com/super-tts/whisper"
 name        = "Whisper (local)"
 version     = "0.1.0"
 kind        = "subprocess"
@@ -562,7 +562,7 @@ An OpenAI backend. No model files; one egress host; one secret and one option.
 
 ```toml
 [backend]
-source      = "github.com/super-stt/openai"
+source      = "github.com/super-tts/openai"
 name        = "OpenAI"
 version     = "0.1.0"
 kind        = "wasm"

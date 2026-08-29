@@ -21,8 +21,8 @@ it up, and the response returns immediately.
 
 ```http
 POST /active_device HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -84,8 +84,8 @@ the resolved `actual_device` in the `ready` event and the next
 
 ```http
 GET /active_device HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

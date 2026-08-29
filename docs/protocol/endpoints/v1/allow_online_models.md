@@ -21,8 +21,8 @@ follow-up `status: "ready"` event for the new local model.
 
 ```http
 POST /allow_online_models HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -65,8 +65,8 @@ subscribers see `daemon_status_changed` with the new model name on
 
 ```http
 GET /allow_online_models HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

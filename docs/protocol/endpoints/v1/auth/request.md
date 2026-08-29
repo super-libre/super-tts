@@ -27,11 +27,11 @@ in auth.md.
 
 ```http
 POST /auth/request HTTP/1.1
-Host: stt.local
+Host: tts.local
 Content-Type: application/json
 
 {
-  "app_name": "Super STT Settings App",
+  "app_name": "Super TTS Settings App",
   "scopes":   ["settings", "status", "daemon_status"],
   "version":  "0.10.0"
 }
@@ -51,7 +51,7 @@ Content-Type: application/json
 
 {
   "status":        "success",
-  "session_token": "stt_…64hex…",
+  "session_token": "tts_…64hex…",
   "scopes":        ["settings", "status", "daemon_status"],
   "expires_at":    "2026-06-04T12:34:56Z"
 }

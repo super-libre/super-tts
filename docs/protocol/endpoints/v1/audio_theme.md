@@ -23,8 +23,8 @@ canonical list at any moment is what
 
 ```http
 POST /audio_theme HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -62,8 +62,8 @@ Content-Type: application/json
 
 ```http
 GET /audio_theme HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

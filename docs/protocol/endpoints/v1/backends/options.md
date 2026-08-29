@@ -5,15 +5,15 @@ configuration values (a base-URL override, a timeout, and so on) a backend
 declares as `[[options]]` in its
 [`backend.toml`](../../../backend/config.md). The daemon stores option
 overrides as plaintext in its config and injects each as an
-`x-stt-option-<name>` request header at model-load time (see
+`x-tts-option-<name>` request header at model-load time (see
 [contract.md](../../../backend/contract.md#request-headers)).
 
-`{source}` is the backend's repo id (e.g. `github.com/super-stt/openai`),
+`{source}` is the backend's repo id (e.g. `github.com/super-tts/openai`),
 **URL-percent-encoded** in the path — the same identifier used by
 [`DELETE /backends/{source}`](../backends.md#delete-backendssource):
 
 ```
-/backends/github.com%2Fsuper-stt%2Fopenai/options/base_url
+/backends/github.com%2Fsuper-tts%2Fopenai/options/base_url
 ```
 
 These endpoints mirror the [secrets](./secrets.md) endpoints exactly, with two
@@ -47,9 +47,9 @@ List the backend's declared options with their effective values.
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-stt%2Fopenai/options/list HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+GET /backends/github.com%2Fsuper-tts%2Fopenai/options/list HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -87,9 +87,9 @@ Read one option's effective value.
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-stt%2Fopenai/options/base_url HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+GET /backends/github.com%2Fsuper-tts%2Fopenai/options/base_url HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -111,9 +111,9 @@ loaded.
 **Request:**
 
 ```http
-POST /backends/github.com%2Fsuper-stt%2Fopenai/options/base_url HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+POST /backends/github.com%2Fsuper-tts%2Fopenai/options/base_url HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 { "value": "https://gateway.example.com" }
@@ -148,9 +148,9 @@ Idempotent: resetting an option that has no override succeeds. The returned
 **Request:**
 
 ```http
-DELETE /backends/github.com%2Fsuper-stt%2Fopenai/options/base_url HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+DELETE /backends/github.com%2Fsuper-tts%2Fopenai/options/base_url HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

@@ -18,8 +18,8 @@ overrides live at [`/backends/{source}/models/{model}/language`](./backends/mode
 
 ```http
 POST /language HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -46,8 +46,8 @@ Content-Type: application/json
 
 ```http
 GET /language HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -69,8 +69,8 @@ Clear the global Primary Language (back to no preference).
 
 ```http
 DELETE /language HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

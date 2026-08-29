@@ -23,8 +23,8 @@ slow-consumer behavior, revoked / shutdown frames — live in
 
 ```http
 GET /events?topics=recording_state,frequency_bands HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Accept: text/event-stream
 ```
 

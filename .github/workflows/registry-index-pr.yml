@@ -12,7 +12,7 @@ on:
   pull_request:
     paths:
       - 'registry/registry.toml'
-      - 'super-stt-registry-types/**'
+      - 'super-tts-registry-types/**'
   workflow_dispatch: # manual run for testing on any branch
 
 permissions:
@@ -41,7 +41,7 @@ jobs:
           key: registry-index-pr-${{ hashFiles('Cargo.lock') }}
 
       - name: Build indexer
-        run: cargo build --release -p super-stt-indexer
+        run: cargo build --release -p super-tts-indexer
 
       # Build a fresh index from the PR's registry.toml against the backends'
       # GitHub releases. No --prior-index: every non-removed entry must resolve
@@ -55,7 +55,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p out
-          target/release/super-stt-indexer build \
+          target/release/super-tts-indexer build \
             --registry registry/registry.toml \
             --out out/index.json
 

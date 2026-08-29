@@ -1,6 +1,6 @@
-# Contributing to Super STT
+# Contributing to Super TTS
 
-Thank you for your interest in contributing to Super STT! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to Super TTS! This document provides guidelines for contributing to the project.
 
 ## Development Setup
 
@@ -24,8 +24,8 @@ Thank you for your interest in contributing to Super STT! This document provides
 ### Clone and build
 
 ```bash
-git clone https://github.com/jorge-menjivar/super-stt.git
-cd super-stt
+git clone https://github.com/jorge-menjivar/super-tts.git
+cd super-tts
 
 just install            # build and install everything, wired to systemd
 # …or one piece at a time:
@@ -45,19 +45,19 @@ just audit              # security audit (cargo audit)
 
 ## Workspace layout
 
-Super STT is a Rust workspace:
+Super TTS is a Rust workspace:
 
 | Crate                      | Role                                                              |
 |----------------------------|------------------------------------------------------------------|
-| `super-stt-daemon`         | The engine: installs backends, loads models, serves the protocol |
-| `super-stt-app`            | Desktop settings & management app                                |
-| `super-stt-cli`            | The `stt` command-line client                                    |
-| `super-stt-cosmic-applet`  | COSMIC panel applet with visualizations                          |
-| `super-stt-consent`        | Consent-popup helper for the auth handshake                      |
-| `super-stt-shared`         | Common types, protocol definitions, validation                   |
-| `super-stt-registry-types` | Shared backend registry / manifest types                         |
-| `super-stt-forge`          | Git-forge release sourcing for the registry                      |
-| `super-stt-indexer`        | CI tool that builds the published registry `index.json`          |
+| `super-tts-daemon`         | The engine: installs backends, loads models, serves the protocol |
+| `super-tts-app`            | Desktop settings & management app                                |
+| `super-tts-cli`            | The `tts` command-line client                                    |
+| `super-tts-cosmic-applet`  | COSMIC panel applet with visualizations                          |
+| `super-tts-consent`        | Consent-popup helper for the auth handshake                      |
+| `super-tts-shared`         | Common types, protocol definitions, validation                   |
+| `super-tts-registry-types` | Shared backend registry / manifest types                         |
+| `super-tts-forge`          | Git-forge release sourcing for the registry                      |
+| `super-tts-indexer`        | CI tool that builds the published registry `index.json`          |
 
 The protocol and backend contract that clients and backend authors build
 against live in [`docs/protocol/`](./docs/protocol/).
@@ -73,7 +73,7 @@ against live in [`docs/protocol/`](./docs/protocol/).
 
 - Never bypass the process authentication system
 - All network communication must validate inputs
-- Use the shared validation framework in `super-stt-shared/src/validation/`
+- Use the shared validation framework in `super-tts-shared/src/validation/`
 - Follow the development vs production security model (debug vs release builds)
 - Run security audits before proposing changes: `cargo audit`
 
@@ -114,7 +114,7 @@ If you discover a security vulnerability, please:
 
 ## License
 
-By contributing to Super STT, you agree that your contributions will be licensed under the GPL-3.0-only license.
+By contributing to Super TTS, you agree that your contributions will be licensed under the GPL-3.0-only license.
 
 ## Questions?
 

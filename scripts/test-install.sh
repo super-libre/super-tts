@@ -87,7 +87,7 @@ fi
 
 echo "== stable tag resolution (resolve_stable_tag) =="
 FIXTURE_STABLE_LATEST='{
-  "url": "https://api.github.com/repos/jorge-menjivar/super-stt/releases/1",
+  "url": "https://api.github.com/repos/jorge-menjivar/super-tts/releases/1",
   "tag_name": "v0.2.3",
   "target_commitish": "main",
   "name": "v0.2.3",

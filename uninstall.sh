@@ -1,22 +1,22 @@
 #!/bin/bash
 
-# Super STT Uninstall Script
+# Super TTS Uninstall Script
 #
-# Removes Super STT regardless of which channel installed it.
+# Removes Super TTS regardless of which channel installed it.
 # Handles both layouts:
-#   - Stable / legacy: single `super-stt` binary + `stt` wrapper.
-#   - Beta / post-rewrite: super-stt-daemon + super-stt-cli +
-#     super-stt-consent + `stt` wrapper.
+#   - Stable / legacy: single `super-tts` binary + `tts` wrapper.
+#   - Beta / post-rewrite: super-tts-daemon + super-tts-cli +
+#     super-tts-consent + `tts` wrapper.
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/jorge-menjivar/super-stt/main/uninstall.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/jorge-menjivar/super-tts/main/uninstall.sh | bash
 #   bash uninstall.sh
 #
 # What gets removed:
-#   - All Super STT binaries in /usr/local/bin and ~/.local/bin
+#   - All Super TTS binaries in /usr/local/bin and ~/.local/bin
 #     (current system layout plus both legacy per-user layouts)
 #   - Desktop entries, icons, metainfo (system + per-user)
-#   - Runtime socket dir under $XDG_RUNTIME_DIR/stt
+#   - Runtime socket dir under $XDG_RUNTIME_DIR/tts
 #   - systemd user unit (/usr/lib/systemd/user + ~/.config/systemd/user)
 #   - COSMIC keyboard shortcut (only if it's the lone entry)
 #
@@ -27,10 +27,10 @@
 # files are actually present.
 #
 # What is PRESERVED:
-#   - ~/.local/share/stt/logs/ (in case you need to inspect history)
-#   - ~/.config/super-stt/ (user-set defaults)
+#   - ~/.local/share/tts/logs/ (in case you need to inspect history)
+#   - ~/.config/super-tts/ (user-set defaults)
 #   - System keyring entries (cached session tokens, API keys)
-#   - The `stt` system group (other users may depend on it)
+#   - The `tts` system group (other users may depend on it)
 #
 # The daemon is stopped as the final step so any in-flight
 # transcription completes (or at least gets a chance to flush) before
@@ -64,11 +64,11 @@ ICON_DIR_FLAT="$HOME/.local/share/icons"
 METAINFO_DIR="$HOME/.local/share/metainfo"
 USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
 
-RUN_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/stt"
-LOG_DIR="$HOME/.local/share/stt/logs"
-CONFIG_DIR="$HOME/.config/super-stt"
+RUN_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/tts"
+LOG_DIR="$HOME/.local/share/tts/logs"
+CONFIG_DIR="$HOME/.config/super-tts"
 COSMIC_SHORTCUTS="$HOME/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom"
-SERVICE_NAME="super-stt"
+SERVICE_NAME="super-tts"
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -90,10 +90,10 @@ remove_path() {
 # setups never see a sudo prompt.
 SYSTEM_INSTALL_PRESENT=false
 for probe in \
-    "$SYSTEM_BIN_DIR/super-stt-daemon" \
-    "$SYSTEM_BIN_DIR/super-stt-app" \
-    "$SYSTEM_BIN_DIR/super-stt-cosmic-applet" \
-    "$SYSTEM_BIN_DIR/stt" \
+    "$SYSTEM_BIN_DIR/super-tts-daemon" \
+    "$SYSTEM_BIN_DIR/super-tts-app" \
+    "$SYSTEM_BIN_DIR/super-tts-cosmic-applet" \
+    "$SYSTEM_BIN_DIR/tts" \
     "$SYSTEM_SYSTEMD_DIR/$SERVICE_NAME.service"
 do
     [ -e "$probe" ] && SYSTEM_INSTALL_PRESENT=true
@@ -106,15 +106,15 @@ done
 # well as the binary so an install missing one of the two still registers.
 APPLET_INSTALLED=false
 for probe in \
-    "$SYSTEM_BIN_DIR/super-stt-cosmic-applet" \
-    "$LEGACY_BIN_DIR/super-stt-cosmic-applet" \
-    "$SYSTEM_DESKTOP_DIR/super-stt-cosmic-applet-full.desktop" \
-    "$DESKTOP_DIR/super-stt-cosmic-applet-full.desktop"
+    "$SYSTEM_BIN_DIR/super-tts-cosmic-applet" \
+    "$LEGACY_BIN_DIR/super-tts-cosmic-applet" \
+    "$SYSTEM_DESKTOP_DIR/super-tts-cosmic-applet-full.desktop" \
+    "$DESKTOP_DIR/super-tts-cosmic-applet-full.desktop"
 do
     [ -e "$probe" ] && APPLET_INSTALLED=true
 done
 
-print_info "Uninstalling Super STT..."
+print_info "Uninstalling Super TTS..."
 
 # 1. Disable the unit so it doesn't auto-start after the next reboot,
 #    BUT don't stop it yet — we want the daemon to remain running
@@ -130,17 +130,17 @@ fi
 #    files are not an error (the user may have only installed a subset).
 print_info "Removing binaries from $SYSTEM_BIN_DIR and $LEGACY_BIN_DIR..."
 for bin in \
-    super-stt \
-    super-stt-daemon \
-    super-stt-cli \
-    super-stt-consent \
-    super-stt-install \
-    super-stt-app \
-    super-stt-cosmic-applet \
-    super-stt-applet-full \
-    super-stt-applet-left \
-    super-stt-applet-right \
-    stt
+    super-tts \
+    super-tts-daemon \
+    super-tts-cli \
+    super-tts-consent \
+    super-tts-install \
+    super-tts-app \
+    super-tts-cosmic-applet \
+    super-tts-applet-full \
+    super-tts-applet-left \
+    super-tts-applet-right \
+    tts
 do
     for dir in "$SYSTEM_BIN_DIR" "$LEGACY_BIN_DIR"; do
         remove_path "$dir/$bin" && print_info "  removed $dir/$bin"
@@ -150,10 +150,10 @@ done
 # 3. Desktop entries (system + legacy per-user).
 print_info "Removing desktop entries..."
 for name in \
-    super-stt-app.desktop \
-    super-stt-cosmic-applet-full.desktop \
-    super-stt-cosmic-applet-left.desktop \
-    super-stt-cosmic-applet-right.desktop
+    super-tts-app.desktop \
+    super-tts-cosmic-applet-full.desktop \
+    super-tts-cosmic-applet-left.desktop \
+    super-tts-cosmic-applet-right.desktop
 do
     for dir in "$SYSTEM_DESKTOP_DIR" "$DESKTOP_DIR"; do
         remove_path "$dir/$name" && print_info "  removed $dir/$name"
@@ -163,7 +163,7 @@ done
 # 4. Icons (system hicolor, legacy hicolor-scalable, and the flat
 #    layout some old versions of the script used).
 print_info "Removing icons..."
-for name in super-stt-app.svg super-stt-cosmic-applet.svg; do
+for name in super-tts-app.svg super-tts-cosmic-applet.svg; do
     for dir in "$SYSTEM_ICON_DIR" "$ICON_DIR_HICOLOR" "$ICON_DIR_FLAT"; do
         remove_path "$dir/$name" && print_info "  removed $dir/$name"
     done
@@ -171,7 +171,7 @@ done
 
 # 5. metainfo (system + legacy per-user)
 for dir in "$SYSTEM_METAINFO_DIR" "$METAINFO_DIR"; do
-    remove_path "$dir/super-stt-app.metainfo.xml" && print_info "Removed $dir/super-stt-app.metainfo.xml"
+    remove_path "$dir/super-tts-app.metainfo.xml" && print_info "Removed $dir/super-tts-app.metainfo.xml"
 done
 
 # 6. Refresh icon / desktop caches so the system reflects the removal.
@@ -204,11 +204,11 @@ pkill -f '^cosmic-app-library$' 2>/dev/null || true
 pkill -f '^cosmic-launcher$' 2>/dev/null || true
 pkill -f '^pop-launcher( |$)' 2>/dev/null || true
 
-# 7. COSMIC custom keyboard shortcut. Remove only if Super STT is the
+# 7. COSMIC custom keyboard shortcut. Remove only if Super TTS is the
 #    only entry; otherwise the user has other custom bindings we
 #    shouldn't disturb. They can hand-edit if they want a finer
 #    surgical removal.
-if [ -f "$COSMIC_SHORTCUTS" ] && grep -q 'description: Some("Super STT")' "$COSMIC_SHORTCUTS"; then
+if [ -f "$COSMIC_SHORTCUTS" ] && grep -q 'description: Some("Super TTS")' "$COSMIC_SHORTCUTS"; then
     # Each binding starts with `    (` in column 0. Count them.
     entry_count=$(grep -c '^    (' "$COSMIC_SHORTCUTS" || echo 0)
     if [ "$entry_count" = "1" ]; then
@@ -216,7 +216,7 @@ if [ -f "$COSMIC_SHORTCUTS" ] && grep -q 'description: Some("Super STT")' "$COSM
         print_info "Removed COSMIC keyboard shortcut"
     else
         print_warn "COSMIC custom shortcuts file has other entries — not touching."
-        print_warn "  Edit by hand to remove the Super STT entry:"
+        print_warn "  Edit by hand to remove the Super TTS entry:"
         print_warn "  $COSMIC_SHORTCUTS"
     fi
 fi
@@ -251,7 +251,7 @@ if command -v systemctl &> /dev/null; then
     fi
 fi
 # Catch a daemon started outside of systemd (e.g. `just run-daemon`).
-for proc in super-stt-daemon super-stt; do
+for proc in super-tts-daemon super-tts; do
     if pgrep -u "$(id -u)" -x "$proc" > /dev/null 2>&1; then
         print_info "Killing leftover $proc process..."
         pkill -u "$(id -u)" -x "$proc" 2>/dev/null || true
@@ -264,4 +264,4 @@ print_info ""
 print_info "Preserved (delete manually if you want a deeper clean):"
 print_info "  - Logs:    $LOG_DIR"
 print_info "  - Config:  $CONFIG_DIR"
-print_info "  - Keyring entries (open your keyring manager — Seahorse, KWalletManager — and delete entries under 'super-stt-session' and 'super-stt')"
+print_info "  - Keyring entries (open your keyring manager — Seahorse, KWalletManager — and delete entries under 'super-tts-session' and 'super-tts')"

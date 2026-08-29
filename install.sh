@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Super STT Installation Bootstrap
+# Super TTS Installation Bootstrap
 #
 # Documented entry point:
 #
-#   curl -sSL https://raw.githubusercontent.com/jorge-menjivar/super-stt/main/install.sh | bash
-#   curl -sSL https://raw.githubusercontent.com/jorge-menjivar/super-stt/main/install.sh | bash -s -- --beta
+#   curl -sSL https://raw.githubusercontent.com/jorge-menjivar/super-tts/main/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/jorge-menjivar/super-tts/main/install.sh | bash -s -- --beta
 #
 # This script is deliberately tiny: it detects the architecture, resolves
-# the requested release, downloads the `super-stt-install` binary attached
+# the requested release, downloads the `super-tts-install` binary attached
 # to that release, and execs it. All installer logic lives in that binary
 # (rustup-style), so the bootstrap can never disagree with the release
 # layout it installs.
@@ -29,7 +29,7 @@
 # without making a network call or running a real install. See the guard at
 # the bottom of the file for how that source-only mode is triggered.
 
-GITHUB_REPO="jorge-menjivar/super-stt"
+GITHUB_REPO="jorge-menjivar/super-tts"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -187,7 +187,7 @@ main() {
         exit 1
     fi
 
-    INSTALLER_ASSET="super-stt-install-$TRIPLE"
+    INSTALLER_ASSET="super-tts-install-$TRIPLE"
     INSTALLER_URL="https://github.com/$GITHUB_REPO/releases/download/$VERSION/$INSTALLER_ASSET"
 
     TEMP_DIR=$(mktemp -d)

@@ -5,15 +5,15 @@ Store, check, and clear a backend's **secrets** — the sensitive values
 [`backend.toml`](../../../backend/config.md). The daemon owns secret storage
 end to end: a client sets a secret here, the daemon persists it in the system
 keyring, and the daemon reads it back **only** at model-load time to inject it
-as an `x-stt-secret-<name>` request header (see
+as an `x-tts-secret-<name>` request header (see
 [contract.md](../../../backend/contract.md#request-headers)).
 
-`{source}` is the backend's repo id (e.g. `github.com/super-stt/openai`),
+`{source}` is the backend's repo id (e.g. `github.com/super-tts/openai`),
 **URL-percent-encoded** in the path — the same identifier used by
 [`DELETE /backends/{source}`](../backends.md#delete-backendssource):
 
 ```
-/backends/github.com%2Fsuper-stt%2Fopenai/secrets/openai_api_key
+/backends/github.com%2Fsuper-tts%2Fopenai/secrets/openai_api_key
 ```
 
 ## Write-only by contract
@@ -57,9 +57,9 @@ values.**
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-stt%2Fopenai/secrets/list HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+GET /backends/github.com%2Fsuper-tts%2Fopenai/secrets/list HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -93,9 +93,9 @@ Report whether one secret is configured. **No value.**
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-stt%2Fopenai/secrets/openai_api_key HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+GET /backends/github.com%2Fsuper-tts%2Fopenai/secrets/openai_api_key HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -117,9 +117,9 @@ loaded.
 **Request:**
 
 ```http
-POST /backends/github.com%2Fsuper-stt%2Fopenai/secrets/openai_api_key HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+POST /backends/github.com%2Fsuper-tts%2Fopenai/secrets/openai_api_key HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 { "value": "sk-…" }
@@ -146,9 +146,9 @@ succeeds.
 **Request:**
 
 ```http
-DELETE /backends/github.com%2Fsuper-stt%2Fopenai/secrets/openai_api_key HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+DELETE /backends/github.com%2Fsuper-tts%2Fopenai/secrets/openai_api_key HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

@@ -32,8 +32,8 @@ to learn which backend it resolves to — use
 
 ```http
 POST /write_method HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -71,8 +71,8 @@ Content-Type: application/json
 
 ```http
 GET /write_method HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

@@ -7,12 +7,12 @@ of the model's `supported_languages`, the reserved `auto`, or absent (Automatic
 `primary_language`). It is stored per model and survives model switches. Only
 multilingual models accept an override.
 
-`{source}` is the backend's repo id (e.g. `github.com/super-stt/whisper`),
+`{source}` is the backend's repo id (e.g. `github.com/super-tts/whisper`),
 **URL-percent-encoded** in the path — the same identifier used by
 [`DELETE /backends/{source}`](../../backends.md#delete-backendssource):
 
 ```
-/backends/github.com%2Fsuper-stt%2Fwhisper/models/whisper-large-v3/language
+/backends/github.com%2Fsuper-tts%2Fwhisper/models/whisper-large-v3/language
 ```
 
 `{model}` is the model name as it appears in the backend's `models` array (see
@@ -32,9 +32,9 @@ Returns the daemon's full resolution for the named model.
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-stt%2Fwhisper/models/whisper-large-v3/language HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+GET /backends/github.com%2Fsuper-tts%2Fwhisper/models/whisper-large-v3/language HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -61,9 +61,9 @@ For a non-multilingual model: `"multilingual": false`, `"supported": ["en"]`,
 **Request:**
 
 ```http
-POST /backends/github.com%2Fsuper-stt%2Fwhisper/models/whisper-large-v3/language HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+POST /backends/github.com%2Fsuper-tts%2Fwhisper/models/whisper-large-v3/language HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 { "language": "es-419" }
@@ -82,9 +82,9 @@ Clear the override (back to Automatic).
 **Request:**
 
 ```http
-DELETE /backends/github.com%2Fsuper-stt%2Fwhisper/models/whisper-large-v3/language HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+DELETE /backends/github.com%2Fsuper-tts%2Fwhisper/models/whisper-large-v3/language HTTP/1.1
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):** the resolution block (as `GET`).

@@ -25,8 +25,8 @@ for example, weighing a model's `estimated_vram_bytes` from
 
 ```http
 GET /gpu_info HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

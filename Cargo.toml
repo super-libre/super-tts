@@ -1,38 +1,38 @@
 [workspace]
     resolver = "2"
     members = [
-        "super-stt-app",
-        "super-stt-cli",
-        "super-stt-consent",
-        "super-stt-cosmic-applet",
-        "super-stt-daemon",
-        "super-stt-forge",
-        "super-stt-indexer",
-        "super-stt-install",
-        "super-stt-registry-types",
-        "super-stt-shared",
+        "super-tts-app",
+        "super-tts-cli",
+        "super-tts-consent",
+        "super-tts-cosmic-applet",
+        "super-tts-daemon",
+        "super-tts-forge",
+        "super-tts-indexer",
+        "super-tts-install",
+        "super-tts-registry-types",
+        "super-tts-shared",
     ]
     # The mock WASM backend fixtures build for wasm32-wasip2, not the host target
     # (the daemon's wasm_mock.rs / wasm_mock_realtime.rs load them) — keep them
     # out of the workspace entirely.
     exclude = [
-        "super-stt-daemon/tests/fixtures/mock-wasm-backend",
-        "super-stt-daemon/tests/fixtures/mock-wasm-realtime-backend",
+        "super-tts-daemon/tests/fixtures/mock-wasm-backend",
+        "super-tts-daemon/tests/fixtures/mock-wasm-realtime-backend",
     ]
     # The indexer is a host binary, so it's a workspace member — `--workspace`
     # lints and tests it like everything else. But it's a CI-only tool with
     # heavy deps, so keep it out of `default-members`: the everyday
     # `cargo build`/`run`/`test` (no `--workspace`) stays lean.
     default-members = [
-        "super-stt-app",
-        "super-stt-cli",
-        "super-stt-consent",
-        "super-stt-cosmic-applet",
-        "super-stt-daemon",
-        "super-stt-forge",
-        "super-stt-install",
-        "super-stt-registry-types",
-        "super-stt-shared",
+        "super-tts-app",
+        "super-tts-cli",
+        "super-tts-consent",
+        "super-tts-cosmic-applet",
+        "super-tts-daemon",
+        "super-tts-forge",
+        "super-tts-install",
+        "super-tts-registry-types",
+        "super-tts-shared",
     ]
 
     [workspace.package]

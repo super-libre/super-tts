@@ -13,7 +13,7 @@ words = [
     "openai",
     "safetensors",
     "serde",
-    "stt",
+    "tts",
     "sttd",
     "tekken",
     "typer",

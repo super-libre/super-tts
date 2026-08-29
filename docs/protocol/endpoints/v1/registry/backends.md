@@ -40,8 +40,8 @@ GET /registry/backends?include_incompatible=false&kind=wasm&online=true&q=openai
   "backends": [
     {
       "id": "voxtral",
-      "backend_id": "app.super-stt.voxtral",
-      "source": "github.com/jorge-menjivar/super-stt",
+      "backend_id": "app.super-tts.voxtral",
+      "source": "github.com/jorge-menjivar/super-tts",
       "version": "0.2.0",
       "name": "Voxtral",
       "description": "…",

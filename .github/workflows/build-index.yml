@@ -6,7 +6,7 @@ on:
     - cron: '0 */6 * * *'    # every 6 hours
   push:
     branches: [main]
-    paths: ['registry/registry.toml', 'super-stt-registry-types/**']
+    paths: ['registry/registry.toml', 'super-tts-registry-types/**']
   workflow_dispatch:
 
 permissions:
@@ -45,21 +45,21 @@ jobs:
 
       - name: Build indexer
         working-directory: src
-        run: cargo build --release -p super-stt-indexer
+        run: cargo build --release -p super-tts-indexer
 
       - name: Run indexer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p out
-          src/target/release/super-stt-indexer build \
+          src/target/release/super-tts-indexer build \
             --registry src/registry/registry.toml \
             --prior-index pages/index.json \
             --out out/index.json
 
       - name: Generate schemas
         working-directory: src
-        run: cargo run -p super-stt-registry-types --features schema --bin gen_schemas
+        run: cargo run -p super-tts-registry-types --features schema --bin gen_schemas
 
       - name: Publish to gh-pages
         env:

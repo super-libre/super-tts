@@ -1,6 +1,6 @@
 # Transport & Connection Lifecycle
 
-This document describes how a client talks to the super-stt daemon at
+This document describes how a client talks to the super-tts daemon at
 the wire level: where the daemon listens, what HTTP shape every request
 and response take, and how broadcast events are delivered over Server-
 Sent Events.
@@ -20,7 +20,7 @@ headers, JSON bodies, and SSE framing all stay the same.
 
 | Transport      | Address                                            | When                                |
 |----------------|----------------------------------------------------|-------------------------------------|
-| Unix socket    | `$XDG_RUNTIME_DIR/stt/super-stt-http.sock`         | Always (default)                    |
+| Unix socket    | `$XDG_RUNTIME_DIR/tts/super-tts-http.sock`         | Always (default)                    |
 | TCP            | `127.0.0.1:<configurable port>`                    | Optional, opt-in via daemon config  |
 
 Native Linux clients should use the Unix socket. The daemon authenticates
@@ -29,7 +29,7 @@ consent design depends on. The TCP bind is intended for browser apps
 where `SO_PEERCRED` isn't available — see
 [auth.md](./auth.md#tcp-bound-clients).
 
-The socket path can be overridden via the `SUPER_STT_HTTP_SOCKET`
+The socket path can be overridden via the `SUPER_TTS_HTTP_SOCKET`
 environment variable (tests use this to bind a unique socket per run).
 The daemon and every in-tree client resolve the path through the same
 helper, so the override applies to both ends — set it in a shared
@@ -44,8 +44,8 @@ HTTP response. Standard HTTP semantics:
 
 ```http
 POST /transcribe HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 Content-Length: 178
 
@@ -76,7 +76,7 @@ open one connection per request or hold a keep-alive open is up to
 you; authentication is per-request via the `Authorization` header.
 
 The `Host` header is required by HTTP/1.1 but its value is ignored.
-Use `stt.local`, `localhost`, or anything else.
+Use `tts.local`, `localhost`, or anything else.
 
 ## Authentication header
 
@@ -138,8 +138,8 @@ client disconnects or the daemon shuts down.
 
 ```http
 GET /events?topics=recording_state,frequency_bands,daemon_status_changed,download_progress HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…
+Host: tts.local
+Authorization: Bearer tts_…
 Accept: text/event-stream
 ```
 
@@ -287,15 +287,15 @@ The minimal recipe for a fresh client of any scope:
 
 1. Use any HTTP client your language has. Examples:
    ```bash
-   curl --unix-socket "$XDG_RUNTIME_DIR/stt/super-stt-http.sock" \
-        -X POST http://stt.local/auth/request \
+   curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
+        -X POST http://tts.local/auth/request \
         -H 'Content-Type: application/json' \
         -d '{"app_name":"My App","scopes":["transcribe","status"],"version":"0.1"}'
    ```
    ```python
    import requests_unixsocket
    s = requests_unixsocket.Session()
-   r = s.post("http+unix://%2Frun%2Fuser%2F1000%2Fstt%2Fsuper-stt-http.sock/auth/request",
+   r = s.post("http+unix://%2Frun%2Fuser%2F1000%2Fstt%2Fsuper-tts-http.sock/auth/request",
               json={"app_name": "My App", "scopes": ["transcribe", "status"], "version": "0.1"})
    token = r.json()["session_token"]
    ```
@@ -303,7 +303,7 @@ The minimal recipe for a fresh client of any scope:
    // Node
    const http = require('http');
    const req = http.request({
-     socketPath: '/run/user/1000/stt/super-stt-http.sock',
+     socketPath: '/run/user/1000/tts/super-tts-http.sock',
      method: 'POST',
      path: '/auth/request',
      headers: {'Content-Type': 'application/json'}
@@ -314,9 +314,9 @@ The minimal recipe for a fresh client of any scope:
 
 3. For commands, send `Authorization: Bearer <token>` on every request:
    ```bash
-   curl --unix-socket "$XDG_RUNTIME_DIR/stt/super-stt-http.sock" \
-        -X POST http://stt.local/transcribe \
-        -H "Authorization: Bearer $STT_TOKEN" \
+   curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
+        -X POST http://tts.local/transcribe \
+        -H "Authorization: Bearer $TTS_TOKEN" \
         -H 'Content-Type: application/json' \
         -d '{"data":{"wait":true,"stream_realtime":true}}'
    ```
@@ -324,10 +324,10 @@ The minimal recipe for a fresh client of any scope:
 4. For event streams, use any HTTP client that supports SSE (or just
    read line-by-line):
    ```bash
-   curl --unix-socket "$XDG_RUNTIME_DIR/stt/super-stt-http.sock" \
+   curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
         -N \
-        "http://stt.local/events?topics=recording_state,daemon_status_changed,download_progress" \
-        -H "Authorization: Bearer $STT_TOKEN"
+        "http://tts.local/events?topics=recording_state,daemon_status_changed,download_progress" \
+        -H "Authorization: Bearer $TTS_TOKEN"
    ```
 
 5. On any 401 with `message: "invalid_session"`, run the auth flow

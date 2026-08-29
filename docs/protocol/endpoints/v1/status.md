@@ -18,8 +18,8 @@ and other operator info are not exposed here; for those, the
 
 ```http
 GET /status HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

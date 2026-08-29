@@ -6,7 +6,7 @@
 # This is the counterpart to scripts/test-install.sh, which only covers
 # install.sh's pure, network-free logic (arch detection, channel validation,
 # tag resolution from fixture JSON). Nothing there — and nothing in
-# super-stt-install's own `--dry-run` e2e test — ever writes a file, escalates,
+# super-tts-install's own `--dry-run` e2e test — ever writes a file, escalates,
 # or runs post-install. That is what this script covers.
 #
 # Two passes run per channel, each install → assert → uninstall → assert-clean:
@@ -17,7 +17,7 @@
 #      verifies the bootstrap's own resolution and asset naming against a real
 #      release.
 #   2. Local pass. The same install driven by a locally built
-#      `super-stt-install` ($SUPER_STT_INSTALLER_BIN), so changes to the
+#      `super-tts-install` ($SUPER_TTS_INSTALLER_BIN), so changes to the
 #      installer crate in a PR are what is under test rather than whatever the
 #      last release shipped.
 #
@@ -28,7 +28,7 @@
 # release.yml that stage::build_manifest starts requiring) fails this test
 # until that release actually ships.
 #
-# Usage: SUPER_STT_INSTALL_E2E_YES=1 bash scripts/test-install-e2e.sh [stable|beta]
+# Usage: SUPER_TTS_INSTALL_E2E_YES=1 bash scripts/test-install-e2e.sh [stable|beta]
 #        (or `just test-install-e2e beta`)
 
 set -uo pipefail
@@ -36,7 +36,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-GITHUB_REPO="jorge-menjivar/super-stt"
+GITHUB_REPO="jorge-menjivar/super-tts"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -52,13 +52,13 @@ err() { echo -e "${RED}[ERROR]${NC} $1"; }
 # /usr/lib/systemd/user — the installer hardcodes both prefixes, so there is
 # no sandbox to point it at. That is fine on a disposable CI runner and fine
 # in a container; it is not something to run by accident on a workstation
-# that has Super STT installed. Opting in is explicit and never defaulted.
-if [ "${SUPER_STT_INSTALL_E2E_YES:-}" != "1" ]; then
+# that has Super TTS installed. Opting in is explicit and never defaulted.
+if [ "${SUPER_TTS_INSTALL_E2E_YES:-}" != "1" ]; then
     err "This test performs a REAL install into /usr/local and /usr/lib/systemd/user,"
-    err "then uninstalls it. It will remove an existing Super STT install on this host."
+    err "then uninstalls it. It will remove an existing Super TTS install on this host."
     err ""
     err "Run it on a disposable machine (CI) or in a container, and opt in explicitly:"
-    err "  SUPER_STT_INSTALL_E2E_YES=1 bash scripts/test-install-e2e.sh [stable|beta]"
+    err "  SUPER_TTS_INSTALL_E2E_YES=1 bash scripts/test-install-e2e.sh [stable|beta]"
     exit 2
 fi
 
@@ -87,7 +87,7 @@ if [ "${#MISSING[@]}" -ne 0 ]; then
     exit 2
 fi
 
-INSTALLER_BIN="${SUPER_STT_INSTALLER_BIN:-}"
+INSTALLER_BIN="${SUPER_TTS_INSTALLER_BIN:-}"
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -126,26 +126,26 @@ note() { echo "  note  - $1"; }
 # ---- The complete installed tree ------------------------------------------
 
 # Every file `--components=all` installs, as `mode:path`, mirroring
-# super-stt-install/src/stage.rs::build_manifest. `stt` has no source in the
-# tarball — build_manifest generates the wrapper — and `super-stt-install` is
+# super-tts-install/src/stage.rs::build_manifest. `tts` has no source in the
+# tarball — build_manifest generates the wrapper — and `super-tts-install` is
 # the installer copying its own binary into place; both are as much a part of
 # a complete install as anything unpacked from the release.
 INSTALLED_FILES=(
-    "755:/usr/local/bin/super-stt-daemon"
-    "755:/usr/local/bin/super-stt-cli"
-    "755:/usr/local/bin/super-stt-consent"
-    "755:/usr/local/bin/super-stt-app"
-    "755:/usr/local/bin/super-stt-cosmic-applet"
-    "755:/usr/local/bin/super-stt-install"
-    "755:/usr/local/bin/stt"
-    "644:/usr/lib/systemd/user/super-stt.service"
-    "644:/usr/local/share/applications/super-stt-app.desktop"
-    "644:/usr/local/share/applications/super-stt-cosmic-applet-full.desktop"
-    "644:/usr/local/share/applications/super-stt-cosmic-applet-left.desktop"
-    "644:/usr/local/share/applications/super-stt-cosmic-applet-right.desktop"
-    "644:/usr/local/share/icons/hicolor/scalable/apps/super-stt-app.svg"
-    "644:/usr/local/share/icons/hicolor/scalable/apps/super-stt-cosmic-applet.svg"
-    "644:/usr/local/share/metainfo/super-stt-app.metainfo.xml"
+    "755:/usr/local/bin/super-tts-daemon"
+    "755:/usr/local/bin/super-tts-cli"
+    "755:/usr/local/bin/super-tts-consent"
+    "755:/usr/local/bin/super-tts-app"
+    "755:/usr/local/bin/super-tts-cosmic-applet"
+    "755:/usr/local/bin/super-tts-install"
+    "755:/usr/local/bin/tts"
+    "644:/usr/lib/systemd/user/super-tts.service"
+    "644:/usr/local/share/applications/super-tts-app.desktop"
+    "644:/usr/local/share/applications/super-tts-cosmic-applet-full.desktop"
+    "644:/usr/local/share/applications/super-tts-cosmic-applet-left.desktop"
+    "644:/usr/local/share/applications/super-tts-cosmic-applet-right.desktop"
+    "644:/usr/local/share/icons/hicolor/scalable/apps/super-tts-app.svg"
+    "644:/usr/local/share/icons/hicolor/scalable/apps/super-tts-cosmic-applet.svg"
+    "644:/usr/local/share/metainfo/super-tts-app.metainfo.xml"
 )
 
 path_of() { echo "${1#*:}"; }
@@ -288,37 +288,37 @@ assert_installed_tree() {
         pass "$label: every installed file carries its manifest mode"
     fi
 
-    # The unit is what `systemctl --user enable super-stt` will read; a
+    # The unit is what `systemctl --user enable super-tts` will read; a
     # truncated or mangled copy would still satisfy the existence check above.
-    if grep -q '^\[Service\]' /usr/lib/systemd/user/super-stt.service \
-        && grep -q '^ExecStart=' /usr/lib/systemd/user/super-stt.service; then
+    if grep -q '^\[Service\]' /usr/lib/systemd/user/super-tts.service \
+        && grep -q '^ExecStart=' /usr/lib/systemd/user/super-tts.service; then
         pass "$label: the systemd unit has a [Service] section with ExecStart"
     else
         fail "$label: the systemd unit has a [Service] section with ExecStart" \
-            "a parseable unit" "$(head -5 /usr/lib/systemd/user/super-stt.service 2>&1)"
+            "a parseable unit" "$(head -5 /usr/lib/systemd/user/super-tts.service 2>&1)"
     fi
 
     # The installed binaries are the real release binaries, so they must run —
     # and the version they report is what proves a release of the requested
     # channel landed, not merely that some files did.
     local cli_out version
-    cli_out=$(/usr/local/bin/super-stt-cli --version 2>&1)
-    version="${cli_out#super-stt-cli }"
+    cli_out=$(/usr/local/bin/super-tts-cli --version 2>&1)
+    version="${cli_out#super-tts-cli }"
     if [ "$cli_out" != "$version" ] && is_accepted "v$version" "$accepted"; then
         pass "$label: the installed CLI runs and reports $version"
     else
         fail "$label: the installed CLI runs and reports its version" \
-            "super-stt-cli <$(accepted_desc "$accepted")>" "$cli_out"
+            "super-tts-cli <$(accepted_desc "$accepted")>" "$cli_out"
     fi
 
-    # The generated `stt` wrapper is what keyboard shortcuts invoke; a wrapper
+    # The generated `tts` wrapper is what keyboard shortcuts invoke; a wrapper
     # pointing at the wrong prefix would be invisible to every check above.
     local wrapper_out
-    wrapper_out=$(/usr/local/bin/stt --version 2>&1)
+    wrapper_out=$(/usr/local/bin/tts --version 2>&1)
     if [ "$wrapper_out" = "$cli_out" ]; then
-        pass "$label: the stt wrapper execs the installed CLI"
+        pass "$label: the tts wrapper execs the installed CLI"
     else
-        fail "$label: the stt wrapper execs the installed CLI" "$cli_out" "$wrapper_out"
+        fail "$label: the tts wrapper execs the installed CLI" "$cli_out" "$wrapper_out"
     fi
 }
 
@@ -379,11 +379,11 @@ local_pass() {
     local log="$WORK_DIR/local.log" accepted flags="" status
     echo "== local pass: the installer built from this tree =="
     if [ -z "$INSTALLER_BIN" ]; then
-        skip "local pass: set SUPER_STT_INSTALLER_BIN to a built super-stt-install to run it"
+        skip "local pass: set SUPER_TTS_INSTALLER_BIN to a built super-tts-install to run it"
         return
     fi
     if [ ! -x "$INSTALLER_BIN" ]; then
-        fail "local pass: SUPER_STT_INSTALLER_BIN is executable" \
+        fail "local pass: SUPER_TTS_INSTALLER_BIN is executable" \
             "an executable installer" "$INSTALLER_BIN"
         return
     fi
@@ -413,7 +413,7 @@ for entry in "${INSTALLED_FILES[@]}"; do
     [ -e "$path" ] && PREEXISTING+=("$path")
 done
 if [ "${#PREEXISTING[@]}" -ne 0 ]; then
-    err "Super STT is already installed on this host — refusing to run:"
+    err "Super TTS is already installed on this host — refusing to run:"
     printf '        %s\n' "${PREEXISTING[@]}"
     err "Uninstall it first (bash uninstall.sh), or run this in a container."
     exit 2

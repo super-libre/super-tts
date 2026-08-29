@@ -16,8 +16,8 @@ itself is read / set via [`/audio_theme`](./audio_theme.md).
 
 ```http
 POST /volume HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -55,8 +55,8 @@ Content-Type: application/json
 
 ```http
 GET /volume HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

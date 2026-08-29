@@ -1,0 +1,36 @@
+[package]
+    name = "super-tts-cosmic-applet"
+    version.workspace = true
+    authors.workspace = true
+    edition.workspace = true
+    description = "Super TTS client application"
+    repository = "https://github.com/jorge-menjivar/super-tts"
+    license = "GPL-3.0-only"
+
+# Single applet binary with command-line arguments
+[[bin]]
+    name = "super-tts-cosmic-applet"
+    path = "src/main.rs"
+
+[dependencies]
+    base64 = "0.22.1"
+    clap = { version = "4.5", features = ["derive"] }
+    libcosmic = {
+        workspace = true,
+        features = [
+            "default",
+            "applet",
+            "tokio",
+        ]
+    }
+    futures-util.workspace = true
+    libc.workspace = true
+    log.workspace = true
+    serde.workspace = true
+    serde_json.workspace = true
+    super-tts-shared = { path = "../super-tts-shared" }
+    tokio.workspace = true
+    toml.workspace = true
+
+[lints]
+    workspace = true

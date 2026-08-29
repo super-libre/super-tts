@@ -116,12 +116,12 @@ jobs:
       - name: Build binaries
         run: |
           cargo build --release --target ${{ matrix.target }} \
-            --bin super-stt-daemon \
-            --bin super-stt-cli \
-            --bin super-stt-consent \
-            --bin super-stt-app \
-            --bin super-stt-cosmic-applet \
-            --bin super-stt-install
+            --bin super-tts-daemon \
+            --bin super-tts-cli \
+            --bin super-tts-consent \
+            --bin super-tts-app \
+            --bin super-tts-cosmic-applet \
+            --bin super-tts-install
 
       - name: Create tarball
         run: |
@@ -129,40 +129,40 @@ jobs:
           # Daemon, CLI, and consent helper. The consent helper MUST be in
           # the same directory as the daemon — locate_consent_helper has no
           # PATH fallback.
-          cp target/${{ matrix.target }}/release/super-stt-daemon dist/
-          cp target/${{ matrix.target }}/release/super-stt-cli dist/
-          cp target/${{ matrix.target }}/release/super-stt-consent dist/
-          cp target/${{ matrix.target }}/release/super-stt-app dist/
-          cp target/${{ matrix.target }}/release/super-stt-cosmic-applet dist/
+          cp target/${{ matrix.target }}/release/super-tts-daemon dist/
+          cp target/${{ matrix.target }}/release/super-tts-cli dist/
+          cp target/${{ matrix.target }}/release/super-tts-consent dist/
+          cp target/${{ matrix.target }}/release/super-tts-app dist/
+          cp target/${{ matrix.target }}/release/super-tts-cosmic-applet dist/
 
           # Include systemd service files
           mkdir -p dist/systemd
-          cp super-stt-daemon/systemd/super-stt.service dist/systemd/
+          cp super-tts-daemon/systemd/super-tts.service dist/systemd/
 
           mkdir -p dist/resources
 
           # Include desktop app resources
-          cp -r super-stt-app/resources/* dist/resources
+          cp -r super-tts-app/resources/* dist/resources
 
           # Include COSMIC applet resources
-          cp -r super-stt-cosmic-applet/resources/* dist/resources
+          cp -r super-tts-cosmic-applet/resources/* dist/resources
 
           # Remove any extra assets
           rm -rf dist/resources/assets
 
           # Create tarball with architecture suffix
-          tar -czf super-stt-${{ matrix.target }}.tar.gz -C dist .
+          tar -czf super-tts-${{ matrix.target }}.tar.gz -C dist .
 
       - name: Stage installer binary
-        run: cp "target/${{ matrix.target }}/release/super-stt-install" "super-stt-install-${{ matrix.target }}"
+        run: cp "target/${{ matrix.target }}/release/super-tts-install" "super-tts-install-${{ matrix.target }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: super-stt-${{ matrix.target }}
+          name: super-tts-${{ matrix.target }}
           path: |
-            super-stt-${{ matrix.target }}.tar.gz
-            super-stt-install-${{ matrix.target }}
+            super-tts-${{ matrix.target }}.tar.gz
+            super-tts-install-${{ matrix.target }}
 
   create-release:
     name: Create Release
@@ -193,7 +193,7 @@ jobs:
         with:
           files: |
             artifacts/**/*.tar.gz
-            artifacts/**/super-stt-install-*
+            artifacts/**/super-tts-install-*
             SHA256SUMS
           draft: false
           prerelease: false

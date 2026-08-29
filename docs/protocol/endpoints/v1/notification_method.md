@@ -54,10 +54,10 @@ per failure, bracketed so it cannot be read as transcript, and it never carries
 backend text:
 
 ```
-[Super STT: no model loaded]
-[Super STT: could not start recording]
-[Super STT: recording failed]
-[Super STT: transcription failed]
+[Super TTS: no model loaded]
+[Super TTS: could not start recording]
+[Super TTS: recording failed]
+[Super TTS: transcription failed]
 ```
 
 ## Auth
@@ -72,8 +72,8 @@ backend text:
 
 ```http
 POST /notification_method HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
@@ -111,8 +111,8 @@ Content-Type: application/json
 
 ```http
 GET /notification_method HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

@@ -21,8 +21,8 @@ nothing the user can hear.
 
 ```http
 POST /audio_theme/test HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 No request body.

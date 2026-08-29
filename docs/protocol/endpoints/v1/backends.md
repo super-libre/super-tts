@@ -20,7 +20,7 @@ directly.
 - **Secrets** (`[[secrets]]`) — sensitive values such as API keys, managed
   under [`/backends/{source}/secrets`](./backends/secrets.md) (the `secrets`
   scope). The daemon stores them in the **system keyring** and reads them only
-  at model-load time, injecting each as an `x-stt-secret-<name>` request header
+  at model-load time, injecting each as an `x-tts-secret-<name>` request header
   (see [contract.md](../../backend/contract.md#request-headers)). Values are
   **write-only**: a client sets or clears a secret and can check whether one is
   configured, but no endpoint ever returns a value.
@@ -30,7 +30,7 @@ directly.
   their values *are* returned.
 
 The keyring account for a backend secret is `backend:<source>:<name>` under the
-`super-stt` service, where `<source>` is the backend's repo id.
+`super-tts` service, where `<source>` is the backend's repo id.
 
 ## Auth
 
@@ -47,8 +47,8 @@ secrets and options.
 
 ```http
 GET /backends HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -58,7 +58,7 @@ Authorization: Bearer stt_…64hex…
   "status": "success",
   "backends": [
     {
-      "source": "github.com/super-stt/openai",
+      "source": "github.com/super-tts/openai",
       "name":   "OpenAI",
       "version": "0.1.1",               // installed version, re-read from disk per request
       "kind":   "wasm",                 // "wasm" | "subprocess"
@@ -170,13 +170,13 @@ proxy, or local OpenAI-compatible server) without re-installing it.
 
 Uninstalls a backend. Works for any installed backend — registry-installed,
 sideloaded, or imported-from-dir. Removes the backend's directory under
-`<XDG_DATA_HOME>/super-stt/backends/<id>/` and refreshes the in-memory
+`<XDG_DATA_HOME>/super-tts/backends/<id>/` and refreshes the in-memory
 discovery list. Idempotent.
 
 ### Request
 
 ```
-DELETE /backends/github.com%2Fjorge-menjivar%2Fsuper-stt
+DELETE /backends/github.com%2Fjorge-menjivar%2Fsuper-tts
 ```
 
 The `source` is URL-percent-encoded.

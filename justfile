@@ -1,16 +1,16 @@
-app_name := 'super-stt-app'
-daemon_bin_name := 'super-stt-daemon'
-# systemd unit name (matches super-stt-daemon/systemd/super-stt.service)
-service_name := 'super-stt'
-cli_name := 'super-stt-cli'
-consent_name := 'super-stt-consent'
-wrapper_name := 'stt'
-applet_name := 'super-stt-cosmic-applet'
+app_name := 'super-tts-app'
+daemon_bin_name := 'super-tts-daemon'
+# systemd unit name (matches super-tts-daemon/systemd/super-tts.service)
+service_name := 'super-tts'
+cli_name := 'super-tts-cli'
+consent_name := 'super-tts-consent'
+wrapper_name := 'tts'
+applet_name := 'super-tts-cosmic-applet'
 
 # Applet
-applet_full_desktop_file_name := 'super-stt-cosmic-applet-full.desktop'
-applet_left_desktop_file_name := 'super-stt-cosmic-applet-left.desktop'
-applet_right_desktop_file_name := 'super-stt-cosmic-applet-right.desktop'
+applet_full_desktop_file_name := 'super-tts-cosmic-applet-full.desktop'
+applet_left_desktop_file_name := 'super-tts-cosmic-applet-left.desktop'
+applet_right_desktop_file_name := 'super-tts-cosmic-applet-right.desktop'
 
 # Installation paths — root-owned under /usr/local, matching the
 # release installers, so install/uninstall recipes escalate with sudo
@@ -21,8 +21,8 @@ install_prefix := '/usr/local'
 bin_dir := install_prefix / 'bin'
 # systemd *user* unit, but installed root-owned.
 systemd_unit_dir := '/usr/lib/systemd/user'
-run_dir := env('XDG_RUNTIME_DIR') / 'stt'
-log_dir := home_dir / '.local' / 'share' / 'stt' / 'logs'
+run_dir := env('XDG_RUNTIME_DIR') / 'tts'
+log_dir := home_dir / '.local' / 'share' / 'tts' / 'logs'
 desktop_dir := install_prefix / 'share' / 'applications'
 icons_dir := install_prefix / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps'
 # Theme root, not the leaf dir: gtk-update-icon-cache indexes a whole theme.
@@ -43,21 +43,21 @@ applet_dst := bin_dir / applet_name
 wrapper_dst := bin_dir / wrapper_name
 
 # App files
-app_desktop_file_name := 'super-stt-app.desktop'
-app_desktop_file_src := 'super-stt-app' / 'resources' / app_desktop_file_name
-app_icon_src := 'super-stt-app' / 'resources' / 'icons' / 'hicolor' / 'scalable' / 'apps' / 'super-stt-app.svg'
+app_desktop_file_name := 'super-tts-app.desktop'
+app_desktop_file_src := 'super-tts-app' / 'resources' / app_desktop_file_name
+app_icon_src := 'super-tts-app' / 'resources' / 'icons' / 'hicolor' / 'scalable' / 'apps' / 'super-tts-app.svg'
 app_desktop_file_dst := desktop_dir / app_desktop_file_name
-app_icon_dst := icons_dir / 'super-stt-app.svg'
+app_icon_dst := icons_dir / 'super-tts-app.svg'
 
 # Applet files
-applet_full_desktop_file_src := 'super-stt-cosmic-applet' / 'resources' / applet_full_desktop_file_name
-applet_left_desktop_file_src := 'super-stt-cosmic-applet' / 'resources' / applet_left_desktop_file_name
-applet_right_desktop_file_src := 'super-stt-cosmic-applet' / 'resources' / applet_right_desktop_file_name
-applet_icon_src := 'super-stt-cosmic-applet' / 'resources' / 'icons' / 'hicolor' / 'scalable' / 'apps' / 'super-stt-cosmic-applet.svg'
+applet_full_desktop_file_src := 'super-tts-cosmic-applet' / 'resources' / applet_full_desktop_file_name
+applet_left_desktop_file_src := 'super-tts-cosmic-applet' / 'resources' / applet_left_desktop_file_name
+applet_right_desktop_file_src := 'super-tts-cosmic-applet' / 'resources' / applet_right_desktop_file_name
+applet_icon_src := 'super-tts-cosmic-applet' / 'resources' / 'icons' / 'hicolor' / 'scalable' / 'apps' / 'super-tts-cosmic-applet.svg'
 applet_full_desktop_file_dst := desktop_dir / applet_full_desktop_file_name
 applet_left_desktop_file_dst := desktop_dir / applet_left_desktop_file_name
 applet_right_desktop_file_dst := desktop_dir / applet_right_desktop_file_name
-applet_icon_dst := icons_dir / 'super-stt-cosmic-applet.svg'
+applet_icon_dst := icons_dir / 'super-tts-cosmic-applet.svg'
 
 # Service file
 service_file := service_name + '.service'
@@ -105,15 +105,15 @@ check-json: (check '--message-format=json')
 # otherwise (see audit Tier 1 #8). `-D warnings` also catches feature-conditional
 # unused imports.
 check-features:
-    RUSTFLAGS="-D warnings" cargo check -p super-stt-daemon --no-default-features --features subprocess-backends
-    RUSTFLAGS="-D warnings" cargo check -p super-stt-daemon --no-default-features --features wasm-backends
-    RUSTFLAGS="-D warnings" cargo check -p super-stt-daemon --no-default-features
+    RUSTFLAGS="-D warnings" cargo check -p super-tts-daemon --no-default-features --features subprocess-backends
+    RUSTFLAGS="-D warnings" cargo check -p super-tts-daemon --no-default-features --features wasm-backends
+    RUSTFLAGS="-D warnings" cargo check -p super-tts-daemon --no-default-features
     # Compile (don't run) the subprocess transport integration test + its
     # mock_backend fixture so a refactor breaking SubprocessBackend can't pass CI
-    # green. Running it needs a systemd --user session (SUPER_STT_TEST_SUBPROCESS=1)
+    # green. Running it needs a systemd --user session (SUPER_TTS_TEST_SUBPROCESS=1)
     # that hosted runners lack — unlike the WASM mock it can't run hermetically —
     # but compiling it keeps it from bit-rotting (audit 2 Tier 2 #13).
-    RUSTFLAGS="-D warnings" cargo test -p super-stt-daemon --features test-fixtures --no-run --test subprocess_mock
+    RUSTFLAGS="-D warnings" cargo test -p super-tts-daemon --features test-fixtures --no-run --test subprocess_mock
 
 # Check formatting without modifying files
 fmt-check:
@@ -135,7 +135,7 @@ test *args:
 # denial). Run them after touching any surface setup. Usage: just test-gui
 [doc("Run the GUI smoke tests against the live compositor (needs a desktop session)")]
 test-gui *args:
-    cargo test -p super-stt-consent --test gui_smoke -- --ignored --nocapture {{ args }}
+    cargo test -p super-tts-consent --test gui_smoke -- --ignored --nocapture {{ args }}
 
 # Unit-test install.sh's pure logic (arch detection, channel validation, tag
 # resolution from a JSON string) against fixture JSON. It's a bash script,
@@ -148,7 +148,7 @@ test-install:
 # the complete installed tree, then uninstalls and asserts nothing is left.
 # DESTRUCTIVE — it writes to (and clears) the real /usr/local and
 # /usr/lib/systemd/user, so it is deliberately NOT part of `just ci` and
-# refuses to run without SUPER_STT_INSTALL_E2E_YES=1. CI runs it on disposable
+# refuses to run without SUPER_TTS_INSTALL_E2E_YES=1. CI runs it on disposable
 # runners (.github/workflows/install-e2e.yml); locally, run it in a container.
 # Usage: just test-install-e2e [stable|beta]
 [doc("End-to-end install test (DESTRUCTIVE: real install into /usr/local)")]
@@ -157,8 +157,8 @@ test-install-e2e channel="stable":
 
 # Load every committed old-config fixture against the current config types.
 config-compat *args:
-    cargo test -p super-stt-daemon --lib config {{ args }}
-    cargo test -p super-stt-cosmic-applet --lib config {{ args }}
+    cargo test -p super-tts-daemon --lib config {{ args }}
+    cargo test -p super-tts-cosmic-applet --lib config {{ args }}
 
 # Run doctests
 doctest *args:
@@ -166,7 +166,7 @@ doctest *args:
 
 # Verify the generated TOML schemas are current
 schema-check:
-    cargo test -p super-stt-registry-types --features schema
+    cargo test -p super-tts-registry-types --features schema
 
 # Measure code coverage over the whole workspace (requires cargo-llvm-cov).
 # --remap-path-prefix keeps report paths relative, and tests/ is excluded so
@@ -193,20 +193,20 @@ ci: fmt-check check check-features test test-install doctest schema-check
 
 # Run the app for testing purposes
 run-app *args:
-    env RUST_BACKTRACE=full RUST_LOG=super_stt_app=debug,super_stt_shared=debug cargo run --bin {{ app_name }} {{ args }}
+    env RUST_BACKTRACE=full RUST_LOG=super_tts_app=debug,super_tts_shared=debug cargo run --bin {{ app_name }} {{ args }}
 
-# Run the daemon for testing purposes. Also builds super-stt-consent into
+# Run the daemon for testing purposes. Also builds super-tts-consent into
 # the same target dir, since the daemon only looks for the consent helper
 # alongside its own binary (auth_request popups fail without it).
 # Usage: just run-daemon [cargo flags, e.g. --release]
 run-daemon *args:
     cargo build --bin {{ consent_name }} --bin {{ daemon_bin_name }} {{ args }}
-    env RUST_BACKTRACE=full RUST_LOG=super_stt_daemon=debug cargo run --bin {{ daemon_bin_name }} -v {{ args }}
+    env RUST_BACKTRACE=full RUST_LOG=super_tts_daemon=debug cargo run --bin {{ daemon_bin_name }} -v {{ args }}
 
 # Run the CLI for testing purposes (talks to the running daemon over the HTTP socket)
 # Usage: just run-cli [ping|status|record|stop|logout] [args]
 run-cli *args:
-    env RUST_BACKTRACE=full RUST_LOG=super_stt_cli=debug,super_stt_shared=debug cargo run --bin {{ cli_name }} -- {{ args }}
+    env RUST_BACKTRACE=full RUST_LOG=super_tts_cli=debug,super_tts_shared=debug cargo run --bin {{ cli_name }} -- {{ args }}
 
 # Run the consent dialog on its own, without the daemon. The dialog is
 # env-driven rather than argument-driven, so this fills in a plausible request;
@@ -238,7 +238,7 @@ run-consent *scopes:
     # Quiet RUST_LOG: the default pulls in thousands of wgpu/zbus/wayland lines
     # at startup and buries the dialog's own output.
     env RUST_BACKTRACE=full \
-        RUST_LOG=super_stt_consent=debug,super_stt_shared=debug \
+        RUST_LOG=super_tts_consent=debug,super_tts_shared=debug \
         STT_AUTH_APP_NAME="Test App" \
         STT_AUTH_SCOPES="$scopes" \
         STT_AUTH_EXE_PATH="/usr/bin/test-app" \
@@ -261,9 +261,9 @@ run-applet *args:
     sudo_keepalive=$!
     trap 'kill "$sudo_keepalive" 2>/dev/null' EXIT
 
-    env RUST_BACKTRACE=full RUST_LOG=debug,super_stt_shared=debug,warn cargo build --bin {{ applet_name }} {{ args }}
+    env RUST_BACKTRACE=full RUST_LOG=debug,super_tts_shared=debug,warn cargo build --bin {{ applet_name }} {{ args }}
 
-    echo "Installing Debug Super STT COSMIC applet..."
+    echo "Installing Debug Super TTS COSMIC applet..."
     sudo mkdir -p {{ bin_dir }}
     sudo install -m755 {{ debug_applet_src }} {{ applet_dst }}
 
@@ -284,7 +284,7 @@ run-applet *args:
     cosmic-panel
 
 run-applet-windowed *args:
-    env RUST_BACKTRACE=full RUST_LOG=debug,super_stt_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }}
+    env RUST_BACKTRACE=full RUST_LOG=debug,super_tts_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }}
 
 # Run the cosmic applet in the cosmic panel for testing purposes
 run-applet-kill *args:
@@ -299,9 +299,9 @@ run-applet-kill *args:
     sudo_keepalive=$!
     trap 'kill "$sudo_keepalive" 2>/dev/null' EXIT
 
-    env RUST_BACKTRACE=full RUST_LOG=debug,super_stt_shared=debug,warn cargo build --bin {{ applet_name }} {{ args }}
+    env RUST_BACKTRACE=full RUST_LOG=debug,super_tts_shared=debug,warn cargo build --bin {{ applet_name }} {{ args }}
 
-    echo "Installing Debug Super STT COSMIC applet..."
+    echo "Installing Debug Super TTS COSMIC applet..."
     sudo mkdir -p {{ bin_dir }}
     sudo install -m755 {{ debug_applet_src }} {{ applet_dst }}
 
@@ -327,13 +327,13 @@ run-applet-kill *args:
 
 # Run the cosmic applet for testing purposes with different sides
 run-applet-left *args:
-    env RUST_BACKTRACE=full RUST_LOG=debug,super_stt_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }} -- --side left
+    env RUST_BACKTRACE=full RUST_LOG=debug,super_tts_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }} -- --side left
 
 run-applet-right *args:
-    env RUST_BACKTRACE=full RUST_LOG=debug,super_stt_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }} -- --side right
+    env RUST_BACKTRACE=full RUST_LOG=debug,super_tts_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }} -- --side right
 
 run-applet-full *args:
-    env RUST_BACKTRACE=full RUST_LOG=debug,super_stt_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }} -- --side full
+    env RUST_BACKTRACE=full RUST_LOG=debug,super_tts_shared=debug,warn cargo run --bin {{ applet_name }} {{ args }} -- --side full
 
 # Build only the app
 build-app *args:
@@ -349,7 +349,7 @@ build-cli *args:
 
 # Build only the installer/self-updater
 build-install:
-    cargo build --release --bin super-stt-install
+    cargo build --release --bin super-tts-install
 
 # Build only the consent helper (co-located with the daemon binary)
 build-consent:
@@ -364,13 +364,13 @@ build-applet:
 # tests/wasm_mock.rs loads to exercise the daemon's WasmBackend orchestration.
 # Requires: rustup target add wasm32-wasip2
 build-mock-wasm-backend:
-    cargo build --manifest-path super-stt-daemon/tests/fixtures/mock-wasm-backend/Cargo.toml --target wasm32-wasip2 --release
+    cargo build --manifest-path super-tts-daemon/tests/fixtures/mock-wasm-backend/Cargo.toml --target wasm32-wasip2 --release
 
 # Build the generic mock REALTIME WASM backend fixture (wasm32-wasip2) that
 # tests/wasm_mock_realtime.rs loads to exercise the daemon's realtime
 # orchestration (ws-server.handle). Requires: rustup target add wasm32-wasip2
 build-mock-wasm-realtime-backend:
-    cargo build --manifest-path super-stt-daemon/tests/fixtures/mock-wasm-realtime-backend/Cargo.toml --target wasm32-wasip2 --release
+    cargo build --manifest-path super-tts-daemon/tests/fixtures/mock-wasm-realtime-backend/Cargo.toml --target wasm32-wasip2 --release
 
 # Copy the canonical WIT (realtime.wit + deps) into every backend that bundles it.
 sync-wit:
@@ -402,10 +402,10 @@ check-wit-sync:
     [ "$fail" -eq 0 ]
 
 # Regenerate the JSON Schemas for backend.toml and registry.toml from the
-# canonical Rust types in super-stt-registry-types. CI fails when the
+# canonical Rust types in super-tts-registry-types. CI fails when the
 # committed schemas are stale, so run this after changing those types.
 gen-schemas:
-    cargo run -p super-stt-registry-types --features schema --bin gen_schemas
+    cargo run -p super-tts-registry-types --features schema --bin gen_schemas
 
 # Install the app (system installation under /usr/local)
 install-app:
@@ -431,7 +431,7 @@ install-app:
         exit 1
     fi
 
-    echo "Installing Super STT app to {{ app_dst }}"
+    echo "Installing Super TTS app to {{ app_dst }}"
     sudo mkdir -p {{ bin_dir }}
     sudo install -m755 {{ app_src }} {{ app_dst }}
 
@@ -459,7 +459,7 @@ install-app:
     pkill -f '^cosmic-launcher$' 2>/dev/null || true
     pkill -f '^pop-launcher( |$)' 2>/dev/null || true
 
-    echo "✓ Super STT app installed: {{ app_dst }}"
+    echo "✓ Super TTS app installed: {{ app_dst }}"
     echo "✓ Desktop entry installed: {{ app_desktop_file_dst }}"
     echo "✓ App icon installed: {{ app_icon_dst }}"
 
@@ -487,7 +487,7 @@ install-applet:
         exit 1
     fi
 
-    echo "Installing Super STT COSMIC applet..."
+    echo "Installing Super TTS COSMIC applet..."
     sudo mkdir -p {{ bin_dir }}
     sudo install -m755 {{ applet_src }} {{ applet_dst }}
 
@@ -519,9 +519,9 @@ install-applet:
 
     echo "✓ COSMIC applet installed: {{ applet_dst }}"
     echo "✓ Desktop entries installed for panel integration:"
-    echo "  - Super STT Applet (Full)"
-    echo "  - Super STT Applet (Left Side)"
-    echo "  - Super STT Applet (Right Side)"
+    echo "  - Super TTS Applet (Full)"
+    echo "  - Super TTS Applet (Left Side)"
+    echo "  - Super TTS Applet (Right Side)"
     echo ""
     echo "🚀 Ready to use! The applet can now be added to your COSMIC panel through:"
     echo "-- COSMIC Settings > Desktop > Panel > Configure panel applets > Add Applet"
@@ -554,7 +554,7 @@ install-daemon:
         exit 1
     fi
 
-    echo "Installing Super STT daemon as user service..."
+    echo "Installing Super TTS daemon as user service..."
 
     # Install binary
     echo "Installing daemon binary to {{ daemon_dst }}"
@@ -577,7 +577,7 @@ install-daemon:
     echo "Installing consent helper to {{ consent_dst }}"
     sudo install -m755 {{ consent_src }} {{ consent_dst }}
 
-    # Install the CLI alongside the daemon. The `stt` wrapper created below
+    # Install the CLI alongside the daemon. The `tts` wrapper created below
     # execs the CLI (client commands like `record`/`stop` live there, not in
     # the daemon binary), so the wrapper is broken without it.
     if ! just install-cli; then
@@ -598,30 +598,30 @@ install-daemon:
     # theme are all config / `POST /v1` state), so a flag appended to
     # ExecStart is rejected by clap before the listener binds and the unit
     # crash-loops under Restart=always. `every_shipped_execstart_parses`
-    # (super-stt-daemon/src/cli_tests.rs) fails if one is reintroduced here.
+    # (super-tts-daemon/src/cli_tests.rs) fails if one is reintroduced here.
     echo "Installing systemd user unit..."
-    sudo install -Dm0644 super-stt-daemon/systemd/{{ service_file }} {{ service_dst }}
+    sudo install -Dm0644 super-tts-daemon/systemd/{{ service_file }} {{ service_dst }}
 
     # A unit left in ~/.config/systemd/user by an older install takes
     # precedence over the packaged one — remove it or systemd keeps
     # launching the stale ~/.local/bin binary.
     rm -f "$HOME/.config/systemd/user/{{ service_file }}"
 
-    # Create the `stt` convenience wrapper (for keyboard shortcuts like
-    # `stt record --write`). Note: we deliberately do NOT use `sg stt
+    # Create the `tts` convenience wrapper (for keyboard shortcuts like
+    # `tts record --write`). Note: we deliberately do NOT use `sg tts
     # -c "..."` here. Changing the GID of the daemon (or its CLI
     # peers) breaks `/proc/<pid>/exe` readlinks across the daemon ↔
     # client boundary — the kernel's `__ptrace_may_access` check
     # requires *both* matching UID and matching GID, and clients run
-    # with the user's primary GID. The `stt` group is no longer
+    # with the user's primary GID. The `tts` group is no longer
     # required for socket ACLs in the user-mode systemd unit; the
     # socket file is owned `user:user-primary-group` with 0660, so the
     # owner (same user) can access regardless of group membership.
     echo "Creating wrapper script at {{ wrapper_dst }}"
     wrapper_tmp=$(mktemp)
     echo '#!/bin/bash' > "$wrapper_tmp"
-    echo '# Super STT convenience wrapper — invokes super-stt-cli directly.' >> "$wrapper_tmp"
-    echo '# Used by keyboard shortcuts (e.g. Super+Space → "stt record --write").' >> "$wrapper_tmp"
+    echo '# Super TTS convenience wrapper — invokes super-tts-cli directly.' >> "$wrapper_tmp"
+    echo '# Used by keyboard shortcuts (e.g. Super+Space → "tts record --write").' >> "$wrapper_tmp"
     echo '' >> "$wrapper_tmp"
     echo 'exec {{ cli_dst }} "$@"' >> "$wrapper_tmp"
     sudo install -m755 "$wrapper_tmp" {{ wrapper_dst }}
@@ -638,10 +638,10 @@ install-daemon:
 
         if [[ ! "$add_shortcut" =~ ^[Nn]$ ]]; then
             mkdir -p "$COSMIC_SHORTCUTS_DIR"
-            stt_command="{{ bin_dir }}/stt record --write"
+            tts_command="{{ bin_dir }}/tts record --write"
 
             if [ -f "$COSMIC_SHORTCUTS_FILE" ] && [ -s "$COSMIC_SHORTCUTS_FILE" ]; then
-                if ! grep -q "Super STT" "$COSMIC_SHORTCUTS_FILE"; then
+                if ! grep -q "Super TTS" "$COSMIC_SHORTCUTS_FILE"; then
                     if ! (grep -q 'key: "space"' "$COSMIC_SHORTCUTS_FILE" && grep -A5 -B5 'key: "space"' "$COSMIC_SHORTCUTS_FILE" | grep -q 'Super'); then
                         cp "$COSMIC_SHORTCUTS_FILE" "$COSMIC_SHORTCUTS_FILE.backup"
                         temp_file=$(mktemp)
@@ -655,8 +655,8 @@ install-daemon:
                         echo '            Super,' >> "$temp_file"
                         echo '        ],' >> "$temp_file"
                         echo '        key: "space",' >> "$temp_file"
-                        echo '        description: Some("Super STT"),' >> "$temp_file"
-                        echo "    ): Spawn(\"$stt_command\")," >> "$temp_file"
+                        echo '        description: Some("Super TTS"),' >> "$temp_file"
+                        echo "    ): Spawn(\"$tts_command\")," >> "$temp_file"
                         echo '}' >> "$temp_file"
                         mv "$temp_file" "$COSMIC_SHORTCUTS_FILE"
                         rm -f "$COSMIC_SHORTCUTS_FILE.backup"
@@ -669,19 +669,19 @@ install-daemon:
                 echo '            Super,' >> "$COSMIC_SHORTCUTS_FILE"
                 echo '        ],' >> "$COSMIC_SHORTCUTS_FILE"
                 echo '        key: "space",' >> "$COSMIC_SHORTCUTS_FILE"
-                echo '        description: Some("Super STT"),' >> "$COSMIC_SHORTCUTS_FILE"
-                echo "    ): Spawn(\"$stt_command\")," >> "$COSMIC_SHORTCUTS_FILE"
+                echo '        description: Some("Super TTS"),' >> "$COSMIC_SHORTCUTS_FILE"
+                echo "    ): Spawn(\"$tts_command\")," >> "$COSMIC_SHORTCUTS_FILE"
                 echo '}' >> "$COSMIC_SHORTCUTS_FILE"
             fi
         fi
     fi || true
 
-    echo "✓ Super STT installed to {{ daemon_dst }}"
+    echo "✓ Super TTS installed to {{ daemon_dst }}"
     echo "✓ Wrapper script created at {{ wrapper_dst }}"
-    echo "✓ Convenience shortcut 'stt' created"
+    echo "✓ Convenience shortcut 'tts' created"
     echo ""
     echo "🚀 Ready to use!"
-    echo "-- stt record --write         # Record, transcribe, and type result"
+    echo "-- tts record --write         # Record, transcribe, and type result"
 
     # Reload user systemd and enable service
     echo "Reloading user systemd..."
@@ -709,7 +709,7 @@ install:
         exit 1
     fi
 
-# Configure COSMIC keyboard shortcut for Super STT
+# Configure COSMIC keyboard shortcut for Super TTS
 setup-cosmic-shortcut:
     #!/usr/bin/env bash
     # Check if we're on COSMIC desktop
@@ -722,7 +722,7 @@ setup-cosmic-shortcut:
     COSMIC_SHORTCUTS_FILE="$COSMIC_SHORTCUTS_DIR/custom"
 
     # Ask user if they want to add the shortcut
-    echo -n "Add keyboard shortcut (Super+Space) for Super STT? [Y/n]: "
+    echo -n "Add keyboard shortcut (Super+Space) for Super TTS? [Y/n]: "
     read -r add_shortcut
 
     if [[ "$add_shortcut" =~ ^[Nn]$ ]]; then
@@ -732,13 +732,13 @@ setup-cosmic-shortcut:
     # Create the shortcuts directory if it doesn't exist
     mkdir -p "$COSMIC_SHORTCUTS_DIR"
 
-    # Use the full path to the stt wrapper for reliability
-    stt_command="{{ bin_dir }}/stt record --write"
+    # Use the full path to the tts wrapper for reliability
+    tts_command="{{ bin_dir }}/tts record --write"
 
     # Check if shortcuts file exists and has content
     if [ -f "$COSMIC_SHORTCUTS_FILE" ] && [ -s "$COSMIC_SHORTCUTS_FILE" ]; then
         # File exists with content, check if our shortcut is already there
-        if grep -q "Super STT" "$COSMIC_SHORTCUTS_FILE"; then
+        if grep -q "Super TTS" "$COSMIC_SHORTCUTS_FILE"; then
             exit 0
         fi
 
@@ -763,8 +763,8 @@ setup-cosmic-shortcut:
             echo '            Super,' >> "$temp_file"
             echo '        ],' >> "$temp_file"
             echo '        key: "space",' >> "$temp_file"
-            echo '        description: Some("Super STT"),' >> "$temp_file"
-            echo "    ): Spawn(\"$stt_command\")," >> "$temp_file"
+            echo '        description: Some("Super TTS"),' >> "$temp_file"
+            echo "    ): Spawn(\"$tts_command\")," >> "$temp_file"
             echo '}' >> "$temp_file"
         else
             # File has content, remove the closing brace and add our shortcut
@@ -774,8 +774,8 @@ setup-cosmic-shortcut:
             echo '            Super,' >> "$temp_file"
             echo '        ],' >> "$temp_file"
             echo '        key: "space",' >> "$temp_file"
-            echo '        description: Some("Super STT"),' >> "$temp_file"
-            echo "    ): Spawn(\"$stt_command\")," >> "$temp_file"
+            echo '        description: Some("Super TTS"),' >> "$temp_file"
+            echo "    ): Spawn(\"$tts_command\")," >> "$temp_file"
             echo '}' >> "$temp_file"
         fi
 
@@ -798,8 +798,8 @@ setup-cosmic-shortcut:
         echo '            Super,' >> "$COSMIC_SHORTCUTS_FILE"
         echo '        ],' >> "$COSMIC_SHORTCUTS_FILE"
         echo '        key: "space",' >> "$COSMIC_SHORTCUTS_FILE"
-        echo '        description: Some("Super STT"),' >> "$COSMIC_SHORTCUTS_FILE"
-        echo "    ): Spawn(\"$stt_command\")," >> "$COSMIC_SHORTCUTS_FILE"
+        echo '        description: Some("Super TTS"),' >> "$COSMIC_SHORTCUTS_FILE"
+        echo "    ): Spawn(\"$tts_command\")," >> "$COSMIC_SHORTCUTS_FILE"
         echo '}' >> "$COSMIC_SHORTCUTS_FILE"
     fi
 
@@ -818,17 +818,17 @@ install-all:
     fi
 
     echo ""
-    echo "🎉 Complete Super STT installation finished!"
+    echo "🎉 Complete Super TTS installation finished!"
     echo ""
     echo "⚙️  Quick Setup Tips:"
     echo "-- If you're on COSMIC, the daemon installer already offered to set up Super+Space shortcut"
-    echo "-- For other desktop environments, add a keyboard shortcut for: stt record --write"
+    echo "-- For other desktop environments, add a keyboard shortcut for: tts record --write"
     echo "-- Recommended shortcuts: Super+Space, Ctrl+Alt+S, or F12"
 
 # Uninstall the app
 uninstall-app:
     #!/usr/bin/env bash
-    echo "Uninstalling Super STT App..."
+    echo "Uninstalling Super TTS App..."
     sudo rm -f {{ app_dst }}
     sudo rm -f {{ app_desktop_file_dst }}
     sudo rm -f {{ app_icon_dst }}
@@ -848,14 +848,14 @@ uninstall-app:
     pkill -f '^cosmic-launcher$' 2>/dev/null || true
     pkill -f '^pop-launcher( |$)' 2>/dev/null || true
 
-    echo "✓ Super STT App uninstalled"
+    echo "✓ Super TTS App uninstalled"
     echo "✓ Desktop entry removed"
     echo "✓ App icon removed"
 
 # Uninstall the cosmic applet
 uninstall-applet:
     #!/usr/bin/env bash
-    echo "Uninstalling Super STT COSMIC applet..."
+    echo "Uninstalling Super TTS COSMIC applet..."
     sudo rm -f {{ applet_dst }}
     sudo rm -f {{ applet_full_desktop_file_dst }}
     sudo rm -f {{ applet_left_desktop_file_dst }}
@@ -875,7 +875,7 @@ uninstall-applet:
 # Uninstall the daemon
 uninstall-daemon:
     #!/usr/bin/env bash
-    echo "Uninstalling Super STT daemon user service..."
+    echo "Uninstalling Super TTS daemon user service..."
 
     # Stop and disable user service
     systemctl --user stop {{ service_name }} || true
@@ -902,7 +902,7 @@ uninstall-daemon:
     # Reload user systemd
     systemctl --user daemon-reload
 
-    echo "✓ Super STT Daemon user service uninstalled"
+    echo "✓ Super TTS Daemon user service uninstalled"
 
 # Install just the consent helper (normally bundled with install-daemon)
 install-consent:
@@ -930,7 +930,7 @@ install-consent:
 # Uninstall the consent helper.
 uninstall-consent:
     #!/usr/bin/env bash
-    echo "Uninstalling Super STT consent helper..."
+    echo "Uninstalling Super TTS consent helper..."
     sudo rm -f {{ consent_dst }}
     echo "✓ Consent helper uninstalled"
 
@@ -958,19 +958,19 @@ install-cli:
 
     sudo mkdir -p {{ bin_dir }}
     sudo install -m755 {{ cli_src }} {{ cli_dst }}
-    echo "✓ Super STT CLI installed: {{ cli_dst }}"
+    echo "✓ Super TTS CLI installed: {{ cli_dst }}"
 
 # Uninstall the CLI binary
 uninstall-cli:
     #!/usr/bin/env bash
-    echo "Uninstalling Super STT CLI..."
+    echo "Uninstalling Super TTS CLI..."
     sudo rm -f {{ cli_dst }}
 
-    # The `stt` wrapper is a thin exec of the CLI, so it is dead weight
+    # The `tts` wrapper is a thin exec of the CLI, so it is dead weight
     # without it — left in place it stays on PATH and fails at exec time
     # instead of reporting as uninstalled.
     sudo rm -f {{ wrapper_dst }}
-    echo "✓ Super STT CLI uninstalled"
+    echo "✓ Super TTS CLI uninstalled"
 
 # Uninstall daemon, app, applet, CLI, and consent helper
 uninstall: uninstall-daemon uninstall-app uninstall-applet uninstall-cli uninstall-consent
@@ -999,17 +999,17 @@ status-daemon:
 status: status-daemon
     #!/usr/bin/env bash
     echo ""
-    echo "🔍 Super STT System Status"
+    echo "🔍 Super TTS System Status"
     echo "=========================="
     echo ""
 
     # Check if app is installed
-    if command -v stt &> /dev/null; then
-        echo "✅ App tools: Installed (stt command available)"
+    if command -v tts &> /dev/null; then
+        echo "✅ App tools: Installed (tts command available)"
     elif [ -f "{{ app_dst }}" ]; then
-        echo "✅ Super STT App: Installed"
+        echo "✅ Super TTS App: Installed"
     else
-        echo "❌ Super STT App: Not installed"
+        echo "❌ Super TTS App: Not installed"
     fi
 
     # Check if daemon binary exists

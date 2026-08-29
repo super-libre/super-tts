@@ -25,8 +25,8 @@ Selecting one is done via
 
 ```http
 GET /models HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -35,8 +35,8 @@ Authorization: Bearer stt_…64hex…
 {
   "status": "success",
   "available_models": [
-    ["voxtral-mini", "github.com/super-stt/voxtral"],
-    ["whisper-1", "github.com/super-stt/openai"]
+    ["voxtral-mini", "github.com/super-tts/voxtral"],
+    ["whisper-1", "github.com/super-tts/openai"]
   ]
 }
 ```

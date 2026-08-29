@@ -21,12 +21,12 @@ Pass `path: null` (or omit it) to clear the override.
 
 ```http
 POST /custom_models_dir HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
-  "path": "/home/u/super-stt-models"
+  "path": "/home/u/super-tts-models"
 }
 ```
 
@@ -42,7 +42,7 @@ Content-Type: application/json
 
 {
   "status":  "success",
-  "message": "Custom models directory set to /home/u/super-stt-models"
+  "message": "Custom models directory set to /home/u/super-tts-models"
 }
 ```
 
@@ -64,8 +64,8 @@ carry `source: "custom"`.
 
 ```http
 GET /custom_models_dir HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200, override set):**
@@ -76,7 +76,7 @@ Content-Type: application/json
 
 {
   "status":            "success",
-  "custom_models_dir": "/home/u/super-stt-models"
+  "custom_models_dir": "/home/u/super-tts-models"
 }
 ```
 

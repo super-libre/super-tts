@@ -33,7 +33,7 @@ Three patterns account for the majority of findings:
 ### [x] 1. 🟠 Daemon: state-conflict responses return 500 instead of 409 (substring status mapping has drifted)
 
 - **Where:** `status_code_for_response`
-  (`super-stt-daemon/src/daemon/http/internal/helpers/dispatch.rs:52-106`) maps
+  (`super-tts-daemon/src/daemon/http/internal/helpers/dispatch.rs:52-106`) maps
   response text to status codes by substring matching.
 - **Problem:** the phrase list has drifted from the live wire strings:
   - `switch_guard` messages ("Cannot change the backend during active recording…",
@@ -59,7 +59,7 @@ Three patterns account for the majority of findings:
 ### [x] 2. 🔴 Daemon: realtime sessions are never removed or cancelled
 
 - **Where:** `RealTimeTranscriptionManager`
-  (`super-stt-daemon/src/services/transcription.rs:202-412`).
+  (`super-tts-daemon/src/services/transcription.rs:202-412`).
 - **Problem:** there is no removal/stop API; `cancellation_token` is never
   cancelled; send failures on a dead broadcast channel are swallowed. The throttling
   fields (`last_emit`, `model_min_interval`) are written but never read. Resampling
@@ -174,7 +174,7 @@ Three patterns account for the majority of findings:
   (the `install.rs` variant references had already been de-gated since the audit)
   was: the `#[cfg(not(subprocess-backends))]` `instantiate_subprocess` stub lacked
   `&self`; `daemon_main.rs` called `stt_models::subprocess::cleanup_orphan_units()`
-  unconditionally; and `transcribe.rs`'s `SuperSTTDaemon`/`Response` imports plus
+  unconditionally; and `transcribe.rs`'s `SuperTTSDaemon`/`Response` imports plus
   `instantiate.rs`'s `log::warn` import went unused when a transport was off. Added
   `&self`, gated the orphan-sweep call and the wasm-only imports, and fully-qualified
   the one `warn` call. New `just check-features` compiles all three reduced combos
@@ -195,7 +195,7 @@ Three patterns account for the majority of findings:
   unwrapping `None`. `get()` already degrades that to the disk cache or `Unavailable`,
   so a misbehaving proxy can no longer panic the daemon. Added a mockito test. The
   builder-unwrap sub-point was superseded by the Tier 2 #4 forge consolidation: the
-  `reqwest` client is now built once in `super_stt_forge::http::{short,download}_client`
+  `reqwest` client is now built once in `super_tts_forge::http::{short,download}_client`
   with a single documented `.expect()` on a path that can't fail for these settings
   (rustls-no-provider does no eager TLS init) — threading `Result` through a dozen
   infallible call sites for an unreachable branch was not worth it.
@@ -384,7 +384,7 @@ Three patterns account for the majority of findings:
 - **Resolved (branch `refactor/audit-tier1-20-23`):** added a `spawn_detached`
   helper that reaps each child in a detached thread, and routed both `open_github`
   and `launch_app` through it. The two `./target/{debug,release}` dev paths (and the
-  redundant `which` probe — `Command::new("super-stt-app")` already searches `PATH`)
+  redundant `which` probe — `Command::new("super-tts-app")` already searches `PATH`)
   are gone; `launch_app` now tries PATH, `/usr/local/bin`, `/usr/bin`.
 
 ### [x] 23. 🟡 Applet: the "connection health watchdog" doesn't exist
@@ -416,7 +416,7 @@ Three patterns account for the majority of findings:
 ### [x] 25. 🟡 Registry-types: `SubprocessAsset` with `file = ""` plus valid `parts` passes `Manifest::parse`
 
 - **Where:** the XOR guard treats empty as absent
-  (`super-stt-registry-types/src/manifest.rs:528-534`), but `release_files()`
+  (`super-tts-registry-types/src/manifest.rs:528-534`), but `release_files()`
   returns `[""]` and `is_multipart()` is false (`manifest.rs:202-213`).
 - **Fix:** normalize empty→`None` in parse.
 - **Resolved (branch `refactor/audit-tier1-25-29`):** `Manifest::parse` now takes
@@ -495,7 +495,7 @@ Three patterns account for the majority of findings:
   `v`-prefix strippers (`resolve.rs:96-98`, `manifest.rs:45`).
 - **Fix:** one shared `parse_version`/`update_available`.
 - **Resolved (branch `refactor/audit-tier1-30-31`):** added
-  `super_stt_registry_types::version` with `parse_version` (single-`v`-prefix strip +
+  `super_tts_registry_types::version` with `parse_version` (single-`v`-prefix strip +
   semver) and `update_available` (strictly-newer, `false` on any non-semver). The
   daemon update handler no-ops unless the registry is strictly newer (no more
   downgrades or reformatted-string false updates); the app's `installed.rs` check,
@@ -524,7 +524,7 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   tripled across `custom_repo.rs:175-209` / `local_dir.rs:59-117` /
   `indexer/main.rs:273-351` — and `local_dir` silently drops `secrets`/`options`
   (`local_dir.rs:107-108`) where `custom_repo` maps them.
-- **Fix:** use the proven layering — canonical types in `super-stt-registry-types`,
+- **Fix:** use the proven layering — canonical types in `super-tts-registry-types`,
   daemon keeps `check_min_client`/`retain_safe_backends` as extensions (like
   `validate_runtime` for `Manifest`). Fold the field-identical
   `RegistryModel`/`RegistrySecret`/`RegistryOption`
@@ -532,7 +532,7 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   manifest→`IndexBackend` synthesis to one shared implementation.
 - **Resolved (`7b27bed` + `7dfbfad`, branch `refactor/daemon-audit-batch`):**
   Phase 1 (`7b27bed`) moved the nine structs + `SCHEMA_VERSION`/`MIN_CLIENT` into
-  `super-stt-registry-types::index` (Serialize + Deserialize derived together);
+  `super-tts-registry-types::index` (Serialize + Deserialize derived together);
   `license` is lenient on read and always written;
   `RegistryModel`/`RegistrySecret`/`RegistryOption`/`IndexStale` are aliases of the
   canonical leaves; the daemon's min-client soft-floor and unsafe-path filter stay
@@ -617,15 +617,15 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   conventions (tmp+rename, cancellation, sync_all). Extract
   `stream_to_file(http, url, cap, dest, on_chunk) -> sha256`.
 - **Resolved (`refactor/audit-batch-hardening`), all 5 sub-parts:**
-  a new `super-stt-registry-types::verify` hosts the shared download-verify
+  a new `super-tts-registry-types::verify` hosts the shared download-verify
   policy — `sha256_matches` (case-insensitive; fixed three case-sensitive `==`
   compares in `install.rs`), the tar entry-safety predicate, and the unpack
   budgets. The indexer now enforces those budgets **at publish**
   (`validate_subprocess_parts`), so a zip-bomb that would fail every install is
-  rejected up front (regression test added). A `super-stt-forge::http` factory
+  rejected up front (regression test added). A `super-tts-forge::http` factory
   (`short_client`/`download_client`, workspace UA) replaces the five ad-hoc
   builders and fixes the indexer's timeout-less `Client::new()`. A
-  `super-stt-registry-types::fs::write_atomic` (tmp + fsync + rename) replaces
+  `super-tts-registry-types::fs::write_atomic` (tmp + fsync + rename) replaces
   the daemon cache write and the indexer's two non-atomic `index.json` writers
   (which also disagreed on a trailing newline — now consistent). Finally,
   `download_stream::stream_body_to_writer` unifies the three chunk loops
@@ -648,7 +648,7 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   per-app topics/scopes/messages stay per-crate.
 - **Resolved (`refactor/audit-batch-hardening`):** the retry *policy* is unified across
   all three clients. `RetryStrategy` (exponential + ±10% jitter) now lives in
-  `super-stt-shared::daemon::retry`; the applet uses it directly (its local copy +
+  `super-tts-shared::daemon::retry`; the applet uses it directly (its local copy +
   test deleted), the shared widget-subscription reconnect loop drives it instead
   of the jitter-less `next_backoff` doubling (so the SSE reconnect jitters too),
   and the settings app reconnect drops its flat 5 s sleep for a
@@ -671,7 +671,7 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   "config invalid, reset to defaults" warning (`config.rs:173`) is silently
   dropped — init logging first.
 - **Resolved (branch `refactor/audit-tier2-6-7-8`):** added
-  `super_stt_shared::logging::{init, init_with}` (RUST_LOG wins, else the given
+  `super_tts_shared::logging::{init, init_with}` (RUST_LOG wins, else the given
   default). Wired the app, CLI (previously none), applet (was silent — now `Info`
   like its siblings), consent, and daemon; the daemon now inits logging **before**
   `DaemonConfig::load()`, so the config-invalid warning is captured. `env_logger`
@@ -685,13 +685,13 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   (`daemon/config.rs:154-163` vs `applet/config/settings.rs:67-76`); three
   incompatible `dirs`-miss fallbacks coexist (HOME-else-/tmp, `env::temp_dir()`,
   raw `XDG_RUNTIME_DIR`); the subprocess socket path
-  (`stt_models/subprocess/mod.rs:103-106`) rebuilds `$XDG_RUNTIME_DIR/stt/…` while
+  (`stt_models/subprocess/mod.rs:103-106`) rebuilds `$XDG_RUNTIME_DIR/tts/…` while
   bypassing the validated `secure_socket_path` helper
   (`shared/validation/paths.rs:29-61`).
 - **Fix:** one `shared::paths` module; route the subprocess socket through the
   validated helper.
 - **Resolved (branch `refactor/audit-tier2-6-7-8`):** added
-  `super_stt_shared::paths::{config_dir, data_dir, cache_dir}` (each keeping its
+  `super_tts_shared::paths::{config_dir, data_dir, cache_dir}` (each keeping its
   call sites' existing fallback, so no behavior change) and routed all five
   production dir sites through it — the daemon+applet `get_config_path`, the
   backends `data_dir`, and the registry-client/pipeline `cache_dir`. The private
@@ -723,7 +723,7 @@ Ranked by drift risk. These answer "what should be standardized or reused."
   (forge `rustls` promoted from dev-dep); the daemon re-exports it, the redundant
   `download.rs` call is gone, and the indexer's inline install is dropped (its unused
   `rustls` removed). `KNOWN_SCOPES`/`is_known_scope` moved to
-  `super_stt_shared::daemon::scopes`; the daemon re-exports, consent gained a
+  `super_tts_shared::daemon::scopes`; the daemon re-exports, consent gained a
   conformance test that every known scope has a specific description (no
   "deny is safe" fall-through). The CLI's `stop-mode` values come from the shared
   `RecordingStopMode::WIRE_VARIANTS` (added to `wire_enum_strings!`). The two SSE
@@ -910,7 +910,7 @@ Tier 2 #4/#6/#8.
   - Deleted the one-use `PipeExt` trait; the single `.pipe(Ok)` is now `Ok(..)`.
 - **Deferred (follow-up, Tier 3 #36):** the keyring sessions-blob → `kv_get`/`kv_set`
   unification and the `Result<_, String>` → typed-error conversion. The first changes
-  session-persistence behavior under `SUPER_STT_KEYRING_MOCK` (the sessions blob would
+  session-persistence behavior under `SUPER_TTS_KEYRING_MOCK` (the sessions blob would
   move from the keyring-crate mock to the process-global `mock_store`), which the
   `http_smoke_full` restart test exercises — wants its own verified change. The second
   is a type-system change rippling through every keyring/download-progress caller
@@ -1117,7 +1117,7 @@ Tier 2 #4/#6/#8.
 
 - **Where:** `models/registry.rs`; it also re-encodes registry-types'
   `Device`/`is_online` invariants stringly.
-- **Fix:** moved it to `super-stt-daemon/src/stt_models/model_definition.rs` (no
+- **Fix:** moved it to `super-tts-daemon/src/stt_models/model_definition.rs` (no
   wire/protocol type embeds it; zero client crates touched) *and* typed
   `supported_devices: Vec<Device>` — `is_online()` is now
   `contains(&Device::None)`, and `validate_supported_devices` returns `Vec<Device>`
@@ -1146,7 +1146,7 @@ Tier 2 #4/#6/#8.
   The padding-attack check now returns a new `SuspiciousAudioContent` variant
   instead of the misleading `AudioTooLarge`.
 
-### [x] 31. 🟡 Shared: `SUPER_STT_HTTP_SOCKET` is honored only by the daemon
+### [x] 31. 🟡 Shared: `SUPER_TTS_HTTP_SOCKET` is honored only by the daemon
 
 - **Where:** `daemon_main.rs:68-71` — no client reads it, so setting it strands
   every client.
@@ -1212,7 +1212,7 @@ Tier 2 #4/#6/#8.
   mock mechanism alongside the process-global `mock_store` that `kv_get`/`kv_set` use.
   Plus the stringly `Result<_, String>` across keyring and download-progress.
 - **Why split:** routing the sessions blob through `kv_get`/`kv_set` changes its
-  behavior under `SUPER_STT_KEYRING_MOCK` (persists in-process via `mock_store`
+  behavior under `SUPER_TTS_KEYRING_MOCK` (persists in-process via `mock_store`
   instead of the isolated-per-`Entry` keyring mock), which the `http_smoke_full`
   restart test exercises — a verified change, not a drive-by. Typed errors ripple
   through every keyring/download-progress caller (incl. the Tier 3 #4 async wrappers)
@@ -1221,7 +1221,7 @@ Tier 2 #4/#6/#8.
   `kv_get`/`kv_set` (one mock mechanism), `install_mock_if_requested` is deleted, and
   a `KeyringError` enum (Display-preserving) replaces the stringly `Result<_,String>`
   across keyring + its async wrappers. The real-keyring storage key is unchanged
-  (`("super-stt","stt-sessions")`) and no non-ignored test restarts the daemon, so no
+  (`("super-tts","stt-sessions")`) and no non-ignored test restarts the daemon, so no
   restart behavior changed. Download-progress's two single-message `Result<_,String>`
   are left as-is (not keyring errors; typing them is churn for no benefit).
 
@@ -1268,7 +1268,7 @@ Tier 2 #4/#6/#8.
 
 ## Strengths to preserve
 
-- `super-stt-registry-types`: canonical parser with safety guards, schema generated
+- `super-tts-registry-types`: canonical parser with safety guards, schema generated
   from the same types, strong tests — the model for every consolidation above.
 - The re-export + policy-layer pattern (`validate_runtime` / indexer `validate`).
 - App: `settings_getter!`/`settings_setter!` macros, `require_*` response helpers,

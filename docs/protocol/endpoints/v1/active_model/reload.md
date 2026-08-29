@@ -25,8 +25,8 @@ The active model state itself is read and written via
 
 ```http
 POST /active_model/reload HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 No request body.

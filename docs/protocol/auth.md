@@ -10,7 +10,7 @@ carries differs. For HTTP framing and SSE mechanics, see
 
 ## Why scopes
 
-Auth on Super STT is consent-based: the user approves an app once,
+Auth on Super TTS is consent-based: the user approves an app once,
 for a stated set of scopes, and that approval is bound to the binary
 the user just saw — not to the app name the client claimed. A client
 cannot widen its own permissions; it can only present a token that
@@ -56,11 +56,11 @@ requires `Authorization: Bearer <token>`.
 
 ```http
 POST /auth/request HTTP/1.1
-Host: stt.local
+Host: tts.local
 Content-Type: application/json
 
 {
-  "app_name": "Super STT Settings App",
+  "app_name": "Super TTS Settings App",
   "scopes":   ["settings", "status", "daemon_status"],
   "version":  "0.10.0"
 }
@@ -74,7 +74,7 @@ Content-Type: application/json
 
 {
   "status":        "success",
-  "session_token": "stt_…64hex…",
+  "session_token": "tts_…64hex…",
   "scopes":        ["settings", "status", "daemon_status"],
   "expires_at":    "2026-06-04T12:34:56Z"
 }
@@ -96,7 +96,7 @@ Content-Type: application/json
 | `data.reason`         | Meaning                                                                                          | What the client should do                                                                 |
 |-----------------------|--------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
 | `user_denied`         | The user clicked **Deny** in the consent popup.                                                  | Don't auto-retry. Offer an explicit "Retry authorization" affordance the user must click. |
-| `user_denied_cached`  | The user previously denied this scope set for this binary; the deny is sticky until the daemon restarts. | Same as `user_denied`. Hint that restarting the daemon (`systemctl --user restart super-stt`) clears the deny. |
+| `user_denied_cached`  | The user previously denied this scope set for this binary; the deny is sticky until the daemon restarts. | Same as `user_denied`. Hint that restarting the daemon (`systemctl --user restart super-tts`) clears the deny. |
 | `user_dismissed`      | The user closed the popup without choosing, or it timed out (60 s default).                      | Recoverable — re-prompt when the user takes an action that requires it.                   |
 | `popup_failed`        | The consent popup couldn't be shown (no display server, no Wayland session, etc.).               | Fall back to read-only mode if possible; surface a hint that a desktop session is needed. |
 | `invalid_scope`       | `scopes` was empty, missing, or contained a name that isn't a known scope.                       | Bug in the client. Fix the request.                                                       |
@@ -110,8 +110,8 @@ popup. Useful for headless / CLI clients that want to fail-fast.
 
 ```http
 GET /auth/status HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 Valid:
@@ -189,7 +189,7 @@ The popup the user sees displays:
   requested scope unlocks.
 
 The token returned on Allow is a 32-byte random hex string
-(`stt_…64hex…`). It carries no scope information by itself — the
+(`tts_…64hex…`). It carries no scope information by itself — the
 scope set is bound server-side at issue time and validated per
 request.
 
@@ -200,8 +200,8 @@ can read it and impersonate the app.
 
 ## First-party clients
 
-Super STT's own client binaries — `super-stt-app`, `super-stt-cli`,
-and `super-stt-cosmic-applet` — skip the consent popup. When one of
+Super TTS's own client binaries — `super-tts-app`, `super-tts-cli`,
+and `super-tts-cosmic-applet` — skip the consent popup. When one of
 them calls `POST /auth/request`, the daemon mints the session token
 immediately; the response is indistinguishable from a user-approved
 grant.

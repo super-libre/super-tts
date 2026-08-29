@@ -128,7 +128,7 @@ when a capture is already in progress.
 A failure is also surfaced to the user according to the
 [`/notification_method`](./notification_method.md) setting. With the default,
 `auto`, the daemon sends a desktop notification; typing a short fixed notice
-into the focused window — for example `[Super STT: no model loaded]` — happens
+into the focused window — for example `[Super TTS: no model loaded]` — happens
 only as a fallback when notification delivery fails, and only for a request
 that set `write_mode: true`. A typed notice is a fixed daemon-authored string
 and never carries error detail; a notification names the failure in its summary

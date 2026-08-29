@@ -1,11 +1,11 @@
-# Building on Super STT
+# Building on Super TTS
 
-Super STT is designed to be built on. The daemon exposes a documented
+Super TTS is designed to be built on. The daemon exposes a documented
 HTTP protocol over a local socket, and the models it runs are out-of-tree
 backends that anyone can author and publish. This directory is the
 protocol reference; this page is the entry point to it.
 
-There are two ways to build on Super STT:
+There are two ways to build on Super TTS:
 
 - **[Build a client](#build-a-client)** — any app, in any language, that
   wants transcriptions, event streams, or control over recording.
@@ -17,22 +17,22 @@ There are two ways to build on Super STT:
 ## Build a client
 
 A client talks to the daemon over an HTTP/1.1 + JSON API on a Unix domain
-socket (`$XDG_RUNTIME_DIR/stt/super-stt-http.sock`). No Rust required —
+socket (`$XDG_RUNTIME_DIR/tts/super-tts-http.sock`). No Rust required —
 `curl`, Python, Node, or anything with an HTTP client works.
 
 ```bash
 # 1. Ask for consent. The user approves your app once, for the scopes you
 #    request; the daemon returns a session token bound to your binary.
-curl --unix-socket "$XDG_RUNTIME_DIR/stt/super-stt-http.sock" \
-     -X POST http://stt.local/auth/request \
+curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
+     -X POST http://tts.local/auth/request \
      -H 'Content-Type: application/json' \
      -d '{"app_name":"My App","scopes":["transcribe","status"],"version":"0.1"}'
-# → { "session_token": "stt_…", "scopes": [...], "expires_at": "…" }
+# → { "session_token": "tts_…", "scopes": [...], "expires_at": "…" }
 
 # 2. Send the token on every subsequent request.
-curl --unix-socket "$XDG_RUNTIME_DIR/stt/super-stt-http.sock" \
-     -X POST http://stt.local/transcribe \
-     -H "Authorization: Bearer $STT_TOKEN" -d '{"wait":true}'
+curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
+     -X POST http://tts.local/transcribe \
+     -H "Authorization: Bearer $TTS_TOKEN" -d '{"wait":true}'
 ```
 
 What the protocol gives you:
@@ -71,7 +71,7 @@ one of two transports:
 | WASM component | Cloud / API providers, light CPU     | wasmtime sandbox; network egress allowlisted |
 | Native subprocess | Local, GPU-accelerated models     | Network-isolated; systemd + seccomp hardened |
 
-To make a model available in Super STT:
+To make a model available in Super TTS:
 
 1. **Build a backend** implementing the daemon↔backend contract —
    [backend/contract.md](./backend/contract.md), plus

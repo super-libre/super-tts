@@ -84,29 +84,29 @@ headers — external clients cannot set them.
 
 | Header                | Carries                                                  |
 |-----------------------|----------------------------------------------------------|
-| `x-stt-model`         | The active model name, e.g. `whisper-1`.                 |
-| `x-stt-secret-<name>` | One declared secret, e.g. `x-stt-secret-OPENAI_API_KEY`. |
-| `x-stt-option-<name>` | One declared option, e.g. `x-stt-option-base_url`.       |
+| `x-tts-model`         | The active model name, e.g. `whisper-1`.                 |
+| `x-tts-secret-<name>` | One declared secret, e.g. `x-tts-secret-OPENAI_API_KEY`. |
+| `x-tts-option-<name>` | One declared option, e.g. `x-tts-option-base_url`.       |
 
-- `x-stt-model` names the model to transcribe with. The daemon also calls
+- `x-tts-model` names the model to transcribe with. The daemon also calls
   [`POST /v1/load`](#post-v1load) with the model before routing, but a
   stateless backend (re-instantiated per request — see [wasm.md](./wasm.md))
-  reads `x-stt-model` on each request instead of remembering the load; a
+  reads `x-tts-model` on each request instead of remembering the load; a
   stateful backend may rely on `load` and ignore the header.
 - Secrets and options come from the backend's [configuration](./config.md),
   with values set by the user in the settings UI. The header for a secret or
   option the user has not set is omitted.
-- `x-stt-option-base_url` is the one option header the daemon normalizes. It
+- `x-tts-option-base_url` is the one option header the daemon normalizes. It
   carries a canonical `scheme://host[:port][/path]`: lowercase scheme, no
   userinfo, no trailing slash, no query or fragment, and a port only when the
   user set one. A backend can split it at the first `/` after the scheme and
   needs no further parsing. Every other option is passed through exactly as the
   user set it. See [config.md — `base_url` and egress](./config.md#base_url-and-egress).
 - **Secret values are sensitive.** The daemon stores them encrypted and
-  redacts the `x-stt-secret-*` headers from logs. A backend uses a secret only
+  redacts the `x-tts-secret-*` headers from logs. A backend uses a secret only
   to authenticate its own outbound calls — it must never echo one in a
   response or forward the injected header upstream. An OpenAI backend reads
-  `x-stt-secret-OPENAI_API_KEY` and sets its own `Authorization: Bearer`
+  `x-tts-secret-OPENAI_API_KEY` and sets its own `Authorization: Bearer`
   header on the request to `api.openai.com`.
 - Option values are not sensitive and are stored as plaintext.
 

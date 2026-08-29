@@ -9,7 +9,7 @@ model — the step that can fail that way — happens through
 [`POST /active_model`](./active_model.md).
 
 A backend is identified on the wire by its `source` (repo id, e.g.
-`github.com/super-stt/mistral`), as returned by [`GET /backends`](./backends.md).
+`github.com/super-tts/mistral`), as returned by [`GET /backends`](./backends.md).
 Internally the daemon persists the backend's install directory and re-reads its
 `backend.toml` for metadata, so the selection survives a reinstall.
 
@@ -29,8 +29,8 @@ chosen. At startup such a state comes up idle (no model is auto-loaded).
 
 ```http
 GET /active_backend HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
@@ -40,7 +40,7 @@ Authorization: Bearer stt_…64hex…
   "status": "success",
   // null when no backend is selected (daemon idle).
   "active_backend": {
-    "source":       "github.com/super-stt/mistral",
+    "source":       "github.com/super-tts/mistral",
     "name":         "Mistral",
     "model_loaded": false   // whether a model from this backend is loaded
   }
@@ -70,12 +70,12 @@ only if the backend's installed files are missing or invalid.
 
 ```http
 POST /active_backend HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
-  "source": "github.com/super-stt/mistral"
+  "source": "github.com/super-tts/mistral"
 }
 ```
 
@@ -91,7 +91,7 @@ Content-Type: application/json
 
 {
   "status":         "success",
-  "active_backend": { "source": "github.com/super-stt/mistral", "name": "Mistral", "model_loaded": false }
+  "active_backend": { "source": "github.com/super-tts/mistral", "name": "Mistral", "model_loaded": false }
 }
 ```
 
@@ -113,8 +113,8 @@ idle.
 
 ```http
 DELETE /active_backend HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**

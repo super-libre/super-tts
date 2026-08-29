@@ -6741,7 +6741,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "super-stt-app"
+name = "super-tts-app"
 version = "0.2.3"
 dependencies = [
  "anyhow",
@@ -6762,9 +6762,9 @@ dependencies = [
  "slotmap",
  "strum",
  "strum_macros",
- "super-stt-forge",
- "super-stt-registry-types",
- "super-stt-shared",
+ "super-tts-forge",
+ "super-tts-registry-types",
+ "super-tts-shared",
  "tokio",
  "toml 1.1.0+spec-1.1.0",
  "urlencoding",
@@ -6773,27 +6773,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "super-stt-cli"
+name = "super-tts-cli"
 version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
- "super-stt-shared",
+ "super-tts-shared",
  "tokio",
 ]
 
 [[package]]
-name = "super-stt-consent"
+name = "super-tts-consent"
 version = "0.2.3"
 dependencies = [
  "libc",
  "libcosmic",
  "log",
- "super-stt-shared",
+ "super-tts-shared",
 ]
 
 [[package]]
-name = "super-stt-cosmic-applet"
+name = "super-tts-cosmic-applet"
 version = "0.2.3"
 dependencies = [
  "base64",
@@ -6804,13 +6804,13 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "super-stt-shared",
+ "super-tts-shared",
  "tokio",
  "toml 1.1.0+spec-1.1.0",
 ]
 
 [[package]]
-name = "super-stt-daemon"
+name = "super-tts-daemon"
 version = "0.2.3"
 dependencies = [
  "anyhow",
@@ -6848,9 +6848,9 @@ dependencies = [
  "serde_json",
  "strum",
  "strum_macros",
- "super-stt-forge",
- "super-stt-registry-types",
- "super-stt-shared",
+ "super-tts-forge",
+ "super-tts-registry-types",
+ "super-tts-shared",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -6870,7 +6870,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "super-stt-forge"
+name = "super-tts-forge"
 version = "0.2.3"
 dependencies = [
  "async-trait",
@@ -6879,13 +6879,13 @@ dependencies = [
  "reqwest",
  "rustls",
  "serde",
- "super-stt-registry-types",
+ "super-tts-registry-types",
  "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
-name = "super-stt-indexer"
+name = "super-tts-indexer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
@@ -6902,8 +6902,8 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "super-stt-forge",
- "super-stt-registry-types",
+ "super-tts-forge",
+ "super-tts-registry-types",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -6913,7 +6913,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "super-stt-install"
+name = "super-tts-install"
 version = "0.2.3"
 dependencies = [
  "anyhow",
@@ -6928,15 +6928,15 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "super-stt-forge",
- "super-stt-registry-types",
+ "super-tts-forge",
+ "super-tts-registry-types",
  "tar",
  "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
-name = "super-stt-registry-types"
+name = "super-tts-registry-types"
 version = "0.2.3"
 dependencies = [
  "hex",
@@ -6952,7 +6952,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "super-stt-shared"
+name = "super-tts-shared"
 version = "0.2.3"
 dependencies = [
  "anyhow",
@@ -6972,7 +6972,7 @@ dependencies = [
  "spectrum-analyzer",
  "strum",
  "strum_macros",
- "super-stt-registry-types",
+ "super-tts-registry-types",
  "thiserror 2.0.18",
  "tokio",
  "uuid",

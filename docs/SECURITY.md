@@ -1,12 +1,12 @@
-# Super STT Security Model
+# Super TTS Security Model
 
 ## Overview
 
-Super STT implements a comprehensive defense-in-depth security model to protect against unauthorized access while maintaining usability. The system uses multiple security layers including Unix domain sockets with group-based access control, process authentication for keyboard access, and input validation throughout.
+Super TTS implements a comprehensive defense-in-depth security model to protect against unauthorized access while maintaining usability. The system uses multiple security layers including Unix domain sockets with group-based access control, process authentication for keyboard access, and input validation throughout.
 
 ## Security Architecture Summary
 
-Based on comprehensive security reviews completed in August 2025, Super STT demonstrates **excellent security posture** with:
+Based on comprehensive security reviews completed in August 2025, Super TTS demonstrates **excellent security posture** with:
 
 - ✅ **Process Authentication**: Robust authentication for keyboard injection operations
 - ✅ **Input Validation**: Comprehensive framework with DoS protection and attack detection
@@ -21,8 +21,8 @@ Based on comprehensive security reviews completed in August 2025, Super STT demo
 ## Socket Access Control
 
 The daemon listens on a Unix domain socket at
-`$XDG_RUNTIME_DIR/stt/super-stt-http.sock`. Access is restricted to the user
-running the daemon — there is **no** shared `stt` group and no group membership
+`$XDG_RUNTIME_DIR/tts/super-tts-http.sock`. Access is restricted to the user
+running the daemon — there is **no** shared `tts` group and no group membership
 to configure. Two independent layers enforce this:
 
 1. **Per-user runtime directory.** `$XDG_RUNTIME_DIR` (typically
@@ -50,8 +50,8 @@ bound to the client's executable path. See
 
 ### Verification
 ```bash
-ls -la "$XDG_RUNTIME_DIR/stt/super-stt-http.sock"
-# srw-rw---- ... <you> <your-primary-group> ... super-stt-http.sock
+ls -la "$XDG_RUNTIME_DIR/tts/super-tts-http.sock"
+# srw-rw---- ... <you> <your-primary-group> ... super-tts-http.sock
 ```
 
 ## Security Features
@@ -59,18 +59,18 @@ ls -la "$XDG_RUNTIME_DIR/stt/super-stt-http.sock"
 ### 1. Keyboard Input Protection
 - **Consent-gated authorization**: Auto-typing is the per-request `write_mode` flag on `POST /transcribe` (or the daemon's configured write mode). Reaching that endpoint at all requires a consent-minted session token with the `transcribe` scope — so a client can only type after the user approved it through the one-time consent prompt. There is no separate keyboard/write scope; it is the same `transcribe` scope dictation uses. See [Authorization](#authorization) and [`protocol/auth.md`](protocol/auth.md)
 - **Peer identity for the prompt**: `SO_PEERCRED` + `/proc/<pid>/exe` tell the consent prompt *which binary* is asking and reject cross-UID peers; this identifies the caller, it is not by itself the authorization
-- **Debug-only test bypass**: The consent auto-approval used by tests/CI (`SUPER_STT_AUTO_APPROVE`) is compiled out of release builds
+- **Debug-only test bypass**: The consent auto-approval used by tests/CI (`SUPER_TTS_AUTO_APPROVE`) is compiled out of release builds
 - **Output sanitization**: Backend transcription output is untrusted, so before it is typed the daemon strips non-whitespace control codes (ESC/BEL/NUL/backspace), Unicode bidi overrides, and zero-width characters — a terminal escape sequence or a bidi spoof in a transcript can't reach the focused window
 - **Limited scope**: Only types actual transcription results
 
 ### 2. Network Isolation
-- **No inbound network surface**: The daemon listens only on a per-user Unix domain socket under `$XDG_RUNTIME_DIR/stt/` — there is no TCP or UDP listener, so no host on the network can connect to it
+- **No inbound network surface**: The daemon listens only on a per-user Unix domain socket under `$XDG_RUNTIME_DIR/tts/` — there is no TCP or UDP listener, so no host on the network can connect to it
 - **Local visualization**: Audio-visualization frames are delivered as Server-Sent Events over that same Unix socket, not broadcast on the network
 - **Outbound only for backend installs**: The daemon reaches the network solely to fetch backends over HTTPS from the registry / GitHub — see [Daemon outbound network surface](#daemon-outbound-network-surface) below
 
 ### 3. Consent &amp; Peer Identity
 - **Session tokens + scopes**: Every request other than `/auth/request` requires a `Bearer` session token; each token carries the user-approved scopes that gate what it may do (`transcribe`, `settings`, `secrets`, `status`, and the event-topic scopes — see [`protocol/auth.md`](protocol/auth.md) for the full catalog)
-- **One-time consent**: Tokens are minted by the `super-stt-consent` helper — a popup naming the requesting binary (resolved via `SO_PEERCRED`) and the scopes it asks for, which the user approves or denies
+- **One-time consent**: Tokens are minted by the `super-tts-consent` helper — a popup naming the requesting binary (resolved via `SO_PEERCRED`) and the scopes it asks for, which the user approves or denies
 - **Same-UID only**: A peer whose UID differs from the daemon's is rejected before any prompt
 - See [`protocol/auth.md`](protocol/auth.md) for the full token, scope, and consent contract
 
@@ -133,16 +133,16 @@ just install-daemon
 The daemon is strictly per-user: its socket lives in the owner's
 `$XDG_RUNTIME_DIR` and every request is rejected unless the peer's UID matches
 the daemon's. Each user runs their own daemon instance — there is no shared
-access to configure and no `stt` group.
+access to configure and no `tts` group.
 
 ### For Development
 Debug builds automatically use relaxed security for development convenience:
 ```bash
 # Debug build - automatically skips process authentication
-cargo run --bin super-stt-daemon
+cargo run --bin super-tts-daemon
 
 # Release build - enforces full security model
-cargo run --release --bin super-stt-daemon
+cargo run --release --bin super-tts-daemon
 ```
 
 ## Threat Model
@@ -173,21 +173,21 @@ cargo run --release --bin super-stt-daemon
 ### Suspicious Activity
 Check daemon logs for unauthorized access attempts:
 ```bash
-journalctl --user -u super-stt -f
+journalctl --user -u super-tts -f
 ```
 
 ### Revoke Access
 Authorization is per-client consent tokens, not group membership. Forget the
 cached token (forcing the client to re-request consent on its next call) with:
 ```bash
-stt logout
+tts logout
 ```
 Or stop the daemon (below) to drop all in-memory sessions.
 
 ### Emergency Shutdown
 ```bash
-systemctl --user stop super-stt
-systemctl --user disable super-stt
+systemctl --user stop super-tts
+systemctl --user disable super-tts
 ```
 
 ## Security Testing and Verification
@@ -236,12 +236,12 @@ cargo audit
 ### Recommended Systemd Hardening
 ```ini
 [Unit]
-Description=Super STT Speech-to-Text Daemon
+Description=Super TTS Speech-to-Text Daemon
 After=sound.target
 
 [Service]
 Type=simple
-ExecStart=super-stt-daemon
+ExecStart=super-tts-daemon
 Restart=on-failure
 RestartSec=5
 

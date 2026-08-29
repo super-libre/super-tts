@@ -18,7 +18,7 @@ Three body shapes — provide exactly one.
 
 **Registry install:**
 ```json
-{ "source": "github.com/jorge-menjivar/super-stt" }
+{ "source": "github.com/jorge-menjivar/super-tts" }
 ```
 
 The daemon looks up the entry whose `source` matches and installs its
@@ -105,7 +105,7 @@ same backend is unaffected, as is replacing an install whose `backend.toml`
 no longer parses.
 
 **Integrity & limits.** Operator base-URL overrides (`GITHUB_API_BASE`,
-`SUPER_STT_REGISTRY_URL`) must be `https://` (loopback `http://` is allowed for
+`SUPER_TTS_REGISTRY_URL`) must be `https://` (loopback `http://` is allowed for
 testing); insecure values are ignored and the secure default is used. Downloads
 are capped at the index-declared asset size plus a small margin (or an absolute
 ceiling when no size is declared), and tarball extraction enforces per-file and
@@ -117,7 +117,7 @@ archive that decompresses beyond the budget, fails the install.
 ```json
 {
   "install_id": "ins_01HE5…",
-  "source": "github.com/jorge-menjivar/super-stt",
+  "source": "github.com/jorge-menjivar/super-tts",
   "version": "0.2.0",
   "selected_asset": {
     "target": "x86_64-unknown-linux-gnu",

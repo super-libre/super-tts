@@ -19,8 +19,8 @@ on:
       - install.sh
       - uninstall.sh
       - scripts/**
-      - super-stt-install/**
-      - super-stt-forge/**
+      - super-tts-install/**
+      - super-tts-forge/**
       - .github/workflows/install-e2e.yml
   push:
     branches: [main]
@@ -28,8 +28,8 @@ on:
       - install.sh
       - uninstall.sh
       - scripts/**
-      - super-stt-install/**
-      - super-stt-forge/**
+      - super-tts-install/**
+      - super-tts-forge/**
       - .github/workflows/install-e2e.yml
   workflow_dispatch:
 
@@ -70,20 +70,20 @@ jobs:
 
       # Only the installer is built — the release tarball it installs is the
       # published one. Unlike every other job here, this needs no apt step:
-      # super-stt-install's dependency tree is reqwest/tokio/clap/tar, with
+      # super-tts-install's dependency tree is reqwest/tokio/clap/tar, with
       # none of the Wayland/xkbcommon/alsa/dbus libraries the GUI crates pull.
       - name: Build the installer
-        run: cargo build -p super-stt-install
+        run: cargo build -p super-tts-install
 
       # curl, jq, tar, sudo, and `script` (the pty wrapper the harness needs to
       # put the installer on its sudo escalation path) all ship on the runner.
       - name: Install, verify, uninstall (${{ matrix.channel }})
         env:
-          SUPER_STT_INSTALL_E2E_YES: "1"
-          SUPER_STT_INSTALLER_BIN: ${{ github.workspace }}/target/debug/super-stt-install
+          SUPER_TTS_INSTALL_E2E_YES: "1"
+          SUPER_TTS_INSTALLER_BIN: ${{ github.workspace }}/target/debug/super-tts-install
           # api.github.com allows 60 unauthenticated requests/hour per source
           # IP and runners share addresses. The token lifts that for all three
           # readers of it: the harness's own release resolution, install.sh,
-          # and the installer itself (super_stt_forge::Github::from_env).
+          # and the installer itself (super_tts_forge::Github::from_env).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/test-install-e2e.sh ${{ matrix.channel }}

@@ -42,7 +42,7 @@ Five clusters account for most of the findings:
 
 1. **The `just install*` path is broken and has diverged from the shell installers.**
    The generated `stt` wrapper execs the daemon binary (which has no `record`
-   subcommand), so the flagship `Super+Space → stt record --write` shortcut fails; the
+   subcommand), so the flagship `Super+Space → tts record --write` shortcut fails; the
    `install-app` desktop-file path points at a file that was renamed away; the
    `--model` sed targets a `--socket` flag that doesn't exist; and the `stt`-group
    provisioning grants nothing. The `scripts/install-*.sh` beta path does most of this
@@ -53,7 +53,7 @@ Five clusters account for most of the findings:
    the daemon uses neither (it's session-token + scope + consent, same-uid only). The
    README documents a `--write-method` flag and `--stop-mode manual` value that clap
    rejects, and an "Online Models" sidebar page that no longer exists. Operational
-   commands name a `super-stt` binary and `--socket` flag that don't exist. **(Tier 2
+   commands name a `super-tts` binary and `--socket` flag that don't exist. **(Tier 2
    #1–6)**
 
 3. **The prior audit's error-code / wire-contract unification is incomplete.** `error_code`
@@ -82,25 +82,25 @@ Five clusters account for most of the findings:
 
 ## Tier 1 — defects worth fixing
 
-### [x] 1. 🔴 Install: `just install` builds a `stt` wrapper that execs the daemon, so `stt record --write` fails
+### [x] 1. 🔴 Install: `just install` builds a `stt` wrapper that execs the daemon, so `tts record --write` fails
 
 - **Where:** `justfile:503` writes the wrapper as `exec {{ daemon_dst }} "$@"`
-  (→ `super-stt-daemon`); the recipe installs a COSMIC shortcut spawning
-  `stt record --write` (`justfile:517`).
-- **Problem:** the daemon's clap surface (`super-stt-daemon/src/cli.rs`) defines no
-  `record` subcommand — its own help text says *"Use `super-stt-cli` (or the `stt`
-  wrapper) to drive recordings."* `record` lives in `super-stt-cli`
+  (→ `super-tts-daemon`); the recipe installs a COSMIC shortcut spawning
+  `tts record --write` (`justfile:517`).
+- **Problem:** the daemon's clap surface (`super-tts-daemon/src/cli.rs`) defines no
+  `record` subcommand — its own help text says *"Use `super-tts-cli` (or the `stt`
+  wrapper) to drive recordings."* `record` lives in `super-tts-cli`
   (`src/main.rs:53,104`), which *is* installed but the wrapper never points at it.
   (The wrapper comment at `justfile:500` also mislabels it as invoking the daemon
   "directly", compounding the confusion.)
 - **Impact:** every `just install` / `just install-daemon` user gets a broken Super+Space
   shortcut and a broken `stt` command — the primary record-and-type workflow fails with a
   clap "unexpected argument 'record'" error. `scripts/install-beta.sh:251` does this
-  correctly (`exec super-stt-cli`), so the two install paths diverge.
+  correctly (`exec super-tts-cli`), so the two install paths diverge.
 - **Fix:** change `justfile:503` to `exec {{ cli_dst }} "$@"` and have `install-daemon`
   run `install-cli`.
 - **Resolved (branch `refactor/audit2-cleanup`):** the wrapper now execs `{{ cli_dst }}`
-  (`super-stt-cli`, which owns the `record` subcommand) and its comment says so;
+  (`super-tts-cli`, which owns the `record` subcommand) and its comment says so;
   `install-daemon` now runs `install-cli` before writing the wrapper (mirroring the
   bundled consent-helper step), so the target binary always exists. Dropped the
   now-redundant `install-cli` call from the top-level `install` recipe.
@@ -109,7 +109,7 @@ Five clusters account for most of the findings:
 
 - **Where:** the handler builds its command via `build_request("record", data)`, and
   `build_request` hard-codes `audio_data: None`, `sample_rate: None`, `language: None`
-  (`super-stt-daemon/src/daemon/http/internal/helpers/dispatch.rs:14-23`), stuffing the
+  (`super-tts-daemon/src/daemon/http/internal/helpers/dispatch.rs:14-23`), stuffing the
   whole body into `.data`.
 - **Problem:** `transcribe.md` (12-17, 33-43) and `transport.md` (46-70) document
   top-level `audio_data`/`sample_rate` (pre-captured one-shot) and a per-request
@@ -222,13 +222,13 @@ Five clusters account for most of the findings:
   so a locked keyring can't hang shutdown. Combined with #4's submit-under-lock ordering, a
   token minted or revoked in the final moments is now durably written.
 
-### [x] 6. 🟠 Daemon: runtime env bypasses (`SUPER_STT_AUTO_APPROVE`, `SUPER_STT_KEYRING_MOCK`) are honored in release builds *(security)*
+### [x] 6. 🟠 Daemon: runtime env bypasses (`SUPER_TTS_AUTO_APPROVE`, `SUPER_TTS_KEYRING_MOCK`) are honored in release builds *(security)*
 
 - **Where:** `auth_request` reads `AUTO_APPROVE_ENV` with a plain runtime
   `std::env::var(...)` (`http/v1/auth/request.rs:154`) and, when set, skips
   `ask_user_for_consent` and mints a full-scope token with no popup.
   `keyring::mock_store()` activates a process-global in-memory secret/session store
-  whenever `SUPER_STT_KEYRING_MOCK` is merely present (`keyring.rs:81`, `var_os().is_some()`).
+  whenever `SUPER_TTS_KEYRING_MOCK` is merely present (`keyring.rs:81`, `var_os().is_some()`).
 - **Problem:** neither is gated. The first audit's #30 explicitly compiled the analogous
   consent-timer bypass out of release via `#[cfg(debug_assertions)]` (+ a
   `#[cfg(not(...))]` no-op stub, `consent/main.rs:321,347`); these two sibling bypasses in
@@ -240,8 +240,8 @@ Five clusters account for most of the findings:
   did), or behind a dedicated `test-hooks` cargo feature the integration tests enable.
 - **Resolved (branch `refactor/audit2-tier1-3-9`):** both bypasses are now behind
   `#[cfg(debug_assertions)]` with `#[cfg(not(debug_assertions))]` no-op stubs (mirroring
-  #30) — `SUPER_STT_AUTO_APPROVE` via a gated `auto_approve` binding in `auth_request`, and
-  `SUPER_STT_KEYRING_MOCK` via a gated `keyring_mock_env_set()` helper feeding `mock_store()`.
+  #30) — `SUPER_TTS_AUTO_APPROVE` via a gated `auto_approve` binding in `auth_request`, and
+  `SUPER_TTS_KEYRING_MOCK` via a gated `keyring_mock_env_set()` helper feeding `mock_store()`.
   A release binary ignores both env vars entirely; `cargo test` builds the daemon in the dev
   profile (debug_assertions on), so the integration tests that rely on them are unaffected.
 
@@ -313,16 +313,16 @@ Five clusters account for most of the findings:
 ### [x] 10. 🟠 Install: `just install-daemon --model X` silently drops the model (sed targets a nonexistent `--socket` flag)
 
 - **Where:** `justfile:485` runs
-  `sed -i "s|--socket %t/stt/super-stt.sock|… --model $model|"` on the installed unit.
-- **Problem:** the packaged unit's ExecStart is `…/super-stt-daemon` with **no** `--socket`
-  argument (`systemd/super-stt.service`), so the substitution matches nothing; the daemon
-  also accepts no `--socket` flag (`cli.rs`) and the real socket is `super-stt-http.sock`.
+  `sed -i "s|--socket %t/stt/super-tts.sock|… --model $model|"` on the installed unit.
+- **Problem:** the packaged unit's ExecStart is `…/super-tts-daemon` with **no** `--socket`
+  argument (`systemd/super-tts.service`), so the substitution matches nothing; the daemon
+  also accepts no `--socket` flag (`cli.rs`) and the real socket is `super-tts-http.sock`.
 - **Impact:** `just install-daemon --model whisper-large` installs a unit that ignores the
   requested model; the daemon starts with the saved/default preference, no error.
-- **Fix:** append `--model $model` to the actual `super-stt-daemon` ExecStart line
+- **Fix:** append `--model $model` to the actual `super-tts-daemon` ExecStart line
   (the daemon reads `-m/--model`); drop the obsolete `--socket` text.
 - **Resolved (branch `refactor/audit2-cleanup`):** the sed now targets the real
-  `ExecStart=%h/.local/bin/super-stt-daemon` line and appends `--model $model` (verified
+  `ExecStart=%h/.local/bin/super-tts-daemon` line and appends `--model $model` (verified
   against the packaged unit); the obsolete `--socket` pattern is gone.
 
 ---
@@ -337,7 +337,7 @@ Five clusters account for most of the findings:
 - **Problem:** the real model (`docs/protocol/auth.md`, `daemon/http/v1/mod.rs` middleware)
   is per-request Bearer session tokens carrying user-approved scopes, minted via a one-time
   consent popup bound to `/proc/<pid>/exe`. `SECURITY.md` never mentions tokens, scopes,
-  the consent flow, or `super-stt-consent`. It also asserts "No remote access: Network
+  the consent flow, or `super-tts-consent`. It also asserts "No remote access: Network
   connections impossible" (`:67`) while its own later section documents outbound HTTPS to
   the registry/GitHub (`:98-121`).
 - **Impact:** the one security doc a reviewer/deployer consults describes an authorization
@@ -349,7 +349,7 @@ Five clusters account for most of the findings:
   sections (Keyboard Input Protection, Network Isolation, the former "Process Authentication"
   → "Consent & Peer Identity", Process Isolation) and the Threat Model / testing bullets to
   the real model: consent-minted per-request session tokens carrying user-approved scopes
-  (via `super-stt-consent`), with `SO_PEERCRED`/`/proc/<pid>/exe` in their true role
+  (via `super-tts-consent`), with `SO_PEERCRED`/`/proc/<pid>/exe` in their true role
   (identify the caller for the prompt + reject cross-UID peers), cross-referencing
   `protocol/auth.md`. Replaced the self-contradicting "No remote access / Network connections
   impossible" with "no inbound listener — Unix-socket only", reconciled against the documented
@@ -362,11 +362,11 @@ Five clusters account for most of the findings:
   ("Group-Based Access Control"), `README:244`.
 - **Problem:** the daemon binds the socket 0o660 owned by the process's **primary** group
   and never chgrps it to `stt` nor checks membership (`http/server.rs:88-93`); the listener
-  lives under a per-user 0700 `$XDG_RUNTIME_DIR/stt/` dir and enforces same-uid only
+  lives under a per-user 0700 `$XDG_RUNTIME_DIR/tts/` dir and enforces same-uid only
   (`request.rs:58-72`). `just install-app`→`install-daemon` still invokes
   `setup-stt-group.sh` (`justfile:446-449`) despite the same recipe's comment saying the
-  group is no longer required. (`SECURITY.md:53` also names the socket `super-stt.sock` vs
-  the real `super-stt-http.sock`.)
+  group is no longer required. (`SECURITY.md:53` also names the socket `super-tts.sock` vs
+  the real `super-tts-http.sock`.)
 - **Impact:** users are prompted for sudo to create a group that grants nothing, and told
   unauthorized local users are blocked by a mechanism that isn't implemented — a misleading
   security claim.
@@ -377,41 +377,41 @@ Five clusters account for most of the findings:
   removed the `install-daemon` invocation. Rewrote `SECURITY.md`'s socket/group sections
   (Socket Access Control, Best Practices, Threat Model, Incident Response, Process Isolation,
   Deployment Checklist) to the real per-user model — owner-only `$XDG_RUNTIME_DIR`, same-UID
-  peer check, consent-token authorization, correct `super-stt-http.sock` name — and updated
+  peer check, consent-token authorization, correct `super-tts-http.sock` name — and updated
   the README troubleshooting note. **Scoped out deliberately:** `install-stable.sh`'s own
   inline `setup_stt_group` is left intact — that script installs the *legacy* single
-  `super-stt` binary whose `sg stt -c` wrapper genuinely needs the group; touching it would
+  `super-tts` binary whose `sg stt -c` wrapper genuinely needs the group; touching it would
   break legacy installs. The broader SO_PEERCRED auth-model rewrite (Tier 2 #1) and the
-  `super-stt --socket` systemd example (Tier 2 #3) are separate findings, untouched here.
+  `super-tts --socket` systemd example (Tier 2 #3) are separate findings, untouched here.
 
-### [x] 3. 🟠 Docs: `SECURITY.md` operational commands reference a nonexistent `super-stt` binary, `--socket` flag, and wrong socket filename
+### [x] 3. 🟠 Docs: `SECURITY.md` operational commands reference a nonexistent `super-tts` binary, `--socket` flag, and wrong socket filename
 
-- **Where:** `docs/SECURITY.md:239` (`ExecStart=%h/.local/bin/super-stt --socket
-  %t/stt/super-stt.sock`), `:140,143` (`cargo run --bin super-stt`), `:53` (socket path).
-- **Problem:** the daemon binary is `super-stt-daemon`; `super-stt` is the removed legacy
+- **Where:** `docs/SECURITY.md:239` (`ExecStart=%h/.local/bin/super-tts --socket
+  %t/stt/super-tts.sock`), `:140,143` (`cargo run --bin super-tts`), `:53` (socket path).
+- **Problem:** the daemon binary is `super-tts-daemon`; `super-tts` is the removed legacy
   binary. The clap surface defines only `--model/--device/--verbose/--audio-theme` — no
-  `--socket` (path comes from `get_http_socket_path`/`SUPER_STT_HTTP_SOCKET`). The socket is
-  `super-stt-http.sock` under `$XDG_RUNTIME_DIR/stt/` (`validation/paths.rs:60`).
+  `--socket` (path comes from `get_http_socket_path`/`SUPER_TTS_HTTP_SOCKET`). The socket is
+  `super-tts-http.sock` under `$XDG_RUNTIME_DIR/tts/` (`validation/paths.rs:60`).
 - **Impact:** a user applying the "Recommended Systemd Hardening" unit gets a service that
   fails to start; the socket-verification command inspects a path that never exists.
-- **Fix:** `super-stt` → `super-stt-daemon`, drop `--socket` (or document
-  `SUPER_STT_HTTP_SOCKET`), fix the socket path.
+- **Fix:** `super-tts` → `super-tts-daemon`, drop `--socket` (or document
+  `SUPER_TTS_HTTP_SOCKET`), fix the socket path.
 - **Resolved (branch `refactor/audit2-cleanup`):** the systemd `ExecStart` is now
-  `%h/.local/bin/super-stt-daemon` (no `--socket`, matching the packaged unit), and both
-  `cargo run --bin super-stt` dev lines are `super-stt-daemon`. The `:53` socket-verification
-  path was already corrected to `super-stt-http.sock` in the Tier 2 #2 rewrite. Also fixed the
-  same wrong-socket-name (`super-stt.sock`) in `AGENTS.md`. The `systemctl`/`journalctl -u
-  super-stt` commands are left as-is — `super-stt` is the correct *unit* name (`service_name`),
-  distinct from the `super-stt-daemon` binary. **Out of scope (flagged, not a #3 item):** the
+  `%h/.local/bin/super-tts-daemon` (no `--socket`, matching the packaged unit), and both
+  `cargo run --bin super-tts` dev lines are `super-tts-daemon`. The `:53` socket-verification
+  path was already corrected to `super-tts-http.sock` in the Tier 2 #2 rewrite. Also fixed the
+  same wrong-socket-name (`super-tts.sock`) in `AGENTS.md`. The `systemctl`/`journalctl -u
+  super-tts` commands are left as-is — `super-tts` is the correct *unit* name (`service_name`),
+  distinct from the `super-tts-daemon` binary. **Out of scope (flagged, not a #3 item):** the
   "Recommended Systemd Hardening" block still lists `ProtectHome=true`/`ProtectSystem=strict`,
   which are incompatible with a `--user` service whose binary lives in `~/.local/bin` and whose
   socket lives in `/run/user/<uid>`; making that block actually startable is a separate fix.
 
 ### [x] 4. 🟠 Docs/CLI: README advertises a `--write-method` flag and `--stop-mode manual` value the CLI rejects
 
-- **Where:** `README.md:83` (`stt record --write --stop-mode manual --write-method
+- **Where:** `README.md:83` (`tts record --write --stop-mode manual --write-method
   ydotool`), `:61,80-84`.
-- **Problem:** the `record` subcommand (`super-stt-cli/src/main.rs:52-79`) defines only
+- **Problem:** the `record` subcommand (`super-tts-cli/src/main.rs:52-79`) defines only
   `--write`, `--wait`, `--stop-mode`; there is no `--write-method` (and `TranscribeOptions`
   carries no write-method, so it can't be set per-request by any client). `--stop-mode`
   values come from `RecordingStopMode::WIRE_VARIANTS`
@@ -422,7 +422,7 @@ Five clusters account for most of the findings:
 - **Fix:** `--stop-mode manual` → `manual_only`, delete `--write-method ydotool`, and state
   that write method is app/config-only (not a per-recording CLI flag) — or add it to
   `TranscribeOptions` + clap if per-recording override is intended.
-- **Resolved (branch `refactor/audit2-tier2`):** the README example is now `stt record --write
+- **Resolved (branch `refactor/audit2-tier2`):** the README example is now `tts record --write
   --stop-mode manual_only`; the `--write-method ydotool` flag is dropped and the surrounding
   prose states the write method is set in the app or daemon config, not per-recording.
 
@@ -546,7 +546,7 @@ Five clusters account for most of the findings:
 
 ### [x] 10. 🟠 Duplication: `MAX_MANIFEST_BYTES` is triplicated across the indexer, install, and custom-repo paths
 
-- **Where:** `super-stt-indexer/src/assets.rs:22` (`u64`, enforced at publish),
+- **Where:** `super-tts-indexer/src/assets.rs:22` (`u64`, enforced at publish),
   `registry/install.rs:26` (`u64`, at install-time manifest download),
   `registry/custom_repo.rs:22` (`usize`, at custom-repo resolve) — all 256 KiB, hand-synced,
   gating the same `backend.toml` at different lifecycle points.
@@ -597,9 +597,9 @@ Five clusters account for most of the findings:
 
 ### [x] 13. 🟠 Tests/CI: subprocess transport orchestration is never compiled or run anywhere in CI
 
-- **Where:** `super-stt-daemon/tests/subprocess_mock.rs` is gated by
+- **Where:** `super-tts-daemon/tests/subprocess_mock.rs` is gated by
   `#![cfg(all(feature="subprocess-backends", feature="test-fixtures"))]` **and** an
-  `SUPER_STT_TEST_SUBPROCESS=1` env early-return (`:44-46`).
+  `SUPER_TTS_TEST_SUBPROCESS=1` env early-return (`:44-46`).
 - **Problem:** `test-fixtures` is not a default feature, so `cargo test`/CI compiles the file
   to an empty crate; `just check` runs clippy without `--all-targets`, so it never builds the
   integration-test target either. The env gate keeps it from running even if it did.
@@ -614,7 +614,7 @@ Five clusters account for most of the findings:
   the GitHub CI Clippy job) now compiles the subprocess mock + its `mock_backend` fixture with
   `cargo test --features test-fixtures --no-run --test subprocess_mock` under `-D warnings`, so
   a `SubprocessBackend` refactor can no longer bit-rot undetected. A comment records that
-  *running* it is still systemd-gated (`SUPER_STT_TEST_SUBPROCESS=1`), which hosted runners
+  *running* it is still systemd-gated (`SUPER_TTS_TEST_SUBPROCESS=1`), which hosted runners
   lack — so it can't run hermetically like the WASM mock.
 
 ---
@@ -811,7 +811,7 @@ Five clusters account for most of the findings:
 - **Where:** `view_window` builds the body as `"{request_label} wants access…"` straight from
   the untrusted `STT_AUTH_APP_NAME` (`consent/main.rs:142-147`); the trusted `exe_path` is a
   plain `Executable: {path}` line (`:157`) with no visual weight.
-- **Impact:** a same-uid binary sets `STT_AUTH_APP_NAME` to "Super STT Settings" and the prompt
+- **Impact:** a same-uid binary sets `STT_AUTH_APP_NAME` to "Super TTS Settings" and the prompt
   reads as first-party; users decide on the spoofable headline, not the raw exe path.
 - **Fix:** lead with the verified binary basename and label `app_name` as claimed/unverified,
   or visually subordinate it to the exe path.
@@ -971,7 +971,7 @@ Five clusters account for most of the findings:
 ### [ ] 25. 🟡 App test-recording client hardcodes the `manual_only` wire string instead of the shared enum
 
 - **Where:** `TranscribeOptions { stop_mode: Some("manual_only".to_string()), … }`
-  (`super-stt-app/src/daemon/client/v1/transcribe.rs:48`).
+  (`super-tts-app/src/daemon/client/v1/transcribe.rs:48`).
 - **Problem:** re-introduces a hand-synced wire token; the shared `wire_enum_strings!` table is
   the source of truth Tier 2 #2 established, and the CLI already drives its values from
   `WIRE_VARIANTS`.
@@ -981,16 +981,16 @@ Five clusters account for most of the findings:
 
 ### [x] 26. 🟠 `just install-app` points at a desktop file that was renamed away — the manual install breaks after copying the binary
 
-- **Where:** `app_desktop_file_src := 'super-stt-app'/'resources'/'app.desktop'` (`justfile:40`),
-  used at `:334`. The file is now `super-stt-app/resources/super-stt-app.desktop` (the shell
+- **Where:** `app_desktop_file_src := 'super-tts-app'/'resources'/'app.desktop'` (`justfile:40`),
+  used at `:334`. The file is now `super-tts-app/resources/super-tts-app.desktop` (the shell
   installers already reference the correct name).
 - **Impact:** `just install-app` installs the binary then aborts at the desktop-entry step with
   `install: cannot stat '…/app.desktop'`, leaving a half-installed app (no desktop entry, no icon).
-- **Fix:** update `justfile:40` to `…/'super-stt-app.desktop'` (matching the
+- **Fix:** update `justfile:40` to `…/'super-tts-app.desktop'` (matching the
   `app_desktop_file_name` constant already at `:39`).
 - **Resolved (branch `refactor/audit2-cleanup`):** `app_desktop_file_src` now reuses the
-  `app_desktop_file_name` constant (`'super-stt-app'/'resources'/app_desktop_file_name`), so
-  it resolves to the real `super-stt-app.desktop` and can't drift from the name again.
+  `app_desktop_file_name` constant (`'super-tts-app'/'resources'/app_desktop_file_name`), so
+  it resolves to the real `super-tts-app.desktop` and can't drift from the name again.
 
 ### [ ] 27. 🟡 Workspace `tokio` pins `"full"`, so every crate's per-feature narrowing is dead
 
@@ -1002,15 +1002,15 @@ Five clusters account for most of the findings:
 - **Fix:** pick one convention — drop `"full"` and rely on `default-features=false` + per-crate
   lists, or drop the per-crate lists and document that all crates take full tokio.
 
-### [ ] 28. 🟡 Unused `slab` and `slotmap` direct dependencies in super-stt-app
+### [ ] 28. 🟡 Unused `slab` and `slotmap` direct dependencies in super-tts-app
 
-- **Where:** `super-stt-app/Cargo.toml:29-30` ("Cosmic settings dependencies"), zero references
+- **Where:** `super-tts-app/Cargo.toml:29-30` ("Cosmic settings dependencies"), zero references
   in `src`.
-- **Fix:** `cargo remove -p super-stt-app slab slotmap` (verify with a build).
+- **Fix:** `cargo remove -p super-tts-app slab slotmap` (verify with a build).
 
-### [ ] 29. 🟡 super-stt-shared declares no `license`, unlike every sibling crate
+### [ ] 29. 🟡 super-tts-shared declares no `license`, unlike every sibling crate
 
-- **Where:** `super-stt-shared/Cargo.toml:1-6` sets no `license`; `[workspace.package]` defines
+- **Where:** `super-tts-shared/Cargo.toml:1-6` sets no `license`; `[workspace.package]` defines
   none to inherit. Every other crate declares `license = "GPL-3.0-only"`.
 - **Impact:** the one crate with ambiguous license metadata on a GPL project — drifts from the
   stated policy; a license scan/SBOM/accidental publish sees it unlicensed.
@@ -1020,7 +1020,7 @@ Five clusters account for most of the findings:
 ### [ ] 30. 🟡 systemd unit hardcodes stale Arch CUDA env vars that reach nothing after de-candling
 
 - **Where:** `Environment=CUDA_PATH=/opt/cuda` + `LD_LIBRARY_PATH=…`
-  (`super-stt-daemon/systemd/super-stt.service:18-19`).
+  (`super-tts-daemon/systemd/super-tts.service:18-19`).
 - **Problem:** the daemon is de-candled (GPU residency lives in subprocess backends launched via
   `systemd-run --user` with explicit `--setenv`, which don't inherit the daemon's env), so these
   Arch-specific paths decorate only the daemon process that needs none of it.
@@ -1038,20 +1038,20 @@ Five clusters account for most of the findings:
 
 ### CLI
 
-### [x] 32. 🟡 super-stt-cli declares 5 unused dependencies (hyper, hyper-util, http-body-util, serde, serde_json)
+### [x] 32. 🟡 super-tts-cli declares 5 unused dependencies (hyper, hyper-util, http-body-util, serde, serde_json)
 
-- **Where:** `super-stt-cli/Cargo.toml:20-24`; the single-file crate references none of them (all
-  network calls go through `super_stt_shared::daemon::http_client`).
+- **Where:** `super-tts-cli/Cargo.toml:20-24`; the single-file crate references none of them (all
+  network calls go through `super_tts_shared::daemon::http_client`).
 - **Impact:** misleading dependency surface — a reader sees hyper + http-body-util and assumes the
   CLI hand-rolls a transport, inviting the reimplementation the shared client prevents.
-- **Fix:** `cargo remove -p super-stt-cli hyper hyper-util http-body-util serde serde_json`
-  (keep anyhow, clap, tokio, super-stt-shared).
-- **Resolved:** `cargo remove`d all five from `super-stt-cli/Cargo.toml`; only the CLI's
+- **Fix:** `cargo remove -p super-tts-cli hyper hyper-util http-body-util serde serde_json`
+  (keep anyhow, clap, tokio, super-tts-shared).
+- **Resolved:** `cargo remove`d all five from `super-tts-cli/Cargo.toml`; only the CLI's
   dependency edges dropped from `Cargo.lock` (daemon/shared still pull hyper). Crate builds clean.
 
 ### [x] 33. 🟡 CLI-requested SCOPES are hardcoded literals with no conformance guard against the shared catalog
 
-- **Where:** `SCOPES: &[&str] = &["transcribe", "status"]` (`super-stt-cli/src/main.rs:27`) — the
+- **Where:** `SCOPES: &[&str] = &["transcribe", "status"]` (`super-tts-cli/src/main.rs:27`) — the
   set is correct/least-privilege, but has no link to `scopes::KNOWN_SCOPES`.
 - **Problem:** Tier 2 #8 added a conformance test for the consent binary's scope list; the CLI's
   requested-scope list got no equivalent, so a wire-scope rename fails only at runtime.
@@ -1062,7 +1062,7 @@ Five clusters account for most of the findings:
 
 ### i18n
 
-### [ ] 34. 🟡 super-stt-app's i18n-embed/Fluent subsystem is fully vestigial: advertised localizability, zero localized strings
+### [ ] 34. 🟡 super-tts-app's i18n-embed/Fluent subsystem is fully vestigial: advertised localizability, zero localized strings
 
 - **Where:** the `fl!` macro (`i18n.rs:43-51`), `FluentLanguageLoader`, `RustEmbed` bundle,
   `i18n.toml`, and `main.rs:12-15` wiring exist, but `fl!(…)` is never invoked outside its own
@@ -1077,14 +1077,14 @@ Five clusters account for most of the findings:
   the three deps) if localization isn't near-term, or make it load-bearing by routing strings
   through `fl!`. Don't leave it half-wired.
 
-### [ ] 35. 🟡 Duplicate FTL bundle: `super_stt_app.ftl` (underscore) is a dead orphan never read by the loader
+### [ ] 35. 🟡 Duplicate FTL bundle: `super_tts_app.ftl` (underscore) is a dead orphan never read by the loader
 
 - **Where:** `i18n/en/` holds two byte-identical bundles; the loader derives its domain from
-  `CARGO_PKG_NAME` = `super-stt-app`, so only `super-stt-app.ftl` (hyphen) loads. The underscore
+  `CARGO_PKG_NAME` = `super-tts-app`, so only `super-tts-app.ftl` (hyphen) loads. The underscore
   copy is embedded (whole-folder `#[folder="i18n/"]`) but never resolved.
 - **Impact:** two files to keep in sync, one authoritative — editing the underscore copy has no
   effect.
-- **Fix:** delete `i18n/en/super_stt_app.ftl` (or both, if #34 removes the subsystem).
+- **Fix:** delete `i18n/en/super_tts_app.ftl` (or both, if #34 removes the subsystem).
 
 ### Install scripts
 

@@ -69,14 +69,14 @@ Manifest `allowed_hosts` entries remain fully SSRF-guarded.
 
 ## Secrets and options
 
-The active model (`x-stt-model`) and the secrets and options a backend
+The active model (`x-tts-model`) and the secrets and options a backend
 declares in its [configuration](./config.md) arrive as request headers on
 every `/v1` request (see [request headers](./contract.md#request-headers)).
 The component reads them from the incoming request's headers; it never sees
 the keyring, and it needs no `wasi:config` import.
 
 For an OpenAI backend declaring `OPENAI_API_KEY`, each `/v1/transcribe`
-arrives with `x-stt-model` and `x-stt-secret-OPENAI_API_KEY`; the component
+arrives with `x-tts-model` and `x-tts-secret-OPENAI_API_KEY`; the component
 reads the key and sets `Authorization: Bearer <value>` on its outbound
 request to
 `api.openai.com`. It must not forward the injected header upstream.
@@ -103,7 +103,7 @@ A wasm backend that proxies an upstream realtime API (for example, a
 streaming WebSocket transcription service) opts into a second interface pair
 beyond `wasi:http`. The interface definitions are in
 `docs/protocol/wit/realtime.wit`; the canonical package name is
-`super-stt:realtime@0.1.0`.
+`super-tts:realtime@0.1.0`.
 
 ### Opt-in
 
@@ -121,13 +121,13 @@ The `realtime-backend` world the component must implement:
 world realtime-backend {
     import wasi:http/outgoing-handler@0.2.0;
     import wasi:io/poll@0.2.0;
-    import ws;            // super-stt:realtime/ws
+    import ws;            // super-tts:realtime/ws
     export wasi:http/incoming-handler@0.2.0;
-    export ws-server;     // super-stt:realtime/ws-server
+    export ws-server;     // super-tts:realtime/ws-server
 }
 ```
 
-**Imported: `super-stt:realtime/ws`**
+**Imported: `super-tts:realtime/ws`**
 
 Provides `connect(url, headers) -> ws-stream` for opening an outgoing
 WebSocket to an upstream service. Returns the host-owned `ws-stream`
@@ -141,7 +141,7 @@ are rejected.
 The `consumer-stream` resource (host-owned, handed in by `ws-server.handle`)
 provides the same five methods for communicating with the consumer.
 
-**Exported: `super-stt:realtime/ws-server`**
+**Exported: `super-tts:realtime/ws-server`**
 
 ```wit
 handle: func(
@@ -151,7 +151,7 @@ handle: func(
 ```
 
 The daemon invokes `handle` once per consumer realtime session. `headers`
-carries the daemon-injected `x-stt-*` context (model name, secrets, options)
+carries the daemon-injected `x-tts-*` context (model name, secrets, options)
 as UTF-8 key/value pairs. `consumer` is the host-owned consumer WebSocket.
 The component pumps frames between `consumer` and any upstream connection
 it opens, returning when the session ends.
@@ -191,12 +191,12 @@ also calling `recv`.
   `POST /v1/transcribe` when `options.stream_realtime` is set.
 - Make all outbound calls through `wasi:http/outgoing-handler`; do not rely
   on raw sockets.
-- Read secrets and options from the injected `x-stt-secret-*` and
-  `x-stt-option-*` request headers; use a secret only to authenticate
+- Read secrets and options from the injected `x-tts-secret-*` and
+  `x-tts-option-*` request headers; use a secret only to authenticate
   outbound calls, and never forward it upstream.
 - For a cloud backend, report `state: "ready"` from `GET /v1/status` as soon
   as the component is instantiated — there are no weights to load.
 - For a realtime backend: declare `[capabilities] websocket = true` and
   `realtime = true` on each realtime model; implement the `realtime-backend`
-  world (import `super-stt:realtime/ws`, export `super-stt:realtime/ws-server`);
+  world (import `super-tts:realtime/ws`, export `super-tts:realtime/ws-server`);
   poll `recv` sequentially rather than relying on `subscribe`.

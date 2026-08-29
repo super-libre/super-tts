@@ -1,7 +1,7 @@
-# Super STT Backend Registry
+# Super TTS Backend Registry
 
 This directory holds the source of truth for the backend catalog users
-browse in the Super STT app (**Library → Browse**). A scheduled GitHub
+browse in the Super TTS app (**Library → Browse**). A scheduled GitHub
 Action (every 6 hours) reads
 `registry.toml`, queries each entry's GitHub repo for its latest release,
 validates the release's `backend.toml` and assets, and publishes a single

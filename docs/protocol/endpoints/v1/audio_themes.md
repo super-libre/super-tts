@@ -15,8 +15,8 @@ List the audio cue themes available for selection via
 
 ```http
 GET /audio_themes HTTP/1.1
-Host: stt.local
-Authorization: Bearer stt_…64hex…
+Host: tts.local
+Authorization: Bearer tts_…64hex…
 ```
 
 **Response (200):**
