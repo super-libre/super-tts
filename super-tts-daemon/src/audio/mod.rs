@@ -2,6 +2,7 @@
 
 pub mod beeper;
 pub mod device;
+pub mod playback;
 pub mod processing;
 pub mod recorder;
 pub mod state;

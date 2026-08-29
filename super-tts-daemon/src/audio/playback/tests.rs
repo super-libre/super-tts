@@ -1,0 +1,316 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Null-sink tests for the playback pipeline.
+//!
+//! Every test drives [`Playback::render`] — the same function the cpal callback
+//! calls — against a [`Playback::detached`] pipeline, so the whole path runs
+//! with no audio device present and behaves identically in CI and on a desktop.
+
+use super::*;
+use mixer::SeamFade;
+use super_tts_shared::audio::frames::SampleFormat;
+
+const DEVICE: DeviceFormat = DeviceFormat {
+    sample_rate: 48000,
+    channels: 1,
+};
+
+fn params(sample_rate: u32, channels: u16) -> AudioParams {
+    AudioParams {
+        sample_rate,
+        channels,
+        format: SampleFormat::F32Le,
+    }
+}
+
+/// Pull `n` samples in `block`-sized calls, exactly as a device would.
+fn drain(p: &Playback, n: usize, block: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(n);
+    let mut buf = vec![0.0; block];
+    while out.len() < n {
+        p.render(&mut buf);
+        out.extend_from_slice(&buf);
+    }
+    out.truncate(n);
+    out
+}
+
+/// Largest sample-to-sample jump — the measure of a seam being audible.
+fn max_step(samples: &[f32]) -> f32 {
+    samples
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0_f32, f32::max)
+}
+
+#[tokio::test]
+async fn silence_is_rendered_before_anything_is_queued() {
+    let p = Playback::detached(DEVICE);
+    assert_eq!(p.state(), State::Idle);
+    let out = drain(&p, 512, 128);
+    assert!(out.iter().all(|s| *s == 0.0), "idle must be silent");
+    assert_eq!(p.stats().underrun_samples, 0, "idle is not an underrun");
+}
+
+#[tokio::test]
+async fn nothing_is_heard_until_the_prebuffer_fills() {
+    let mut p = Playback::detached(DEVICE);
+    // 10 ms at 48 kHz — well under the 120 ms prebuffer.
+    p.push(&vec![1.0_f32; 480], params(48000, 1)).await.unwrap();
+    assert_eq!(p.state(), State::Prebuffering);
+    let out = drain(&p, 480, 240);
+    assert!(
+        out.iter().all(|s| *s == 0.0),
+        "prebuffering must not emit a partial start"
+    );
+    assert_eq!(p.buffered(), 480, "and must not consume what it is holding");
+}
+
+#[tokio::test]
+async fn playback_starts_once_the_prebuffer_threshold_is_met() {
+    let mut p = Playback::detached(DEVICE);
+    // 200 ms > the 120 ms threshold.
+    p.push(&vec![0.5_f32; 9600], params(48000, 1))
+        .await
+        .unwrap();
+    assert_eq!(p.state(), State::Playing);
+    let out = drain(&p, 4800, 480);
+    // Past the head fade the level is untouched; the fade itself is checked in
+    // the mixer's own tests.
+    let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples();
+    assert!(
+        out[fade..].iter().all(|s| (*s - 0.5).abs() < 1e-6),
+        "the body of the chunk plays at its original level"
+    );
+    assert!(
+        out[0] < 0.5,
+        "and the head is faded in rather than starting on a step"
+    );
+}
+
+/// The point of the whole module: two independently synthesized chunks must
+/// come out as one continuous waveform.
+#[tokio::test]
+async fn consecutive_chunks_join_without_a_step() {
+    let mut p = Playback::detached(DEVICE);
+    // Two DC blocks at opposite levels: butted together they step by 2.0.
+    p.push(&vec![1.0_f32; 24000], params(48000, 1))
+        .await
+        .unwrap();
+    p.push(&vec![-1.0_f32; 24000], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish();
+
+    let out = drain(&p, 48000, 512);
+    let step = max_step(&out);
+    assert!(
+        step < 0.2,
+        "the seam between chunks must be crossfaded; largest step was {step}"
+    );
+}
+
+/// Continuity has to survive resampling too — a 24 kHz backend into a 48 kHz
+/// device is the ordinary case, not an edge one.
+#[tokio::test]
+async fn continuity_survives_resampling_from_the_backend_rate() {
+    let mut p = Playback::detached(DEVICE);
+    let sine = |n: usize, phase: f32| -> Vec<f32> {
+        (0..n)
+            .map(|i| (i as f32 * 0.02 + phase).sin() * 0.5)
+            .collect()
+    };
+    p.push(&sine(12000, 0.0), params(24000, 1)).await.unwrap();
+    p.push(&sine(12000, 1.0), params(24000, 1)).await.unwrap();
+    p.finish();
+
+    let out = drain(&p, 40000, 512);
+    let step = max_step(&out);
+    assert!(
+        step < 0.2,
+        "resampled chunks must still join smoothly; largest step was {step}"
+    );
+    assert!(
+        out.iter().any(|s| s.abs() > 0.1),
+        "the signal must actually be present, not silence"
+    );
+}
+
+#[tokio::test]
+async fn a_mono_backend_is_spread_across_a_stereo_device() {
+    let stereo = DeviceFormat {
+        sample_rate: 48000,
+        channels: 2,
+    };
+    let mut p = Playback::detached(stereo);
+    // 200 ms of mono, which must become 200 ms of stereo frames.
+    p.push(&vec![0.25_f32; 9600], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish();
+
+    let out = drain(&p, 19200, 512);
+    assert_eq!(out.len(), 19200, "200 ms of mono becomes 200 ms of stereo");
+    // Both channels must match everywhere, fade included — the fade is a gain,
+    // and applying it unevenly would pull the image off centre.
+    for frame in out.chunks(2) {
+        assert!(
+            (frame[1] - frame[0]).abs() < 1e-6,
+            "both channels carry the same mono sample"
+        );
+    }
+    let fade = SeamFade::new(DEFAULT_FADE_MS, stereo).samples();
+    for frame in out[fade..out.len() - fade].chunks(2) {
+        assert!(
+            (frame[0] - 0.25).abs() < 1e-6,
+            "the body keeps the source level, got {}",
+            frame[0]
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_underrun_renders_silence_and_is_counted() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&vec![1.0_f32; 9600], params(48000, 1))
+        .await
+        .unwrap();
+    assert_eq!(p.state(), State::Playing);
+
+    // Ask for far more than was queued while still Playing — the producer has
+    // not said it is finished, so the shortfall is a genuine underrun.
+    let out = drain(&p, 19200, 4800);
+    assert!(
+        out.iter().all(|s| s.is_finite()),
+        "an underrun must not emit garbage"
+    );
+    assert!(
+        out[15000..].iter().all(|s| *s == 0.0),
+        "past the queued audio the output is silence"
+    );
+    assert!(
+        p.stats().underrun_samples > 0,
+        "the shortfall must be counted"
+    );
+}
+
+/// Draining short is the utterance ending, not a failure to keep up — counting
+/// it would make every normal utterance look like a glitch.
+#[tokio::test]
+async fn draining_past_the_end_is_not_counted_as_an_underrun() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&vec![1.0_f32; 9600], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish();
+    let _ = drain(&p, 19200, 4800);
+    assert_eq!(p.stats().underrun_samples, 0);
+    assert_eq!(p.state(), State::Idle, "the stream idles once drained");
+}
+
+/// A reply shorter than the prebuffer threshold must still be heard.
+#[tokio::test]
+async fn an_utterance_shorter_than_the_prebuffer_still_plays() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&vec![0.75_f32; 960], params(48000, 1))
+        .await
+        .unwrap(); // 20 ms
+    assert_eq!(p.state(), State::Prebuffering);
+    p.finish();
+    assert_eq!(p.state(), State::Draining);
+
+    let out = drain(&p, 960, 240);
+    assert!(
+        out.iter().any(|s| (*s - 0.75).abs() < 1e-6),
+        "a short utterance must not be stuck in the prebuffer"
+    );
+}
+
+#[tokio::test]
+async fn cancel_goes_silent_within_one_buffer() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&vec![1.0_f32; 48000], params(48000, 1))
+        .await
+        .unwrap();
+    assert_eq!(p.state(), State::Playing);
+
+    p.cancel();
+    assert_eq!(p.state(), State::Idle);
+    assert_eq!(p.buffered(), 0, "queued audio is discarded, not played out");
+
+    let out = drain(&p, 4800, 480);
+    assert!(
+        out.iter().all(|s| *s == 0.0),
+        "nothing queued before the cancel may still be heard"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_stream_accepts_a_new_utterance() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&vec![1.0_f32; 48000], params(48000, 1))
+        .await
+        .unwrap();
+    p.cancel();
+
+    p.push(&vec![-0.5_f32; 9600], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish();
+    let out = drain(&p, 9600, 480);
+    assert!(
+        out.iter().any(|s| (*s + 0.5).abs() < 1e-6),
+        "the pipeline must be reusable after a cancel"
+    );
+    assert!(
+        out.iter().all(|s| *s <= 0.0 + 1e-6),
+        "no sample from the cancelled utterance survives"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_chunk_is_a_no_op() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&[], params(48000, 1)).await.unwrap();
+    assert_eq!(p.state(), State::Idle);
+    assert_eq!(p.buffered(), 0);
+}
+
+/// A backend faster than realtime must not be able to buffer without bound —
+/// `push` blocks on a full ring instead of growing it.
+#[tokio::test]
+async fn a_full_ring_applies_backpressure_to_the_producer() {
+    let mut p = Playback::detached(DEVICE);
+    let capacity = (DEVICE.sample_rate * RING_SECONDS) as usize;
+
+    // Queue the ring full, then confirm a further push cannot complete while
+    // nothing is draining it.
+    p.push(&vec![0.1_f32; capacity], params(48000, 1))
+        .await
+        .unwrap();
+    assert_eq!(p.buffered(), capacity);
+
+    let pending = tokio::time::timeout(
+        Duration::from_millis(50),
+        p.push(&vec![0.2_f32; 4800], params(48000, 1)),
+    )
+    .await;
+    assert!(
+        pending.is_err(),
+        "push must wait for space rather than growing the buffer"
+    );
+    assert!(
+        p.buffered() <= capacity,
+        "the ring never exceeds its allocated capacity"
+    );
+}
+
+#[tokio::test]
+async fn rendering_a_zero_length_buffer_is_harmless() {
+    let mut p = Playback::detached(DEVICE);
+    p.push(&vec![1.0_f32; 9600], params(48000, 1))
+        .await
+        .unwrap();
+    let mut empty: [f32; 0] = [];
+    p.render(&mut empty);
+    assert_eq!(p.buffered(), 9600, "nothing was consumed");
+}
