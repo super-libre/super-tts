@@ -221,6 +221,7 @@ fn load_backend(dir: &Path) -> anyhow::Result<DiscoveredBackend> {
             primary_language: entry.primary_language.clone(),
             supported_languages: entry.supported_languages.clone(),
             estimated_vram_bytes: entry.estimated_vram_bytes,
+            max_input_chars: entry.max_input_chars,
             processing_interval: interval,
             supported_devices,
             realtime: entry.realtime,

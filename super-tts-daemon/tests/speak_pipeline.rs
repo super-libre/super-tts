@@ -47,6 +47,7 @@ fn definition() -> ModelDefinition {
         primary_language: "en".into(),
         supported_languages: vec!["en".into()],
         estimated_vram_bytes: 0,
+        max_input_chars: None,
         processing_interval: Duration::from_millis(0),
         supported_devices: vec![Device::None],
         realtime: false,
@@ -283,5 +284,123 @@ async fn a_second_utterance_supersedes_the_first() {
         playback.buffered(),
         MOCK_SAMPLES,
         "the ring holds exactly the second utterance, not both concatenated"
+    );
+}
+
+/// A model with a small `max_input_chars`, so the chunker has to split.
+fn loaded_model_with_limit(limit: u32) -> Option<SharedLoadedModel> {
+    let path = mock_component()?;
+    let backend = WasmBackend::new(&path, Vec::new(), "mock".to_string(), Vec::new())
+        .expect("load mock backend");
+    let mut def = definition();
+    def.max_input_chars = Some(limit);
+    Some(Arc::new(tokio::sync::RwLock::new(Some(LoadedModel {
+        definition: def,
+        instance: Box::new(backend),
+    }))))
+}
+
+/// Text past the model's limit becomes several synthesis requests, and the
+/// audio from all of them reaches the ring.
+#[tokio::test]
+async fn long_text_is_split_into_several_synthesis_chunks() {
+    let Some(model) = loaded_model_with_limit(40) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DeviceFormat {
+        sample_rate: MOCK_RATE,
+        channels: 1,
+    });
+
+    let text = "First sentence here. Second sentence follows. Third one arrives now. \
+                And a fourth to finish.";
+    let utterance = engine
+        .speak(&model, text, None, None, None, None)
+        .await
+        .expect("speak");
+
+    assert!(
+        utterance.chunks > 1,
+        "text over the model's limit must be split, got {} chunk(s)",
+        utterance.chunks
+    );
+    let playback = engine.playback_handle().await.expect("pipeline opened");
+    assert_eq!(
+        playback.buffered(),
+        MOCK_SAMPLES * utterance.chunks,
+        "every chunk's audio reaches the ring"
+    );
+    assert_eq!(
+        utterance.marks, utterance.chunks,
+        "one mark per synthesis response"
+    );
+}
+
+/// Text within the limit stays one request: each extra split costs a round trip
+/// and resets the model's prosodic context.
+#[tokio::test]
+async fn short_text_stays_a_single_synthesis_chunk() {
+    let Some(model) = loaded_model_with_limit(4000) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let utterance = engine
+        .speak(&model, "Hello there. How are you?", None, None, None, None)
+        .await
+        .expect("speak");
+    assert_eq!(utterance.chunks, 1);
+}
+
+/// Markup is stripped before the backend sees it — otherwise the model reads
+/// the asterisks out loud.
+#[tokio::test]
+async fn markup_is_normalized_away_before_synthesis() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let utterance = engine
+        .speak(
+            &model,
+            "# Title\nThis is **bold** with `code` and a [link](https://x.com/y).",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("speak");
+    assert_eq!(utterance.chunks, 1);
+    assert!(engine.playback_handle().await.is_some());
+}
+
+/// Input that is entirely markup normalizes to nothing. Refusing is right —
+/// there is no speech to produce — and it must not reach the backend or open
+/// the audio device.
+#[tokio::test]
+async fn text_that_is_entirely_markup_is_refused_as_empty() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let err = engine
+        .speak(&model, "```\nfn main() {}\n```", None, None, None, None)
+        .await;
+    // A code fence normalizes to the spoken notice, so this one *does* speak.
+    assert!(err.is_ok(), "a code block is announced, not dropped");
+
+    let engine2 = SpeechEngine::detached(DEVICE);
+    let err = engine2
+        .speak(&model, "**** ___ ~~~", None, None, None, None)
+        .await
+        .expect_err("pure punctuation has nothing to say");
+    assert!(matches!(err, SpeakError::EmptyText));
+    assert!(
+        engine2.playback_handle().await.is_none(),
+        "nothing to say must not open the audio device"
     );
 }

@@ -37,6 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::audio::playback::{DeviceFormat, Playback};
 use crate::daemon::types::SharedLoadedModel;
 use crate::stt_models::v1::{SynthesisSink, SynthesizeRequest};
+use crate::text::chunk::{ChunkPolicy, Chunker};
 
 /// Longest `text` accepted when the model declares no `max_input_chars`.
 ///
@@ -52,6 +53,25 @@ pub struct Utterance {
     pub id: String,
     /// Alignment marks the backend emitted.
     pub marks: usize,
+    /// How many synthesis chunks the text was split into.
+    pub chunks: usize,
+}
+
+/// How an utterance should be spoken, apart from the text itself.
+///
+/// Grouped so the per-chunk loop can carry them without a closure: a closure
+/// returning `SynthesizeRequest<'_>` ties the request's lifetime to the chunk,
+/// which does not outlive the borrow of these.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SpeakOptions<'a> {
+    /// A `voice` id the model declares, or `None` for its `default_voice`.
+    pub voice: Option<&'a str>,
+    /// Resolved BCP-47 tag.
+    pub language: Option<&'a str>,
+    /// Rate multiplier.
+    pub speed: Option<f32>,
+    /// Free-text delivery guidance.
+    pub instructions: Option<&'a str>,
 }
 
 /// Why a speak request could not be served.
@@ -74,8 +94,18 @@ pub enum SpeakError {
     Synthesis(String),
 }
 
-/// One decoded run of samples, with the format they were decoded in.
-type Pcm = (Vec<f32>, AudioParams);
+/// What the sink hands the pump.
+///
+/// A chunk boundary travels through the same channel as the audio rather than
+/// being applied directly, so it stays *ordered* with the samples around it.
+/// Calling `end_chunk` from the sink would fade a seam into whatever the pump
+/// happened to be pushing at that moment.
+enum PcmMsg {
+    /// Decoded samples, with the format they were decoded in.
+    Samples(Vec<f32>, AudioParams),
+    /// The synthesis response ended; the next one is a new prosodic unit.
+    Boundary,
+}
 
 /// Decodes frames and forwards samples to the pump task.
 ///
@@ -83,7 +113,7 @@ type Pcm = (Vec<f32>, AudioParams);
 /// (frame boundaries are its choice, and nothing requires them to be
 /// sample-aligned), so the straddling bytes belong to whatever comes next.
 struct PlaybackSink {
-    tx: mpsc::UnboundedSender<Pcm>,
+    tx: mpsc::UnboundedSender<PcmMsg>,
     params: Option<AudioParams>,
     /// Undecoded bytes: a partial sample carried across frames.
     leftover: Vec<u8>,
@@ -95,6 +125,17 @@ impl PlaybackSink {
     /// Bytes per interleaved frame in the declared format.
     fn frame_width(params: AudioParams) -> usize {
         (params.format.bytes_per_sample() * params.channels.max(1) as usize).max(1)
+    }
+
+    /// Close the current synthesis chunk.
+    ///
+    /// Any straddling bytes are dropped: a well-formed response ends on a whole
+    /// sample, and carrying a fragment into the next response — which may not
+    /// even share a format — would shift every sample after it by a byte.
+    fn boundary(&mut self) {
+        self.leftover.clear();
+        self.params = None;
+        let _ = self.tx.send(PcmMsg::Boundary);
     }
 }
 
@@ -124,7 +165,7 @@ impl SynthesisSink for PlaybackSink {
                     // Unbounded, but bounded in practice by the frame decoder's
                     // MAX_TOTAL_AUDIO_BYTES cap on one response. Real
                     // backpressure lives at the ring, which the pump awaits.
-                    let _ = self.tx.send((samples, params));
+                    let _ = self.tx.send(PcmMsg::Samples(samples, params));
                 }
             }
             FrameKind::Mark => self.marks += 1,
@@ -255,8 +296,28 @@ impl SpeechEngine {
         if trimmed.chars().count() > MAX_TEXT_CHARS {
             return Err(SpeakError::TextTooLong);
         }
-        if model.read().await.is_none() {
-            return Err(SpeakError::NotLoaded);
+
+        // Strip markup before anything else. A model asked to read `**bold**`
+        // says "asterisk asterisk bold"; the chunker also needs clean text,
+        // since a code fence is full of characters that look like sentence
+        // ends.
+        let spoken = crate::text::normalize::normalize(trimmed);
+        if spoken.is_empty() {
+            // The input was entirely markup — a bare code fence, say. Nothing
+            // to say is not a failure.
+            return Err(SpeakError::EmptyText);
+        }
+
+        let policy = {
+            let guard = model.read().await;
+            let loaded = guard.as_ref().ok_or(SpeakError::NotLoaded)?;
+            ChunkPolicy::for_model(loaded.definition.max_input_chars)
+        };
+        let mut chunker = Chunker::new(policy);
+        let mut chunks = chunker.push(&spoken);
+        chunks.extend(chunker.finish());
+        if chunks.is_empty() {
+            return Err(SpeakError::EmptyText);
         }
 
         // A new utterance supersedes the old. Cancelling before claiming the
@@ -269,7 +330,7 @@ impl SpeechEngine {
         *self.current.lock() = Some((id.clone(), Arc::clone(&flag)));
 
         let playback = self.playback().await?;
-        let (tx, mut rx) = mpsc::unbounded_channel::<Pcm>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<PcmMsg>();
 
         // The pump owns the awaiting: it is where ring backpressure is felt,
         // and it runs concurrently with the backend read so audio starts before
@@ -277,10 +338,15 @@ impl SpeechEngine {
         let pump = tokio::spawn({
             let playback = Arc::clone(&playback);
             async move {
-                while let Some((samples, params)) = rx.recv().await {
-                    if let Err(e) = playback.push(&samples, params).await {
-                        warn!("playback push failed: {e}");
-                        break;
+                while let Some(msg) = rx.recv().await {
+                    match msg {
+                        PcmMsg::Samples(samples, params) => {
+                            if let Err(e) = playback.push(&samples, params).await {
+                                warn!("playback push failed: {e}");
+                                break;
+                            }
+                        }
+                        PcmMsg::Boundary => playback.end_chunk().await,
                     }
                 }
             }
@@ -294,19 +360,14 @@ impl SpeechEngine {
             cancelled: Arc::clone(&flag),
         };
 
-        let request = SynthesizeRequest {
-            text: trimmed,
+        let chunk_count = chunks.len();
+        let options = SpeakOptions {
             voice,
             language,
             speed,
             instructions,
         };
-
-        let result = {
-            let guard = model.read().await;
-            let loaded = guard.as_ref().ok_or(SpeakError::NotLoaded)?;
-            loaded.instance.synthesize(&request, &mut sink).await
-        };
+        let failure = Self::synthesize_chunks(model, &chunks, &mut sink, &flag, options).await;
 
         let marks = sink.marks;
         // Closes the channel, which ends the pump once it has drained.
@@ -314,26 +375,75 @@ impl SpeechEngine {
         let _ = pump.await;
 
         let cancelled = flag.load(Ordering::Relaxed);
-        match result {
-            Ok(()) => {}
-            // A cancel races the backend by design: the sink aborts the frame
-            // pump, which surfaces here as an error the caller must not report
-            // as a failure.
-            Err(_) if cancelled => return Ok(Utterance { id, marks }),
-            Err(e) => {
-                self.clear_if_current(&id);
-                playback.cancel();
-                return Err(SpeakError::Synthesis(e.to_string()));
-            }
+        // A cancel races the backend by design: the sink aborts the frame pump,
+        // which surfaces as an error the caller must not report as a failure.
+        if let Some(e) = failure.filter(|_| !cancelled) {
+            self.clear_if_current(&id);
+            playback.cancel();
+            return Err(e);
+        }
+        if cancelled {
+            return Ok(Utterance {
+                id,
+                marks,
+                chunks: chunk_count,
+            });
         }
 
         playback.finish().await;
         info!(
-            "utterance {id}: {} chars, {marks} marks",
-            trimmed.chars().count()
+            "utterance {id}: {} chars in {chunk_count} chunk(s), {marks} marks",
+            spoken.chars().count()
         );
         self.clear_if_current(&id);
-        Ok(Utterance { id, marks })
+        Ok(Utterance {
+            id,
+            marks,
+            chunks: chunk_count,
+        })
+    }
+
+    /// Synthesize every chunk in order, returning the first failure.
+    ///
+    /// One request per chunk, each its own prosodic unit, with
+    /// [`PlaybackSink::boundary`] between them so the seam is faded —
+    /// successive responses are discontinuous in a way successive frames of one
+    /// response are not.
+    async fn synthesize_chunks(
+        model: &SharedLoadedModel,
+        chunks: &[String],
+        sink: &mut PlaybackSink,
+        cancelled: &AtomicBool,
+        options: SpeakOptions<'_>,
+    ) -> Option<SpeakError> {
+        for (index, chunk) in chunks.iter().enumerate() {
+            let request = SynthesizeRequest {
+                text: chunk,
+                voice: options.voice,
+                language: options.language,
+                speed: options.speed,
+                instructions: options.instructions,
+            };
+            let result = {
+                let guard = model.read().await;
+                let Some(loaded) = guard.as_ref() else {
+                    return Some(SpeakError::NotLoaded);
+                };
+                loaded.instance.synthesize(&request, sink).await
+            };
+            if let Err(e) = result {
+                return (!cancelled.load(Ordering::Relaxed))
+                    .then(|| SpeakError::Synthesis(e.to_string()));
+            }
+            if cancelled.load(Ordering::Relaxed) {
+                return None;
+            }
+            // Only between chunks — `finish` closes the last one.
+            if index + 1 < chunks.len() {
+                sink.boundary();
+            }
+        }
+        None
     }
 
     /// Clear the current slot only if it still holds `id` — a later utterance

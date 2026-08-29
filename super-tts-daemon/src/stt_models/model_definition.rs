@@ -47,6 +47,10 @@ pub struct ModelDefinition {
     /// (remote/online model with no local compute) must be the only entry when
     /// present. Non-empty and validated at discovery.
     pub supported_devices: Vec<Device>,
+    /// Longest `text` the model accepts in one `POST /v1/synthesize`. `None`
+    /// means unbounded, and the daemon then sends whole utterances rather than
+    /// splitting them — see [`crate::text::chunk`].
+    pub max_input_chars: Option<u32>,
     /// Whether this model is reached over the realtime WebSocket path
     /// (`/v1/transcribe/realtime`) rather than batch `POST /v1/transcribe`.
     pub realtime: bool,

@@ -13,6 +13,7 @@ pub mod resource_management;
 pub mod self_update;
 pub mod services;
 pub mod stt_models;
+pub mod text;
 
 // Re-export the main run function
 pub use daemon_main::run;

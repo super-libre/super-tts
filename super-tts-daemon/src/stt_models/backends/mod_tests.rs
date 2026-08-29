@@ -571,6 +571,7 @@ fn an_empty_source_resolves_nothing() {
                 primary_language: "en".to_string(),
                 supported_languages: vec!["en".to_string()],
                 estimated_vram_bytes: 0,
+                max_input_chars: None,
                 processing_interval: StdDuration::from_secs(1),
                 supported_devices: vec![super_tts_registry_types::manifest::Device::Cpu],
                 realtime: false,
