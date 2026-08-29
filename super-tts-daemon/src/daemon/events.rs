@@ -74,6 +74,30 @@ pub struct RecordingStateEvent {
     pub is_recording: bool,
 }
 
+/// Payload of the `speaking_state` topic.
+#[derive(Clone, Debug, Serialize)]
+pub struct SpeakingStateEvent {
+    /// Whether an utterance is currently being played.
+    pub is_speaking: bool,
+    /// The utterance being played, absent when speech has stopped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utterance_id: Option<String>,
+}
+
+/// Payload of the `speech_progress` topic.
+///
+/// Both figures are positions within the utterance derived from the device
+/// format, not wall-clock time, so they stay correct while the stream is idle.
+#[derive(Clone, Debug, Serialize)]
+pub struct SpeechProgressEvent {
+    /// The utterance these figures describe.
+    pub utterance_id: String,
+    /// Milliseconds already handed to the output device.
+    pub spoken_ms: u64,
+    /// Milliseconds queued and not yet played.
+    pub queued_ms: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct FrequencyBandsEvent {
     pub bands_b64: String,
@@ -227,6 +251,17 @@ event_topics! {
         wire: "frequency_bands", scope: "audio_visualization",
         field: frequency_bands, payload: FrequencyBandsEvent, capacity: AUDIO_BUF_CAPACITY,
     },
+    /// Whether speech is currently coming out of the speakers. The playback
+    /// counterpart of `recording_state`.
+    SpeakingState {
+        wire: "speaking_state", scope: "playback_events",
+        field: speaking_state, payload: SpeakingStateEvent, capacity: STATE_BUF_CAPACITY,
+    },
+    /// How far through the current utterance playback has got.
+    SpeechProgress {
+        wire: "speech_progress", scope: "playback_events",
+        field: speech_progress, payload: SpeechProgressEvent, capacity: STATE_BUF_CAPACITY,
+    },
     PartialStt {
         wire: "partial_stt", scope: "global_transcriptions",
         field: partial_stt, payload: SttEvent, capacity: STATE_BUF_CAPACITY,
@@ -287,6 +322,23 @@ impl EventBus {
         let _ = self
             .recording_state
             .send(RecordingStateEvent { is_recording });
+    }
+
+    /// Publish a `speaking_state` change.
+    pub fn publish_speaking_state(&self, is_speaking: bool, utterance_id: Option<String>) {
+        let _ = self.speaking_state.send(SpeakingStateEvent {
+            is_speaking,
+            utterance_id,
+        });
+    }
+
+    /// Publish a `speech_progress` update.
+    pub fn publish_speech_progress(&self, utterance_id: String, spoken_ms: u64, queued_ms: u64) {
+        let _ = self.speech_progress.send(SpeechProgressEvent {
+            utterance_id,
+            spoken_ms,
+            queued_ms,
+        });
     }
 
     pub fn publish_frequency_bands(&self, bands: &[f32], sample_rate: f32, total_energy: f32) {
@@ -388,6 +440,8 @@ impl AnyReceiver {
             Self::TranscribingStarted(rx) => recv_arm!(rx, TranscribingStarted),
             Self::TranscribingStopped(rx) => recv_arm!(rx, TranscribingStopped),
             Self::FrequencyBands(rx) => recv_arm!(rx, FrequencyBands),
+            Self::SpeakingState(rx) => recv_arm!(rx, SpeakingState),
+            Self::SpeechProgress(rx) => recv_arm!(rx, SpeechProgress),
             Self::PartialStt(rx) => recv_arm!(rx, PartialStt),
             Self::FinalStt(rx) => recv_arm!(rx, FinalStt),
             Self::DaemonStatusChanged(rx) => recv_arm!(rx, DaemonStatusChanged),
@@ -541,6 +595,8 @@ mod tests {
             Topic::TranscribingStarted,
             Topic::TranscribingStopped,
             Topic::FrequencyBands,
+            Topic::SpeakingState,
+            Topic::SpeechProgress,
             Topic::PartialStt,
             Topic::FinalStt,
             Topic::DaemonStatusChanged,
@@ -646,6 +702,8 @@ mod tests {
             Topic::TranscribingStarted,
             Topic::TranscribingStopped,
             Topic::FrequencyBands,
+            Topic::SpeakingState,
+            Topic::SpeechProgress,
             Topic::PartialStt,
             Topic::FinalStt,
             Topic::DaemonStatusChanged,
@@ -659,5 +717,69 @@ mod tests {
                 topic.as_str()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod playback_topic_tests {
+    use super::{EventBus, Topic};
+
+    #[tokio::test]
+    async fn speaking_state_publishes_and_receives() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe(Topic::SpeakingState);
+        bus.publish_speaking_state(true, Some("utt_1".into()));
+        let (topic, json) = rx.recv_json().await.expect("received");
+        assert_eq!(topic, "speaking_state");
+        assert_eq!(
+            json,
+            serde_json::json!({ "is_speaking": true, "utterance_id": "utt_1" })
+        );
+    }
+
+    /// A stop with no id is legal — the daemon knows it stopped speaking even
+    /// when it has already released the utterance — and the field is omitted
+    /// rather than sent as null.
+    #[tokio::test]
+    async fn a_stop_without_an_utterance_omits_the_id() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe(Topic::SpeakingState);
+        bus.publish_speaking_state(false, None);
+        let (_, json) = rx.recv_json().await.expect("received");
+        assert_eq!(json, serde_json::json!({ "is_speaking": false }));
+        assert!(
+            json.get("utterance_id").is_none(),
+            "an absent id is omitted, not sent as null"
+        );
+    }
+
+    #[tokio::test]
+    async fn speech_progress_publishes_and_receives() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe(Topic::SpeechProgress);
+        bus.publish_speech_progress("utt_1".into(), 120, 880);
+        let (topic, json) = rx.recv_json().await.expect("received");
+        assert_eq!(topic, "speech_progress");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "utterance_id": "utt_1",
+                "spoken_ms": 120,
+                "queued_ms": 880,
+            })
+        );
+    }
+
+    /// Playback events are gated separately from recording ones: an app that
+    /// may watch speech should not thereby learn when the microphone is live.
+    #[test]
+    fn playback_topics_need_their_own_scope() {
+        assert_eq!(Topic::SpeakingState.required_scope(), "playback_events");
+        assert_eq!(Topic::SpeechProgress.required_scope(), "playback_events");
+        assert_eq!(
+            Topic::RecordingState.required_scope(),
+            "recording_events",
+            "and must not be reachable with the recording scope"
+        );
     }
 }

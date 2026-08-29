@@ -85,13 +85,16 @@ impl SuperTTSDaemon {
         let volume = config.audio.volume;
 
         let components = DaemonComponents::init().await;
+        // Built here rather than inline so the speech engine can publish onto the
+        // same bus `/events` subscribers read from.
+        let events = Arc::new(EventBus::new());
 
         let daemon = SuperTTSDaemon {
             model: components.model,
             audio_processor: components.audio_processor,
             shutdown_tx: components.shutdown_tx,
             dbus_manager: components.dbus_manager,
-            events: Arc::new(EventBus::new()),
+            events: Arc::clone(&events),
             audio_theme: Arc::new(RwLock::new(audio_theme)),
             volume: Arc::new(RwLock::new(volume)),
             busy: Arc::new(tokio::sync::RwLock::new(false)),
@@ -112,7 +115,9 @@ impl SuperTTSDaemon {
                 crate::output::notification::Notifier::dbus(),
             )),
             self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
-            speech: Arc::new(crate::daemon::speech::SpeechEngine::new()),
+            speech: Arc::new(
+                crate::daemon::speech::SpeechEngine::new().with_events(Arc::clone(&events)),
+            ),
         };
 
         daemon.post_init().await;

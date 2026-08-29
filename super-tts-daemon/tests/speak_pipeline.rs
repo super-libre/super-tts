@@ -669,3 +669,140 @@ async fn progress_reports_a_position_within_the_utterance() {
         "and what remains queued must fall: {queued} then {queued_after}"
     );
 }
+
+// ----------------------------------------------------------------- events
+
+use super_tts_daemon::daemon::events::{AnyReceiver, EventBus, Topic};
+
+/// Receive one event as `(topic, parsed JSON)`, or `None` if none arrives.
+///
+/// `recv_json` is crate-internal, so integration tests go through the public
+/// string form and parse.
+async fn next_event(rx: &mut AnyReceiver) -> Option<(&'static str, serde_json::Value)> {
+    let (topic, json) = tokio::time::timeout(Duration::from_secs(2), rx.recv_json_str())
+        .await
+        .ok()?
+        .ok()?;
+    Some((topic, serde_json::from_str(&json).expect("event is JSON")))
+}
+
+/// Drain every event currently pending.
+async fn drain_events(rx: &mut AnyReceiver) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    while let Ok(Ok((_, json))) =
+        tokio::time::timeout(Duration::from_millis(50), rx.recv_json_str()).await
+    {
+        out.push(serde_json::from_str(&json).expect("event is JSON"));
+    }
+    out
+}
+
+/// The speak path must announce itself on `/events`, so a panel applet can show
+/// speech without polling.
+#[tokio::test]
+async fn speaking_state_is_published_around_an_utterance() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let bus = Arc::new(EventBus::new());
+    let mut rx = bus.subscribe(Topic::SpeakingState);
+    let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
+
+    let utterance = engine
+        .speak(&model, "Hello there.", None, None, None, None)
+        .await
+        .expect("speak");
+
+    let (topic, start) = next_event(&mut rx).await.expect("a start event");
+    assert_eq!(topic, "speaking_state");
+    assert_eq!(start["is_speaking"], true);
+    assert_eq!(start["utterance_id"], utterance.id.as_str());
+
+    let (_, stop) = next_event(&mut rx).await.expect("a stop event");
+    assert_eq!(stop["is_speaking"], false);
+    assert_eq!(stop["utterance_id"], utterance.id.as_str());
+}
+
+/// A superseded utterance must not clear the state belonging to the one that
+/// replaced it — otherwise the applet shows "not speaking" while speech plays.
+#[tokio::test]
+async fn a_superseded_utterance_does_not_clear_the_new_ones_state() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let bus = Arc::new(EventBus::new());
+    let mut rx = bus.subscribe(Topic::SpeakingState);
+    let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
+
+    let mut first = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    let second = engine
+        .speak(&model, "Interrupting.", None, None, None, None)
+        .await
+        .expect("second");
+    // The first session is now superseded; ending it must not publish a stop.
+    first.end().await.expect("end the superseded session");
+
+    let events = drain_events(&mut rx).await;
+    let last_stop = events
+        .iter()
+        .rev()
+        .find(|e| e["is_speaking"] == false)
+        .expect("a stop was published");
+    assert_eq!(
+        last_stop["utterance_id"],
+        second.id.as_str(),
+        "the final stop must belong to the utterance that actually finished"
+    );
+}
+
+/// The visualizer is fed from playback now, so the applet renders speech the
+/// same way it used to render a microphone.
+#[tokio::test]
+async fn frequency_bands_are_published_from_playback() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let bus = Arc::new(EventBus::new());
+    let mut rx = bus.subscribe(Topic::FrequencyBands);
+    let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
+
+    engine
+        .speak(&model, "Hello there.", None, None, None, None)
+        .await
+        .expect("speak");
+
+    let (topic, bands) = next_event(&mut rx).await.expect("bands were published");
+    assert_eq!(topic, "frequency_bands");
+    assert_eq!(
+        bands["sample_rate"], 24000.0,
+        "the analyzer runs at the backend's rate, before resampling"
+    );
+    assert!(bands["bands_b64"].is_string());
+}
+
+#[tokio::test]
+async fn speech_progress_is_published_for_the_utterance() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let bus = Arc::new(EventBus::new());
+    let mut rx = bus.subscribe(Topic::SpeechProgress);
+    let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
+
+    let utterance = engine
+        .speak(&model, "Hello there.", None, None, None, None)
+        .await
+        .expect("speak");
+
+    let (topic, progress) = next_event(&mut rx).await.expect("progress was published");
+    assert_eq!(topic, "speech_progress");
+    assert_eq!(progress["utterance_id"], utterance.id.as_str());
+    assert!(progress["queued_ms"].as_u64().is_some());
+}

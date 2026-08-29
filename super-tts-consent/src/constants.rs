@@ -25,6 +25,16 @@ pub const SPEAK_PERMISSIONS: &[&str] = &[
     "Interrupt or stop speech this or another app started",
 ];
 
+/// Bullets for the `playback_events` scope.
+///
+/// Reading these events reveals *when* the machine is speaking and how far
+/// through it is — not the text — so the bullets say exactly that rather than
+/// implying access to content the scope does not grant.
+pub const PLAYBACK_EVENTS_PERMISSIONS: &[&str] = &[
+    "See when speech starts and stops",
+    "See how far through the current speech playback has got",
+];
+
 /// Bullets for the `status` scope.
 pub const STATUS_PERMISSIONS: &[&str] =
     &["Read which speech-to-text model and device are currently active"];

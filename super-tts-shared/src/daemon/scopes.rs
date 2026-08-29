@@ -16,6 +16,7 @@ pub const KNOWN_SCOPES: &[&str] = &[
     "secrets",
     "status",
     "recording_events",
+    "playback_events",
     "audio_visualization",
     "global_transcriptions",
     "daemon_status",
@@ -41,6 +42,10 @@ mod tests {
             "secrets must be an accepted scope"
         );
         assert!(is_known_scope("speak"), "speak must be an accepted scope");
+        assert!(
+            is_known_scope("playback_events"),
+            "playback_events must be an accepted scope"
+        );
     }
 
     #[test]

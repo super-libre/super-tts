@@ -46,6 +46,10 @@ use crate::text::chunk::{ChunkPolicy, Chunker};
 /// device for as long as it liked.
 pub const MAX_TEXT_CHARS: usize = 50_000;
 
+/// FFT window for the playback visualizer. Matches what the capture path used,
+/// so the applet renders speech the same way it rendered a microphone.
+const ANALYSIS_WINDOW: usize = 1024;
+
 /// A running or finished utterance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Utterance {
@@ -238,6 +242,9 @@ pub struct SpeechEngine {
     current: CurrentSlot,
     /// Overrides the real device; set by tests to run with no audio hardware.
     test_format: Option<DeviceFormat>,
+    /// Where `speaking_state`, `speech_progress`, and `frequency_bands` go.
+    /// `None` in tests that only inspect the ring.
+    events: Option<Arc<crate::daemon::events::EventBus>>,
 }
 
 impl std::fmt::Debug for SpeechEngine {
@@ -262,6 +269,7 @@ impl SpeechEngine {
             playback: tokio::sync::Mutex::new(None),
             current: CurrentSlot::default(),
             test_format: None,
+            events: None,
         }
     }
 
@@ -275,7 +283,19 @@ impl SpeechEngine {
             playback: tokio::sync::Mutex::new(None),
             current: CurrentSlot::default(),
             test_format: Some(format),
+            events: None,
         }
+    }
+
+    /// Publish playback events to `bus`.
+    ///
+    /// Separate from construction because the daemon builds the engine and the
+    /// bus independently; without a bus the engine still speaks, it is just
+    /// silent on `/events`.
+    #[must_use]
+    pub fn with_events(mut self, bus: Arc<crate::daemon::events::EventBus>) -> Self {
+        self.events = Some(bus);
+        self
     }
 
     /// The id of the utterance currently in flight, if any.
@@ -323,6 +343,9 @@ impl SpeechEngine {
         let id = taken.map(|(id, _)| id);
         if let Some(id) = &id {
             debug!("cancelled in-flight utterance {id}");
+            if let Some(bus) = &self.events {
+                bus.publish_speaking_state(false, Some(id.clone()));
+            }
         }
         id
     }
@@ -364,10 +387,30 @@ impl SpeechEngine {
         // synthesis finishes.
         let pump = tokio::spawn({
             let playback = Arc::clone(&playback);
+            let bus = self.events.clone();
             async move {
+                // The visualizer is fed from here rather than from the audio
+                // callback: the pump sees every sample on its way to the ring,
+                // and analysis on the callback thread would risk the device
+                // deadline for a cosmetic feature.
+                let mut analyzer = None;
                 while let Some(msg) = rx.recv().await {
                     match msg {
                         PcmMsg::Samples(samples, params) => {
+                            if let Some(bus) = &bus {
+                                let analyzer = analyzer.get_or_insert_with(|| {
+                                    super_tts_shared::audio::AudioAnalyzer::new(
+                                        params.sample_rate,
+                                        ANALYSIS_WINDOW,
+                                    )
+                                });
+                                let data = analyzer.analyze(&samples);
+                                bus.publish_frequency_bands(
+                                    &data.bands,
+                                    crate::num_cast::u32_to_f32(params.sample_rate),
+                                    data.total_energy,
+                                );
+                            }
                             if let Err(e) = playback.push(&samples, params).await {
                                 warn!("playback push failed: {e}");
                                 break;
@@ -380,8 +423,12 @@ impl SpeechEngine {
         });
 
         let (events_tx, events_rx) = mpsc::unbounded_channel::<SpeechEvent>();
+        if let Some(bus) = &self.events {
+            bus.publish_speaking_state(true, Some(id.clone()));
+        }
         Ok(SpeakSession {
             slot: Arc::clone(&self.current),
+            bus: self.events.clone(),
             id,
             model: Arc::clone(model),
             options: options.into_owned(),
@@ -467,6 +514,7 @@ impl SpeechEngine {
 /// the ring flushed, so an abandoned connection cannot leave audio playing.
 pub struct SpeakSession {
     slot: CurrentSlot,
+    bus: Option<Arc<crate::daemon::events::EventBus>>,
     id: String,
     model: SharedLoadedModel,
     options: OwnedSpeakOptions,
@@ -558,7 +606,45 @@ impl SpeakSession {
         for chunk in chunks {
             self.synthesize(&chunk).await?;
         }
+        self.publish_progress();
         Ok(())
+    }
+
+    /// Whether the engine's slot still holds *this* utterance.
+    ///
+    /// Strictly equal, never "the slot is empty": an empty slot means someone
+    /// already released it — a later utterance that has since finished — and
+    /// treating that as "still mine" lets a superseded session publish state
+    /// about audio it is not producing.
+    fn is_current(&self) -> bool {
+        self.slot
+            .lock()
+            .as_ref()
+            .is_some_and(|(cur, _)| *cur == self.id)
+    }
+
+    /// Publish a `speech_progress` update for this utterance.
+    fn publish_progress(&self) {
+        if !self.is_current() {
+            return;
+        }
+        if let Some(bus) = &self.bus {
+            let (spoken_ms, queued_ms) = self.progress();
+            bus.publish_speech_progress(self.id.clone(), spoken_ms, queued_ms);
+        }
+    }
+
+    /// Announce that this utterance is no longer speaking — but only if it is
+    /// still the current one. A superseded session must not clear the state
+    /// belonging to the utterance that replaced it, or an applet shows "not
+    /// speaking" while speech is playing.
+    fn publish_stopped(&self) {
+        if !self.is_current() {
+            return;
+        }
+        if let Some(bus) = &self.bus {
+            bus.publish_speaking_state(false, Some(self.id.clone()));
+        }
     }
 
     /// Complete the utterance: flush the tail through both stages, synthesize
@@ -591,6 +677,8 @@ impl SpeakSession {
                 self.id, self.chars, self.chunks, self.marks
             );
         }
+        self.publish_progress();
+        self.publish_stopped();
         self.release_slot();
         Ok(Utterance {
             id: self.id.clone(),
@@ -608,6 +696,7 @@ impl SpeakSession {
             let _ = pump.await;
         }
         self.playback.cancel();
+        self.publish_stopped();
         self.release_slot();
     }
 
@@ -683,6 +772,7 @@ impl Drop for SpeakSession {
             pump.abort();
         }
         self.playback.cancel();
+        self.publish_stopped();
         self.release_slot();
     }
 }
