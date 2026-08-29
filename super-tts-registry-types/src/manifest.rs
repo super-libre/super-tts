@@ -151,6 +151,16 @@ pub struct Capabilities {
     /// Required for any model with `realtime = true`. Default `false`.
     #[serde(default)]
     pub websocket: bool,
+    /// Reserved. Opts a backend into an incremental-text path, so it can hold
+    /// an upstream provider's prosodic context across deltas instead of
+    /// receiving one chunk per request.
+    ///
+    /// Not specified yet: the daemon implements no such path, and a manifest
+    /// declaring it is rejected at parse rather than silently ignored — a
+    /// backend author who sets this is expecting behavior that does not exist,
+    /// and the loud failure is the honest answer.
+    #[serde(default)]
+    pub streaming_input: bool,
 }
 
 /// `[assets]` — binary artifacts a release publishes, so the registry indexer
@@ -436,6 +446,38 @@ pub struct ModelEntry {
     /// before `POST /v1/load`. Cloud models declare none.
     #[serde(default)]
     pub files: Vec<FileSpec>,
+    /// Longest `text` the model accepts in one `POST /v1/synthesize`. Absent
+    /// means unbounded: the daemon sends whole utterances and never splits for
+    /// length. When set, the daemon chunks on sentence boundaries to stay
+    /// under it.
+    #[serde(default)]
+    pub max_input_chars: Option<u32>,
+    /// Native output sample rate in Hz, e.g. `24000`.
+    ///
+    /// Advisory. The authoritative rate is the `x-tts-sample-rate` response
+    /// header on each synthesis, which is what the daemon resamples from — a
+    /// manifest cannot know what a cloud provider will actually return. This
+    /// value exists so the settings UI can show an output rate and the daemon
+    /// can pre-size buffers before the first response arrives.
+    #[serde(default)]
+    pub output_sample_rate: Option<u32>,
+    /// Voice used when a synthesis request omits `voice`. Required when
+    /// `voices` is non-empty; must name one of them.
+    #[serde(default)]
+    pub default_voice: Option<String>,
+    /// Which kinds of `voice` id this model accepts. Default `["preset"]`.
+    /// The daemon refuses an id shape the model did not opt into, so a backend
+    /// never sees one it cannot resolve.
+    #[serde(default = "default_voice_kinds")]
+    pub voice_kinds: Vec<VoiceKind>,
+    /// Longest reference audio accepted for a cloned voice, in seconds.
+    /// Required when `voice_kinds` contains `cloned`, forbidden otherwise.
+    #[serde(default)]
+    pub clone_ref_seconds: Option<f32>,
+    /// Preset voices the model provides. Empty for models whose voices are
+    /// entirely cloned or described.
+    #[serde(default)]
+    pub voices: Vec<VoiceEntry>,
     /// Compatibility shim; not part of model identity, which is
     /// `(name, source)`.
     ///
@@ -526,6 +568,62 @@ impl<'de> Deserialize<'de> for Device {
     }
 }
 
+/// A kind of `voice` id a model accepts on `POST /v1/synthesize`.
+///
+/// The kind is carried by the id's shape, so the daemon can route without
+/// asking the backend: a bare id is a preset, `voice:<uuid>` is a cloned voice
+/// the daemon holds reference audio for, and `desc:<text>` is a free-text
+/// description for models that can synthesize a voice from one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceKind {
+    /// A voice declared in `[[models.voices]]`, named by a bare id.
+    Preset,
+    /// A user-cloned voice, `voice:<uuid>`. The daemon pushes reference audio
+    /// on the request; requires `clone_ref_seconds`.
+    Cloned,
+    /// A free-text voice description, `desc:<text>`.
+    Described,
+}
+
+impl fmt::Display for VoiceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Preset => write!(f, "preset"),
+            Self::Cloned => write!(f, "cloned"),
+            Self::Described => write!(f, "described"),
+        }
+    }
+}
+
+/// One `[[models.voices]]` entry: a preset voice the backend provides.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct VoiceEntry {
+    /// The `voice` id sent on `POST /v1/synthesize`. Unique within the model.
+    pub id: String,
+    /// Display name for the voice picker. Falls back to `id` when absent.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Primary language of the voice. Must be one of the model's
+    /// `supported_languages` when set.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// Free-form tags for filtering in the picker, e.g. `["warm", "female"]`.
+    /// Not interpreted by the daemon.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+impl VoiceEntry {
+    /// Display name: `label` when set, otherwise the bare `id`.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.id)
+    }
+}
+
 /// One `[[models.files]]` entry: a single file to download and where to put it.
 ///
 /// Source-agnostic — a file is just a URL, fetched the same way regardless of
@@ -548,6 +646,13 @@ pub struct FileSpec {
 
 fn default_true() -> bool {
     true
+}
+
+/// A model that says nothing about voices accepts preset ids only — the
+/// conservative reading, since cloning and description both need capability
+/// the backend has to have opted into.
+fn default_voice_kinds() -> Vec<VoiceKind> {
+    vec![VoiceKind::Preset]
 }
 
 /// Errors from reading/parsing a `backend.toml`.
@@ -634,6 +739,82 @@ pub enum ManifestError {
         /// The asset's label (its `file`, or its first `parts` entry).
         file: String,
     },
+    /// Two `[[models.voices]]` under one model share an `id`.
+    #[error("model `{model}` declares voice id `{id}` more than once")]
+    DuplicateVoiceId {
+        /// The model declaring the duplicate.
+        model: String,
+        /// The repeated voice id.
+        id: String,
+    },
+    /// A model declared `[[models.voices]]` but no `default_voice`.
+    #[error("model `{model}` declares voices but no `default_voice`")]
+    MissingDefaultVoice {
+        /// The model missing the default.
+        model: String,
+    },
+    /// `default_voice` does not name any declared voice.
+    #[error("model `{model}` sets `default_voice = {voice:?}`, which is not a declared voice")]
+    UnknownDefaultVoice {
+        /// The model with the dangling default.
+        model: String,
+        /// The value that matched no voice.
+        voice: String,
+    },
+    /// A voice's `language` is not in the model's `supported_languages`.
+    #[error(
+        "model `{model}` voice `{id}` declares language `{language}`, \
+         which is not in `supported_languages`"
+    )]
+    VoiceLanguageUnsupported {
+        /// The model declaring the voice.
+        model: String,
+        /// The voice id.
+        id: String,
+        /// The unsupported language tag.
+        language: String,
+    },
+    /// `voice_kinds` was declared empty; a model must accept at least one kind.
+    #[error("model `{model}` declares an empty `voice_kinds`")]
+    VoiceKindsEmpty {
+        /// The model with the empty list.
+        model: String,
+    },
+    /// `voice_kinds` contains `cloned` but `clone_ref_seconds` is absent.
+    #[error("model `{model}` accepts cloned voices but declares no `clone_ref_seconds`")]
+    CloneMissingRefSeconds {
+        /// The model missing the bound.
+        model: String,
+    },
+    /// `clone_ref_seconds` was declared without `cloned` in `voice_kinds`.
+    #[error("model `{model}` declares `clone_ref_seconds` without `cloned` in `voice_kinds`")]
+    CloneRefSecondsRequiresCloned {
+        /// The model with the stray bound.
+        model: String,
+    },
+    /// `clone_ref_seconds` is not a positive, finite number of seconds.
+    #[error("model `{model}` declares a non-positive `clone_ref_seconds`")]
+    CloneRefSecondsInvalid {
+        /// The model with the bad bound.
+        model: String,
+    },
+    /// `max_input_chars` was declared as zero, which would admit no text.
+    #[error("model `{model}` declares `max_input_chars = 0`")]
+    MaxInputCharsZero {
+        /// The model with the unusable bound.
+        model: String,
+    },
+    /// `output_sample_rate` is outside the range any audio device serves.
+    #[error("model `{model}` declares `output_sample_rate = {rate}`, outside 8000..=192000")]
+    OutputSampleRateOutOfRange {
+        /// The model with the implausible rate.
+        model: String,
+        /// The declared rate.
+        rate: u32,
+    },
+    /// `[capabilities] streaming_input` is reserved and not yet implemented.
+    #[error("`[capabilities] streaming_input` is reserved and not yet supported")]
+    StreamingInputReserved,
 }
 
 impl Manifest {
@@ -658,6 +839,12 @@ impl Manifest {
         {
             return Err(ManifestError::InvalidId(id.clone()));
         }
+        // Reserved capability: refuse rather than ignore, so an author who
+        // declares it learns the path does not exist instead of shipping a
+        // backend that silently never receives incremental text.
+        if m.capabilities.streaming_input {
+            return Err(ManifestError::StreamingInputReserved);
+        }
         // Each file's `destination` is joined onto the backend dir before the
         // daemon writes the download; reject any value that would escape it.
         // The guard lives in the canonical parser so every consumer inherits it.
@@ -667,6 +854,7 @@ impl Manifest {
                     return Err(ManifestError::UnsafeDestination(file.destination.clone()));
                 }
             }
+            Self::validate_voices(model)?;
         }
         // A subprocess build variant names its archive with exactly one of
         // `file` (single) or `parts` (split across release assets, concatenated
@@ -718,6 +906,87 @@ impl Manifest {
         Ok(m)
     }
 
+    /// Voice and synthesis-bound coherence for one `[[models]]` entry.
+    ///
+    /// Kept in the canonical parser alongside the path and asset guards, so
+    /// the daemon and the indexer reject the same manifests — a voice the
+    /// picker can offer but the backend cannot resolve is a runtime failure
+    /// the user sees as a dead entry in a dropdown.
+    fn validate_voices(model: &ModelEntry) -> Result<(), ManifestError> {
+        let name = || model.name.clone();
+
+        if model.voice_kinds.is_empty() {
+            return Err(ManifestError::VoiceKindsEmpty { model: name() });
+        }
+
+        let mut seen = std::collections::BTreeSet::new();
+        for voice in &model.voices {
+            if !seen.insert(voice.id.as_str()) {
+                return Err(ManifestError::DuplicateVoiceId {
+                    model: name(),
+                    id: voice.id.clone(),
+                });
+            }
+            // A voice pinned to a language the model does not accept can never
+            // be selected successfully, so it is a manifest bug, not a runtime
+            // one.
+            if let Some(lang) = &voice.language
+                && !model.supported_languages.contains(lang)
+            {
+                return Err(ManifestError::VoiceLanguageUnsupported {
+                    model: name(),
+                    id: voice.id.clone(),
+                    language: lang.clone(),
+                });
+            }
+        }
+
+        match &model.default_voice {
+            None if !model.voices.is_empty() => {
+                return Err(ManifestError::MissingDefaultVoice { model: name() });
+            }
+            // A default naming no declared voice is only detectable here: the
+            // backend would answer `unsupported_voice` for every request that
+            // omitted a voice, which reads as "the model is broken".
+            Some(v) if !seen.contains(v.as_str()) => {
+                return Err(ManifestError::UnknownDefaultVoice {
+                    model: name(),
+                    voice: v.clone(),
+                });
+            }
+            _ => {}
+        }
+
+        let clones = model.voice_kinds.contains(&VoiceKind::Cloned);
+        match model.clone_ref_seconds {
+            None if clones => {
+                return Err(ManifestError::CloneMissingRefSeconds { model: name() });
+            }
+            Some(_) if !clones => {
+                return Err(ManifestError::CloneRefSecondsRequiresCloned { model: name() });
+            }
+            Some(s) if !(s.is_finite() && s > 0.0) => {
+                return Err(ManifestError::CloneRefSecondsInvalid { model: name() });
+            }
+            _ => {}
+        }
+
+        if model.max_input_chars == Some(0) {
+            return Err(ManifestError::MaxInputCharsZero { model: name() });
+        }
+
+        if let Some(rate) = model.output_sample_rate
+            && !(8000..=192_000).contains(&rate)
+        {
+            return Err(ManifestError::OutputSampleRateOutOfRange {
+                model: name(),
+                rate,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Read and parse `<dir>/backend.toml`.
     ///
     /// # Errors
@@ -752,6 +1021,174 @@ mod tests {
         contract = "v1"
         description = "Test backend."
         "#;
+
+    /// `VALID` plus one `[[models]]` entry, so the voice rules have something
+    /// to attach to. `body` is appended inside the model table.
+    fn with_model(body: &str) -> String {
+        format!(
+            "{VALID}
+            [[models]]
+            name = \"m\"
+            primary_language = \"en\"
+            supported_languages = [\"en\", \"es\"]
+            supported_devices = [\"cpu\"]
+            {body}
+            "
+        )
+    }
+
+    #[test]
+    fn a_model_declaring_no_voice_fields_accepts_presets_only() {
+        let m = Manifest::parse(&with_model("")).expect("voice fields are all optional");
+        let model = &m.models[0];
+        assert_eq!(model.voice_kinds, vec![VoiceKind::Preset]);
+        assert!(model.voices.is_empty());
+        assert!(model.default_voice.is_none());
+        assert!(model.max_input_chars.is_none());
+        assert!(model.output_sample_rate.is_none());
+    }
+
+    #[test]
+    fn parses_preset_voices_with_a_default() {
+        let m = Manifest::parse(&with_model(
+            r#"
+            default_voice = "bella"
+            output_sample_rate = 24000
+            max_input_chars = 500
+            voices = [
+                { id = "bella", label = "Bella", language = "en", tags = ["warm"] },
+                { id = "nova" },
+            ]
+            "#,
+        ))
+        .expect("a well-formed voice table parses");
+        let model = &m.models[0];
+        assert_eq!(model.voices.len(), 2);
+        assert_eq!(model.voices[0].display_name(), "Bella");
+        // `label` absent falls back to the bare id.
+        assert_eq!(model.voices[1].display_name(), "nova");
+        assert_eq!(model.default_voice.as_deref(), Some("bella"));
+        assert_eq!(model.max_input_chars, Some(500));
+        assert_eq!(model.output_sample_rate, Some(24000));
+    }
+
+    #[test]
+    fn rejects_duplicate_voice_ids() {
+        let err = Manifest::parse(&with_model(
+            r#"
+            default_voice = "bella"
+            voices = [{ id = "bella" }, { id = "bella" }]
+            "#,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::DuplicateVoiceId { .. }));
+    }
+
+    #[test]
+    fn rejects_voices_without_a_default() {
+        let err = Manifest::parse(&with_model(r#"voices = [{ id = "bella" }]"#)).unwrap_err();
+        assert!(matches!(err, ManifestError::MissingDefaultVoice { .. }));
+    }
+
+    #[test]
+    fn rejects_a_default_voice_that_names_nothing() {
+        let err = Manifest::parse(&with_model(
+            r#"
+            default_voice = "ghost"
+            voices = [{ id = "bella" }]
+            "#,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, ManifestError::UnknownDefaultVoice { .. }));
+    }
+
+    #[test]
+    fn rejects_a_voice_language_the_model_does_not_support() {
+        let err = Manifest::parse(&with_model(
+            r#"
+            default_voice = "bella"
+            voices = [{ id = "bella", language = "ja" }]
+            "#,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::VoiceLanguageUnsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_an_empty_voice_kinds_list() {
+        let err = Manifest::parse(&with_model("voice_kinds = []")).unwrap_err();
+        assert!(matches!(err, ManifestError::VoiceKindsEmpty { .. }));
+    }
+
+    #[test]
+    fn cloning_requires_a_reference_length_bound() {
+        let err = Manifest::parse(&with_model(r#"voice_kinds = ["cloned"]"#)).unwrap_err();
+        assert!(matches!(err, ManifestError::CloneMissingRefSeconds { .. }));
+
+        let m = Manifest::parse(&with_model(
+            r#"
+            voice_kinds = ["preset", "cloned"]
+            clone_ref_seconds = 12.0
+            "#,
+        ))
+        .expect("cloned + a bound parses");
+        assert_eq!(m.models[0].clone_ref_seconds, Some(12.0));
+    }
+
+    #[test]
+    fn rejects_a_reference_bound_without_cloning() {
+        let err = Manifest::parse(&with_model("clone_ref_seconds = 12.0")).unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::CloneRefSecondsRequiresCloned { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_a_non_positive_reference_bound() {
+        for bad in ["0.0", "-3.0", "nan"] {
+            let err = Manifest::parse(&with_model(&format!(
+                "voice_kinds = [\"cloned\"]\nclone_ref_seconds = {bad}"
+            )))
+            .unwrap_err();
+            assert!(
+                matches!(err, ManifestError::CloneRefSecondsInvalid { .. }),
+                "clone_ref_seconds = {bad} must be rejected, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_zero_max_input_chars() {
+        let err = Manifest::parse(&with_model("max_input_chars = 0")).unwrap_err();
+        assert!(matches!(err, ManifestError::MaxInputCharsZero { .. }));
+    }
+
+    #[test]
+    fn rejects_an_implausible_output_sample_rate() {
+        for bad in [7999, 192_001] {
+            let err =
+                Manifest::parse(&with_model(&format!("output_sample_rate = {bad}"))).unwrap_err();
+            assert!(matches!(
+                err,
+                ManifestError::OutputSampleRateOutOfRange { .. }
+            ));
+        }
+        assert!(Manifest::parse(&with_model("output_sample_rate = 48000")).is_ok());
+    }
+
+    #[test]
+    fn rejects_the_reserved_streaming_input_capability() {
+        let t = format!("{VALID}\n[capabilities]\nstreaming_input = true\n");
+        let err = Manifest::parse(&t).unwrap_err();
+        assert!(matches!(err, ManifestError::StreamingInputReserved));
+        // The neighbouring capability is unaffected.
+        let ok = format!("{VALID}\n[capabilities]\nwebsocket = true\n");
+        assert!(Manifest::parse(&ok).is_ok());
+    }
 
     #[test]
     fn parses_a_manifest_declaring_a_backend_id() {

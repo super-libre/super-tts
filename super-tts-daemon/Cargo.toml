@@ -118,7 +118,10 @@
     # has cuda/cudnn/flash-attn features.
     default = ["subprocess-backends", "wasm-backends"]
     # Spawn STT backends as sandboxed native subprocesses.
-    subprocess-backends = ["dep:bytes", "hyper/client"]
+    # `http-body` is shared with the wasm transport: `stt_models::v1` pumps a
+    # framed synthesis body generically over `http_body::Body`, so both
+    # transports reach it through the same code.
+    subprocess-backends = ["dep:bytes", "dep:http-body", "hyper/client"]
     # Build the mock_backend test fixture binary (used by tests/subprocess_mock.rs).
     test-fixtures = ["hyper-util/service"]
     # Load STT backends as sandboxed WASM components.

@@ -352,7 +352,7 @@ pub struct IndexStale {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::ModelEntry;
+    use crate::manifest::{ModelEntry, VoiceKind};
 
     /// The published `index.json` must keep carrying `provider` on every model.
     /// Daemons through v0.2.0 declare it as a required `String`, so an index
@@ -406,6 +406,12 @@ mod tests {
             processing_interval_ms: None,
             realtime: false,
             files: vec![],
+            max_input_chars: None,
+            output_sample_rate: None,
+            default_voice: None,
+            voice_kinds: vec![VoiceKind::Preset],
+            clone_ref_seconds: None,
+            voices: vec![],
             provider: None,
         }
     }

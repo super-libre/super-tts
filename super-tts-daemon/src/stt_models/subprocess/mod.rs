@@ -254,6 +254,56 @@ impl SubprocessBackend {
         Ok((status, bytes))
     }
 
+    /// `POST /v1/synthesize` — drive one synthesis and feed `sink` as frames
+    /// decode.
+    ///
+    /// The body is read incrementally rather than collected: a subprocess
+    /// backend writes PCM as it produces it, so the daemon can begin playing
+    /// well before synthesis ends.
+    ///
+    /// # Errors
+    /// Returns an error if the socket dial or request fails, the response is
+    /// not `200`, the headers do not describe usable audio, or the frame stream
+    /// is malformed.
+    pub async fn synthesize(
+        &self,
+        req: &crate::stt_models::v1::SynthesizeRequest<'_>,
+        sink: &mut impl crate::stt_models::v1::SynthesisSink,
+    ) -> Result<()> {
+        let body = crate::stt_models::v1::build_synthesize_body(req)?;
+
+        let stream = UnixStream::connect(&self.socket)
+            .await
+            .with_context(|| format!("connect {}", self.socket.display()))?;
+        let io = TokioIo::new(stream);
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+        // The connection task must keep running while the body streams — the
+        // response is not complete when `send_request` resolves.
+        let pump = tokio::spawn(async move {
+            let _ = conn.await;
+        });
+
+        let request = hyper::Request::builder()
+            .method("POST")
+            .uri("/v1/synthesize")
+            .header("host", "backend.local")
+            .header("content-type", "application/json")
+            .header("x-tts-model", self.model_id.as_str())
+            .body(Full::new(Bytes::from(body)))?;
+
+        let resp = sender.send_request(request).await?;
+        let status = resp.status().as_u16();
+        let (parts, body) = resp.into_parts();
+        let result = if status == 200 {
+            crate::stt_models::v1::pump_synthesis(&parts.headers, body, sink).await
+        } else {
+            let collected = body.collect().await?.to_bytes();
+            Err(crate::stt_models::v1::synthesize_error(status, &collected))
+        };
+        pump.abort();
+        result
+    }
+
     /// Capture recent unit logs for diagnostics.
     fn unit_logs(&self) -> String {
         std::process::Command::new("journalctl")

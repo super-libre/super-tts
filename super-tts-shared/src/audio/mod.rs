@@ -4,6 +4,11 @@
 pub mod types;
 pub use types::*;
 
+// The `POST /v1/synthesize` response framing. Pure parsing over `serde` — no
+// audio-stack dependency — so backend hosts, tests, and fixtures share one
+// definition of the wire format.
+pub mod frames;
+
 // The analyzer that produces the data — needs the FFT stack, so it is gated
 // behind the `analysis` feature. Consumers that only render bands (the applet)
 // get `FrequencyData` from `types` without pulling in `spectrum-analyzer`.

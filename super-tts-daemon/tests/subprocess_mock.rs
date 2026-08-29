@@ -11,6 +11,8 @@
 
 use super_tts_daemon::stt_models::subprocess::SubprocessBackend;
 use super_tts_daemon::stt_models::transcribe::Transcribe;
+use super_tts_daemon::stt_models::v1::{CollectingSink, SynthesizeRequest};
+use super_tts_shared::audio::frames::{FrameKind, SampleFormat};
 
 /// Removes the per-test backend dir on scope exit — including panic unwinds, so a
 /// failed assertion doesn't leak `~/.cache/super-tts-mock-test-<pid>`.
@@ -44,6 +46,12 @@ async fn subprocess_orchestration_against_mock() {
     if std::env::var("SUPER_TTS_TEST_SUBPROCESS").is_err() {
         return; // needs a systemd --user session
     }
+    // `main` installs the provider for the real daemon; an integration test is
+    // its own process and has to do the same, or the first reqwest client built
+    // during spawn panics with "No provider set". Without this the test fails
+    // before it reaches any assertion — which is why the gap survived: it only
+    // runs with SUPER_TTS_TEST_SUBPROCESS=1, never on CI.
+    super_tts_daemon::install_crypto_provider();
 
     // Build a backend dir outside /tmp: PrivateTmp=yes in the systemd sandbox makes
     // /tmp private, so ReadOnlyPaths=/tmp/... bind mounts fail at namespace setup.
@@ -67,6 +75,49 @@ async fn subprocess_orchestration_against_mock() {
         .await
         .expect("transcribe");
     assert_eq!(text, "mock transcription");
+
+    // Synthesize drives /v1/synthesize → a framed s16le ramp read incrementally
+    // off the socket. The ramp is the point: silence would survive a decoder
+    // that dropped a frame or lost the bytes straddling a frame boundary.
+    let mut sink = CollectingSink::default();
+    backend
+        .synthesize(
+            &SynthesizeRequest {
+                text: "hello",
+                ..Default::default()
+            },
+            &mut sink,
+        )
+        .await
+        .expect("synthesize");
+
+    let params = sink.params.expect("params arrive before any frame");
+    assert_eq!(params.sample_rate, 24000);
+    assert_eq!(params.channels, 1);
+    assert_eq!(params.format, SampleFormat::S16Le);
+    assert_eq!(
+        sink.frames
+            .iter()
+            .filter(|f| f.kind == FrameKind::Audio)
+            .count(),
+        4,
+        "the mock splits the ramp across 4 frames"
+    );
+
+    let samples = sink.samples();
+    assert_eq!(samples.len(), 960);
+    for (i, got) in samples.iter().enumerate() {
+        let want = f32::from(i16::try_from(i).unwrap()) / 32768.0;
+        assert!(
+            (got - want).abs() < 1e-6,
+            "sample {i}: got {got}, want {want}"
+        );
+    }
+    assert_eq!(
+        sink.frames.last().expect("frames were received").kind,
+        FrameKind::Done,
+        "the stream must end with a terminal frame"
+    );
 
     backend.shutdown().await.expect("clean shutdown");
 }

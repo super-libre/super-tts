@@ -35,6 +35,7 @@ async fn main() {
         .route("/v1/status", get(status))
         .route("/v1/load", post(load))
         .route("/v1/transcribe", post(transcribe))
+        .route("/v1/synthesize", post(synthesize))
         .route(
             "/v1/cancel",
             post(|| async { Json(json!({ "status": "success", "message": "Cancelled" })) }),
@@ -80,6 +81,89 @@ async fn load(State(s): State<Arc<AppState>>, _body: String) -> impl IntoRespons
         StatusCode::ACCEPTED,
         Json(json!({ "status": "success", "message": "Loading started" })),
     )
+}
+
+/// Sample rate the mock declares on `/v1/synthesize`.
+pub const MOCK_SAMPLE_RATE: u32 = 24000;
+/// Samples the mock synthesizes, split across [`MOCK_AUDIO_FRAMES`] frames so
+/// the test exercises reassembly rather than a single-frame happy path.
+pub const MOCK_SAMPLE_COUNT: usize = 960;
+/// How many audio frames the ramp is split across.
+pub const MOCK_AUDIO_FRAMES: usize = 4;
+
+/// The known ramp the mock emits: sample `i` is `i` as an `i16`. A ramp rather
+/// than silence, so a decoder that drops or misaligns bytes yields a visibly
+/// wrong sequence instead of a plausible one.
+#[must_use]
+pub fn mock_samples() -> Vec<i16> {
+    (0..MOCK_SAMPLE_COUNT)
+        .map(|i| i16::try_from(i).unwrap_or(i16::MAX))
+        .collect()
+}
+
+/// `POST /v1/synthesize` — the framed binary body: several `audio` frames
+/// carrying the ramp as s16le, one `mark`, then `done`.
+///
+/// Frames are built by hand rather than with the shared codec: this fixture
+/// stands in for a third-party backend, so encoding it independently means the
+/// test checks the wire format instead of round-tripping one implementation
+/// against itself.
+const KIND_AUDIO: u8 = 0x01;
+const KIND_MARK: u8 = 0x02;
+const KIND_DONE: u8 = 0x03;
+
+/// `[u8 kind][u32 len little-endian][payload]`.
+fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.push(kind);
+    out.extend_from_slice(
+        &u32::try_from(payload.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(payload);
+    out
+}
+
+async fn synthesize(State(s): State<Arc<AppState>>, _body: String) -> axum::response::Response {
+    use axum::http::header::CONTENT_TYPE;
+
+    if !s.loaded.load(Ordering::SeqCst) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "status": "error", "message": "not_ready" })),
+        )
+            .into_response();
+    }
+
+    let pcm: Vec<u8> = mock_samples()
+        .iter()
+        .flat_map(|s| s.to_le_bytes())
+        .collect();
+    let mut body = Vec::new();
+    for chunk in pcm.chunks(pcm.len() / MOCK_AUDIO_FRAMES) {
+        body.extend(frame(KIND_AUDIO, chunk));
+    }
+    body.extend(frame(
+        KIND_MARK,
+        br#"{"start_ms":0,"end_ms":40,"start_char":0,"end_char":5}"#,
+    ));
+    body.extend(frame(KIND_DONE, b"{}"));
+
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, "application/vnd.super-tts.frames"),
+            (
+                axum::http::HeaderName::from_static("x-tts-sample-rate"),
+                "24000",
+            ),
+            (axum::http::HeaderName::from_static("x-tts-channels"), "1"),
+            (axum::http::HeaderName::from_static("x-tts-format"), "s16le"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 async fn transcribe(State(s): State<Arc<AppState>>, _body: String) -> (StatusCode, Json<Value>) {

@@ -322,6 +322,103 @@ impl WasmBackend {
         Ok((status, collected.to_vec()))
     }
 
+    /// `POST /v1/synthesize` — drive one synthesis and feed `sink` as frames
+    /// decode.
+    ///
+    /// Unlike [`Self::invoke`], the guest call and the body read run
+    /// **concurrently**. A `wasi:http` guest hands over its response head
+    /// (`ResponseOutparam::set`) before it starts writing the body, so awaiting
+    /// the guest to completion first — which is what `invoke` does, correctly,
+    /// for the small JSON routes — would buffer the whole utterance and make
+    /// time-to-first-audio equal total synthesis time. Joining the two lets the
+    /// daemon start playing while the component is still producing.
+    ///
+    /// # Errors
+    /// Returns an error if the component cannot be invoked, the response is not
+    /// `200`, the headers do not describe usable audio, or the frame stream is
+    /// malformed.
+    pub async fn synthesize(
+        &self,
+        req: &crate::stt_models::v1::SynthesizeRequest<'_>,
+        sink: &mut impl crate::stt_models::v1::SynthesisSink,
+    ) -> Result<()> {
+        let host = Host {
+            table: ResourceTable::new(),
+            wasi: WasiCtx::builder().build(),
+            http: WasiHttpCtx::new(),
+            hooks: self.allowlist_hooks(),
+        };
+        let mut store = Store::new(&self.engine, host);
+
+        let body = crate::stt_models::v1::build_synthesize_body(req)?;
+        let mut builder = hyper::Request::builder()
+            .method("POST")
+            .uri("http://backend.local/v1/synthesize")
+            .header("content-type", "application/json");
+        for (key, value) in &self.transcribe_headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        builder = builder.header("x-tts-model", self.model_id.as_str());
+        let request = builder
+            .body(
+                http_body_util::Full::new(bytes::Bytes::from(body))
+                    .map_err(|never: std::convert::Infallible| -> ErrorCode { match never {} }),
+            )
+            .context("building synthesize request")?;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let incoming = store
+            .data_mut()
+            .http()
+            .new_incoming_request(Scheme::Http, request)?;
+        let out = store.data_mut().http().new_response_outparam(tx)?;
+
+        // The guest half: runs the component to completion, writing the body as
+        // it goes.
+        let guest = async {
+            match &self.pre {
+                BackendPre::Http(p) => {
+                    let proxy = p.instantiate_async(&mut store).await?;
+                    proxy
+                        .wasi_http_incoming_handler()
+                        .call_handle(&mut store, incoming, out)
+                        .await
+                }
+                BackendPre::Realtime(p) => {
+                    let inst = p.instantiate_async(&mut store).await?;
+                    inst.wasi_http_incoming_handler()
+                        .call_handle(&mut store, incoming, out)
+                        .await
+                }
+            }
+        };
+
+        // The reader half: takes the head as soon as the guest publishes it,
+        // then decodes frames off the body while the guest keeps writing. It
+        // touches no wasmtime state, so it can borrow nothing from `store`.
+        let reader = async {
+            let response = rx
+                .await
+                .context("backend produced no response")?
+                .map_err(|e| anyhow!("backend transport error: {e:?}"))?;
+            let status = response.status().as_u16();
+            let (parts, body) = response.into_parts();
+            if status != 200 {
+                let collected = body.collect().await?.to_bytes();
+                return Err(crate::stt_models::v1::synthesize_error(status, &collected));
+            }
+            crate::stt_models::v1::pump_synthesis(&parts.headers, body, sink).await
+        };
+
+        let (guest_result, read_result) = tokio::join!(guest, reader);
+        // Report the read failure first: it names what was wrong with the
+        // stream, whereas a guest trap on a half-written body is usually the
+        // downstream symptom.
+        read_result?;
+        guest_result?;
+        Ok(())
+    }
+
     /// `GET /v1/status` — readiness snapshot.
     ///
     /// # Errors

@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super_tts_daemon::stt_models::transcribe::{ModelInfoData, Transcribe};
+use super_tts_daemon::stt_models::v1::{CollectingSink, SynthesizeRequest};
 use super_tts_daemon::stt_models::wasm::WasmBackend;
+use super_tts_shared::audio::frames::{FrameKind, Mark, SampleFormat};
 
 /// Path to the prebuilt mock component (`just build-mock-wasm-backend`).
 fn mock_component() -> Option<PathBuf> {
@@ -48,6 +50,72 @@ async fn wasm_orchestration_against_mock() {
         .await
         .expect("transcription should succeed");
     assert_eq!(text, "mock transcription");
+}
+
+/// `/v1/synthesize` end to end through the real host: the mock emits a known
+/// s16le ramp across four audio frames plus a mark and a `done`, and the host
+/// must reassemble exactly that.
+///
+/// The ramp is what makes this test load-bearing — silence or a constant would
+/// survive a decoder that dropped a frame, misordered chunks, or lost the
+/// bytes straddling a frame boundary.
+#[tokio::test]
+async fn wasm_synthesize_streams_known_pcm() {
+    let Some(path) = mock_component() else {
+        eprintln!("skipping: mock component not built (run `just build-mock-wasm-backend`)");
+        return;
+    };
+    let backend = WasmBackend::new(&path, Vec::new(), "mock".to_string(), Vec::new())
+        .expect("load mock backend");
+
+    let mut sink = CollectingSink::default();
+    backend
+        .synthesize(
+            &SynthesizeRequest {
+                text: "hello",
+                ..Default::default()
+            },
+            &mut sink,
+        )
+        .await
+        .expect("synthesis should succeed");
+
+    let params = sink.params.expect("params arrive before any frame");
+    assert_eq!(params.sample_rate, 24000);
+    assert_eq!(params.channels, 1);
+    assert_eq!(params.format, SampleFormat::S16Le);
+
+    let audio: Vec<_> = sink
+        .frames
+        .iter()
+        .filter(|f| f.kind == FrameKind::Audio)
+        .collect();
+    assert_eq!(audio.len(), 4, "the mock splits the ramp across 4 frames");
+
+    let samples = sink.samples();
+    assert_eq!(samples.len(), 960);
+    for (i, got) in samples.iter().enumerate() {
+        let want = f32::from(i16::try_from(i).unwrap()) / 32768.0;
+        assert!(
+            (got - want).abs() < 1e-6,
+            "sample {i}: got {got}, want {want}"
+        );
+    }
+
+    let mark = sink
+        .frames
+        .iter()
+        .find(|f| f.kind == FrameKind::Mark)
+        .expect("the mock emits one mark");
+    let mark: Mark = serde_json::from_slice(&mark.payload).expect("mark is JSON");
+    assert_eq!(mark.start_char, Some(0));
+    assert_eq!(mark.end_char, Some(5));
+
+    assert_eq!(
+        sink.frames.last().expect("frames were received").kind,
+        FrameKind::Done,
+        "the stream must end with a terminal frame"
+    );
 }
 
 /// The two egress lists must reach the hooks in the right slots. Nothing else
