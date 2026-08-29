@@ -26,9 +26,7 @@
     chrono.workspace = true
     clap.workspace = true
     cpal.workspace = true
-    dashmap.workspace = true
     dirs.workspace = true
-    enigo.workspace = true
     flate2 = "1.1.9"
     futures = "0.3"
     gpu-probe = "0.1.1"
@@ -47,7 +45,6 @@
     reqwest.workspace = true
     # Hashing for content-addressed blobs
     ring = "0.17"
-    rubato.workspace = true
     rustls = {
         version = "0.23",
         default-features = false,
@@ -56,8 +53,6 @@
     semver = "1.0.28"
     serde.workspace = true
     serde_json.workspace = true
-    strum.workspace = true
-    strum_macros.workspace = true
     super-tts-forge = { path = "../super-tts-forge" }
     super-tts-registry-types = { path = "../super-tts-registry-types" }
     # Shared crate
@@ -117,14 +112,14 @@
     # default. GPU residency now lives in the backend, so the daemon no longer
     # has cuda/cudnn/flash-attn features.
     default = ["subprocess-backends", "wasm-backends"]
-    # Spawn STT backends as sandboxed native subprocesses.
+    # Spawn TTS backends as sandboxed native subprocesses.
     # `http-body` is shared with the wasm transport: `tts_models::v1` pumps a
     # framed synthesis body generically over `http_body::Body`, so both
     # transports reach it through the same code.
     subprocess-backends = ["dep:bytes", "dep:http-body", "hyper/client"]
     # Build the mock_backend test fixture binary (used by tests/subprocess_mock.rs).
     test-fixtures = ["hyper-util/service"]
-    # Load STT backends as sandboxed WASM components.
+    # Load TTS backends as sandboxed WASM components.
     wasm-backends = [
         "dep:bytes",
         "dep:http-body",

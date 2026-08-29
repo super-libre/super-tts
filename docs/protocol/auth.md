@@ -325,7 +325,8 @@ Rules to remember:
 
 ## Token characteristics
 
-- **Shape:** 32-byte random value, hex-encoded, prefixed `stt_`.
+- **Shape:** 32-byte random value, hex-encoded — 64 lowercase hex
+  characters, with no prefix.
 - **Lifetime:** 30 days from issue (`expires_at` returned alongside
   the token).
 - **Scopes:** The set the user approved, bound at issue time. To

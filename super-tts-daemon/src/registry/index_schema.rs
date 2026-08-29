@@ -296,11 +296,11 @@ mod tests {
             schema_version: 1,
             generated_at: "now".into(),
             min_client: "0.1.0".into(),
-            backends: vec![safe_backend("voxtral", Some("../../../../home/jorge/.ssh"))],
+            backends: vec![safe_backend("piper", Some("../../../../home/jorge/.ssh"))],
         };
         retain_safe_backends(&mut index);
         assert_eq!(index.backends.len(), 1, "the entry itself must survive");
-        assert_eq!(index.backends[0].id, "voxtral");
+        assert_eq!(index.backends[0].id, "piper");
         assert!(
             index.backends[0].backend_id.is_none(),
             "an unsafe backend_id must be cleared, not passed through"
@@ -323,7 +323,7 @@ mod tests {
             schema_version: 1,
             generated_at: "now".into(),
             min_client: "0.1.0".into(),
-            backends: vec![safe_backend("voxtral", Some(".staging"))],
+            backends: vec![safe_backend("piper", Some(".staging"))],
         };
         retain_safe_backends(&mut index);
         assert_eq!(index.backends.len(), 1, "the entry itself must survive");
@@ -338,12 +338,12 @@ mod tests {
     /// boundary must not be more lenient than the daemon's own contract.
     #[test]
     fn retain_safe_backends_clears_a_malformed_backend_id() {
-        for malformed in ["voxtral", "app.voxtral", "app.super_tts.voxtral", "APP.X.Y"] {
+        for malformed in ["piper", "app.piper", "app.super_tts.piper", "APP.X.Y"] {
             let mut index = Index {
                 schema_version: 1,
                 generated_at: "now".into(),
                 min_client: "0.1.0".into(),
-                backends: vec![safe_backend("voxtral", Some(malformed))],
+                backends: vec![safe_backend("piper", Some(malformed))],
             };
             retain_safe_backends(&mut index);
             assert!(
@@ -359,12 +359,12 @@ mod tests {
             schema_version: 1,
             generated_at: "now".into(),
             min_client: "0.1.0".into(),
-            backends: vec![safe_backend("voxtral", Some("app.super-tts.voxtral"))],
+            backends: vec![safe_backend("piper", Some("app.super-tts.piper"))],
         };
         retain_safe_backends(&mut index);
         assert_eq!(
             index.backends[0].backend_id.as_deref(),
-            Some("app.super-tts.voxtral")
+            Some("app.super-tts.piper")
         );
     }
 

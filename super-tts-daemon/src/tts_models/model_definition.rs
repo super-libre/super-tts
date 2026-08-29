@@ -13,7 +13,7 @@
 //!
 //! `(name, source)` is the canonical wire-level identity:
 //!
-//! - `name` — the model's wire name (e.g. `whisper-1`, `voxtral-mini`).
+//! - `name` — the model's wire name (e.g. `kokoro-82m`, `piper-en-us`).
 //! - `source` — the repo id of the backend that serves the model, e.g.
 //!   `github.com/super-tts/openai`.
 

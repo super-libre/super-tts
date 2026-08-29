@@ -171,7 +171,7 @@ pub(super) fn muted_text_color() -> cosmic::iced::Color {
 }
 
 /// One-line caption listing the model names a backend serves, joined by " · "
-/// (e.g. `"whisper-large-v3 · whisper-medium"`). De-emphasized so it reads as a
+/// (e.g. `"kokoro-82m · piper-en-us"`). De-emphasized so it reads as a
 /// secondary detail under the card's description. `None` when there are none.
 pub(super) fn models_line<'a>(names: &[String]) -> Option<Element<'a, Message>> {
     if names.is_empty() {

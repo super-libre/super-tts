@@ -461,8 +461,8 @@ mod language_config_tests {
 
         cfg.update_primary_language(Some("es-MX".to_string()));
         cfg.update_model_language(
-            "github.com/x/whisper".to_string(),
-            "whisper-large".to_string(),
+            "github.com/x/kokoro".to_string(),
+            "kokoro-large".to_string(),
             Some("fr".to_string()),
         );
 
@@ -471,10 +471,10 @@ mod language_config_tests {
 
         assert_eq!(back.primary_language(), Some("es-MX"));
         assert_eq!(
-            back.model_language("github.com/x/whisper", "whisper-large"),
+            back.model_language("github.com/x/kokoro", "kokoro-large"),
             Some("fr")
         );
-        assert_eq!(back.model_language("github.com/x/whisper", "absent"), None);
+        assert_eq!(back.model_language("github.com/x/kokoro", "absent"), None);
     }
 
     #[test]

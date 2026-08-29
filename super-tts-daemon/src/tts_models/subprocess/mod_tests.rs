@@ -6,7 +6,7 @@ use crate::tts_models::backends::manifest::Manifest;
 
 /// Backends released against the earlier `(name, provider)` model identity
 /// validate `provider` on load and answer `400 invalid_model` when it is
-/// absent — the shipped qwen3-asr backend does exactly this. Dropping the key
+/// absent — the shipped xtts backend does exactly this. Dropping the key
 /// from the body makes every model of every such backend unloadable, with no
 /// version gate that could soften it, so a manifest that declares `provider`
 /// must still have it forwarded.
@@ -15,15 +15,15 @@ use crate::tts_models::backends::manifest::Manifest;
 /// those backends have rolled over.
 #[test]
 fn load_forwards_the_provider_a_manifest_declares() {
-    let body = load_body("whisper-tiny", Some("local_whisper"), "cuda");
+    let body = load_body("kokoro-tiny", Some("local_kokoro"), "cuda");
     assert_eq!(
         body.get("provider").and_then(serde_json::Value::as_str),
-        Some("local_whisper"),
+        Some("local_kokoro"),
         "/v1/load dropped `provider`; backends validating it answer 400 invalid_model: {body}"
     );
     assert_eq!(
         body.get("name").and_then(serde_json::Value::as_str),
-        Some("whisper-tiny")
+        Some("kokoro-tiny")
     );
     assert_eq!(
         body.get("device").and_then(serde_json::Value::as_str),
@@ -36,7 +36,7 @@ fn load_forwards_the_provider_a_manifest_declares() {
 /// would start rejecting a load it previously accepted.
 #[test]
 fn load_omits_provider_and_device_when_unset() {
-    let body = load_body("whisper-tiny", None, "");
+    let body = load_body("kokoro-tiny", None, "");
     assert!(
         body.get("provider").is_none(),
         "manifest declared no provider but the load body invented one: {body}"
@@ -59,7 +59,7 @@ fn load_omits_provider_and_device_when_unset() {
 #[test]
 fn load_sends_the_resolved_accelerator_and_never_the_bare_preference() {
     for accel in ["cpu", "cuda", "rocm", "vulkan", "metal"] {
-        let body = load_body("whisper-tiny", None, accel);
+        let body = load_body("kokoro-tiny", None, accel);
         assert_eq!(
             body.get("device").and_then(serde_json::Value::as_str),
             Some(accel),
@@ -71,7 +71,7 @@ fn load_sends_the_resolved_accelerator_and_never_the_bare_preference() {
     // record existed. `gpu` is the user's preference, and the contract says
     // this field is not that; an absent `device` means "auto-select", which is
     // the honest signal.
-    let unresolved = load_body("whisper-tiny", None, "");
+    let unresolved = load_body("kokoro-tiny", None, "");
     assert!(
         unresolved.get("device").is_none(),
         "an unresolved accel must omit `device`, not send a preference: {unresolved}"
@@ -86,17 +86,17 @@ fn load_sends_the_resolved_accelerator_and_never_the_bare_preference() {
 fn a_manifests_provider_reaches_the_load_body() {
     let toml = r#"
 [backend]
-source = "github.com/jorge-menjivar/super-tts-qwen-asr"
-name = "Qwen3 ASR"
+source = "github.com/jorge-menjivar/super-tts-xtts"
+name = "XTTS"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "super-tts-qwen-asr"
+entrypoint = "super-tts-xtts"
 contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "qwen3-asr-flash"
-provider = "local_qwen3_asr"
+name = "xtts-flash"
+provider = "local_xtts_asr"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -104,12 +104,12 @@ supported_devices = ["cuda"]
 "#;
     let manifest = Manifest::parse(toml).expect("fixture manifest parses");
     let model = &manifest.models[0];
-    assert_eq!(model.provider.as_deref(), Some("local_qwen3_asr"));
+    assert_eq!(model.provider.as_deref(), Some("local_xtts_asr"));
 
     let body = load_body(&model.name, model.provider.as_deref(), "cuda");
     assert_eq!(
         body.get("provider").and_then(serde_json::Value::as_str),
-        Some("local_qwen3_asr"),
+        Some("local_xtts_asr"),
         "the manifest's provider did not reach the load body: {body}"
     );
 }

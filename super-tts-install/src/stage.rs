@@ -411,8 +411,10 @@ mod tests {
     /// counter so parallel tests in this binary never collide).
     fn test_dir() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("stts-install-stage-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-install-stage-{}-{n}",
+            std::process::id()
+        ));
         // F6: clear a pre-existing directory first — the pid+counter name
         // is only unique within one process run, so PID reuse across
         // separate test-binary invocations could otherwise leak files from

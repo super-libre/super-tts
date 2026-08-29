@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn the_backends_catalog_still_carries_the_provider_key() {
         let m = BackendModel {
-            name: "whisper-1".into(),
+            name: "kokoro-1".into(),
             provider: String::new(),
             supported_devices: vec!["cpu".into()],
             estimated_vram_bytes: 0,
@@ -191,15 +191,15 @@ mod tests {
     #[test]
     fn an_incoming_provider_is_tolerated_but_not_read() {
         let json = serde_json::json!({
-            "name": "whisper-1",
-            "provider": "local_whisper",
+            "name": "kokoro-1",
+            "provider": "local_kokoro",
             "supported_devices": ["cpu"],
         });
         let m: BackendModel = serde_json::from_value(json).expect("parses with `provider` present");
-        assert_eq!(m.name, "whisper-1");
+        assert_eq!(m.name, "kokoro-1");
         assert_eq!(m.provider, "", "the shim must not adopt an incoming value");
 
-        let without = serde_json::json!({ "name": "whisper-1" });
+        let without = serde_json::json!({ "name": "kokoro-1" });
         let m: BackendModel =
             serde_json::from_value(without).expect("parses with `provider` absent");
         assert_eq!(m.provider, "");

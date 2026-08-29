@@ -36,31 +36,31 @@ mod tests {
 
     #[test]
     fn accepts_reverse_dns_ids() {
-        assert!(is_valid("app.super-tts.voxtral"));
-        assert!(is_valid("com.example.whisper"));
+        assert!(is_valid("app.super-tts.piper"));
+        assert!(is_valid("com.example.kokoro"));
         assert!(is_valid("io.a.b.c.d"));
-        assert!(is_valid("org.x.qwen3-asr"));
+        assert!(is_valid("org.x.xtts"));
     }
 
     #[test]
     fn rejects_malformed_ids() {
         assert!(!is_valid(""), "empty");
-        assert!(!is_valid("voxtral"), "one segment");
-        assert!(!is_valid("app.voxtral"), "two segments");
-        assert!(!is_valid("app..voxtral"), "consecutive dots");
-        assert!(!is_valid(".app.super-tts.voxtral"), "leading dot");
-        assert!(!is_valid("app.super-tts.voxtral."), "trailing dot");
+        assert!(!is_valid("piper"), "one segment");
+        assert!(!is_valid("app.piper"), "two segments");
+        assert!(!is_valid("app..piper"), "consecutive dots");
+        assert!(!is_valid(".app.super-tts.piper"), "leading dot");
+        assert!(!is_valid("app.super-tts.piper."), "trailing dot");
         assert!(
-            !is_valid("app.super-tts.3voxtral"),
+            !is_valid("app.super-tts.3piper"),
             "segment starts with a digit"
         );
         assert!(
-            !is_valid("app.super-tts.voxtral-"),
+            !is_valid("app.super-tts.piper-"),
             "segment ends with a hyphen"
         );
-        assert!(!is_valid("App.Super-STT.Voxtral"), "uppercase");
-        assert!(!is_valid("app.super_tts.voxtral"), "underscore");
-        assert!(!is_valid("app/super-tts/voxtral"), "path separator");
+        assert!(!is_valid("App.Super-TTS.Piper"), "uppercase");
+        assert!(!is_valid("app.super_tts.piper"), "underscore");
+        assert!(!is_valid("app/super-tts/piper"), "path separator");
         assert!(!is_valid(".."), "parent dir");
     }
 
@@ -74,7 +74,7 @@ mod tests {
     /// must not rest on them alone.
     #[test]
     fn every_valid_id_is_a_safe_path_component() {
-        for id in ["app.super-tts.voxtral", "com.example.whisper", "io.a.b.c.d"] {
+        for id in ["app.super-tts.piper", "com.example.kokoro", "io.a.b.c.d"] {
             assert!(crate::is_safe_component(id), "{id}");
         }
     }

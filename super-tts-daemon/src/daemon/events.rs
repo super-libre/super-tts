@@ -503,7 +503,7 @@ mod tests {
             "model_loaded": true,
         }));
         bus.publish_download_progress(serde_json::json!({
-            "model_name": "whisper-tiny",
+            "model_name": "kokoro-tiny",
             "percentage": 42.5,
         }));
 
@@ -514,7 +514,7 @@ mod tests {
 
         let (topic, payload) = prog_rx.recv_json().await.expect("download progress");
         assert_eq!(topic, "download_progress");
-        assert_eq!(payload["model_name"], serde_json::json!("whisper-tiny"));
+        assert_eq!(payload["model_name"], serde_json::json!("kokoro-tiny"));
     }
 
     /// A `None` on an optional payload field is omitted from the wire rather

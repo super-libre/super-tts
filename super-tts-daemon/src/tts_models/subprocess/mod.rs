@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Host for STT backends shipped as sandboxed native subprocesses
+//! Host for TTS backends shipped as sandboxed native subprocesses
 //! (experimental — gated behind the `subprocess-backends` feature).
 //!
 //! [`SubprocessBackend`] provisions a backend's model files (downloading from
@@ -105,11 +105,15 @@ impl SubprocessBackend {
             "backends/{}.sock",
             sanitize(model_name)
         ));
-        let socket_dir = socket.parent().map_or_else(
-            || PathBuf::from("/tmp/stt/backends"),
-            std::path::Path::to_path_buf,
-        );
-        std::fs::create_dir_all(&socket_dir)?;
+        // `secure_runtime_path` always returns at least
+        // `<runtime>/tts/backends/<name>.sock`, so a missing parent is
+        // unreachable. Surface that as an error rather than inventing a
+        // directory: the previous fallback named `/tmp/stt/backends`, which was
+        // both the wrong path and a world-writable home for backend sockets.
+        let socket_dir = socket
+            .parent()
+            .context("backend socket path has no parent directory")?;
+        std::fs::create_dir_all(socket_dir)?;
         let _ = std::fs::remove_file(&socket);
 
         let binary = backend_dir.join(&manifest.backend.entrypoint);
@@ -129,7 +133,7 @@ impl SubprocessBackend {
             &unit,
             &binary,
             backend_dir,
-            &socket_dir,
+            socket_dir,
             &socket,
             &model.supported_devices,
         )

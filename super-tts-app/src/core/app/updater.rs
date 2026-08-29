@@ -457,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn sweep_stale_run_dirs_removes_only_old_siblings_and_never_touches_keep() {
         let base = std::env::temp_dir().join(format!(
-            "stts-app-updater-sweep-test-{}",
+            "super-tts-app-updater-sweep-test-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&base);
@@ -490,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn sweep_stale_run_dirs_leaves_a_just_created_sibling_alone() {
         let base = std::env::temp_dir().join(format!(
-            "stts-app-updater-sweep-fresh-test-{}",
+            "super-tts-app-updater-sweep-fresh-test-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&base);
@@ -511,7 +511,7 @@ mod tests {
     #[tokio::test]
     async fn sweep_stale_run_dirs_tolerates_a_missing_base_dir() {
         let base = std::env::temp_dir().join(format!(
-            "stts-app-updater-sweep-missing-test-{}",
+            "super-tts-app-updater-sweep-missing-test-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&base);
@@ -521,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn create_run_dir_makes_a_private_0700_directory() {
         let base = std::env::temp_dir().join(format!(
-            "stts-app-updater-rundir-test-{}",
+            "super-tts-app-updater-rundir-test-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&base).unwrap();
@@ -538,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn verify_installer_checksum_matches_and_rejects_corruption() {
         let dir = std::env::temp_dir().join(format!(
-            "stts-app-updater-checksum-test-{}",
+            "super-tts-app-updater-checksum-test-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -693,7 +693,7 @@ mod tests {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "stts-app-updater-dl-nolen-{}-{n}",
+            "super-tts-app-updater-dl-nolen-{}-{n}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

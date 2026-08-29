@@ -40,7 +40,8 @@ mod tests {
     #[test]
     fn verify_file_matches_known_vector() {
         // sha256("hello world\n") — a standard test vector.
-        let dir = std::env::temp_dir().join(format!("stts-install-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("super-tts-install-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("hello.txt");
         std::fs::write(&f, "hello world\n").unwrap();
@@ -65,8 +66,10 @@ mod tests {
         // The daemon's and app's own checksum lookups rely on this
         // case-insensitivity too (`sha256_matches`) — an `index.json`/manifest
         // pin may be upper- or mixed-case.
-        let dir =
-            std::env::temp_dir().join(format!("stts-install-test-upper-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-install-test-upper-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("hello.txt");
         std::fs::write(&f, "hello world\n").unwrap();
@@ -82,7 +85,7 @@ mod tests {
         // that must surface as "not listed", not a checksum-mismatch bug
         // report about a digest nobody actually published.
         let dir = std::env::temp_dir().join(format!(
-            "stts-install-test-malformed-{}",
+            "super-tts-install-test-malformed-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();

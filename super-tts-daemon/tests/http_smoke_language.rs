@@ -82,7 +82,7 @@ description = "Your OpenAI API key."
 required = true
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 primary_language = "en"
 multilingual = true
 supported_languages = ["en", "es", "es-MX", "fr", "de"]
@@ -254,9 +254,9 @@ async fn global_language_round_trips() {
 /// The fixture backend's source, URL-percent-encoded for the path segment.
 const FIXTURE_SOURCE_ENC: &str = "github.com%2Fsuper-tts%2Fopenai";
 
-/// Per-model language path for the fixture's `whisper-1` model.
+/// Per-model language path for the fixture's `kokoro-1` model.
 fn fixture_model_lang_path() -> String {
-    format!("/backends/{FIXTURE_SOURCE_ENC}/models/whisper-1/language")
+    format!("/backends/{FIXTURE_SOURCE_ENC}/models/kokoro-1/language")
 }
 
 /// Case 2 — Per-model round-trip without a loaded model.
@@ -354,7 +354,7 @@ async fn per_model_language_unknown_targets_are_404() {
     assert_eq!(body["message"], "unknown_model", "{body}");
 
     // Unknown source entirely.
-    let unknown_source = "/backends/github.com%2Fno%2Fsuch/models/whisper-1/language";
+    let unknown_source = "/backends/github.com%2Fno%2Fsuch/models/kokoro-1/language";
     let (st, body) = get(&sock, unknown_source, &token).await;
     assert_eq!(
         st,

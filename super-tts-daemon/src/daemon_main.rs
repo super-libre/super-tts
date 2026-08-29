@@ -134,7 +134,7 @@ pub async fn run() -> Result<()> {
 
     // `std::process::exit` below skips every `Drop` destructor — without
     // this explicit unload the `systemd-run --user` subprocess backend
-    // (e.g. Voxtral) would be orphaned. Call the daemon's shutdown unload
+    // (e.g. Piper) would be orphaned. Call the daemon's shutdown unload
     // path so `Synthesize::shutdown()` runs in an async context and stops
     // the unit cleanly.
     daemon.shutdown_unload().await;

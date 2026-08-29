@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn tar_escape_paths_are_unsafe() {
-        assert!(tar_entry_unsafe_reason("bin/qwen3-asr", false).is_none());
+        assert!(tar_entry_unsafe_reason("bin/xtts", false).is_none());
         assert!(tar_entry_unsafe_reason("model/weights.bin", false).is_none());
         assert!(tar_entry_unsafe_reason("/etc/passwd", false).is_some());
         assert!(tar_entry_unsafe_reason("../escape", false).is_some());
@@ -266,8 +266,10 @@ mod tests {
     #[test]
     fn file_sha256_hex_matches_known_vector() {
         // sha256("hello world\n") — a standard test vector.
-        let dir =
-            std::env::temp_dir().join(format!("stts-registry-verify-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-registry-verify-test-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("hello.txt");
         std::fs::write(&f, "hello world\n").unwrap();
@@ -280,8 +282,10 @@ mod tests {
 
     #[test]
     fn file_sha256_hex_of_empty_file() {
-        let dir =
-            std::env::temp_dir().join(format!("stts-registry-verify-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-registry-verify-test-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("empty.txt");
         std::fs::write(&f, []).unwrap();
@@ -300,8 +304,10 @@ mod tests {
     /// with this crate's own hasher, so it actually catches that slip.
     #[test]
     fn file_sha256_hex_multi_read_loop_over_1mib_buffer() {
-        let dir =
-            std::env::temp_dir().join(format!("stts-registry-verify-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-registry-verify-test-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("big.bin");
         let size: usize = 1024 * 1024 + 777; // > 1 MiB buffer, not a multiple of it

@@ -18,7 +18,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper-tiny"
+preferred_model = "kokoro-tiny"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert!(!config.online.allow_online_models);
@@ -38,18 +38,18 @@ fn config_with_online_section_round_trips() {
 fn config_with_online_model_preferred_round_trips() {
     let mut config = DaemonConfig::default();
     config.online.allow_online_models = true;
-    config.synthesis.preferred_model = "whisper-1".to_string();
+    config.synthesis.preferred_model = "kokoro-1".to_string();
 
     let toml_str = toml::to_string_pretty(&config).expect("should serialize");
     let parsed: DaemonConfig = toml::from_str(&toml_str).expect("should deserialize");
     assert!(parsed.online.allow_online_models);
-    assert_eq!(parsed.synthesis.preferred_model, "whisper-1");
+    assert_eq!(parsed.synthesis.preferred_model, "kokoro-1");
 }
 
 #[test]
 fn config_preserves_all_online_model_variants() {
     for name in [
-        "whisper-1",
+        "kokoro-1",
         "gpt-4o-mini-tts",
         "tts-1-hd",
         "eleven-multilingual-v2",
@@ -88,7 +88,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper-tiny"
+preferred_model = "kokoro-tiny"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert!(config.synthesis.custom_models_dir.is_none());
@@ -168,7 +168,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper-1"
+preferred_model = "kokoro-1"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert!(config.backends.options.is_empty());
@@ -189,8 +189,8 @@ theme = "silent"
 volume = 75
 
 [synthesis]
-preferred_model = "whisper-tiny"
-preferred_provider = "LocalWhisper"
+preferred_model = "kokoro-tiny"
+preferred_provider = "LocalKokoro"
 preferred_source = "BadValue"
 
 [online]
@@ -201,9 +201,9 @@ allow_online_models = true
     // Both are free-form strings now — any value is accepted, and the legacy
     // provider is carried through rather than rejected or dropped.
     assert_eq!(config.synthesis.preferred_source, "BadValue");
-    assert_eq!(config.synthesis.preferred_provider, "LocalWhisper");
+    assert_eq!(config.synthesis.preferred_provider, "LocalKokoro");
     // Other fields must survive the field-level fallback.
-    assert_eq!(config.synthesis.preferred_model, "whisper-tiny");
+    assert_eq!(config.synthesis.preferred_model, "kokoro-tiny");
     assert_eq!(config.audio.theme, AudioTheme::Silent);
     assert_eq!(config.audio.volume, 75);
     assert!(config.online.allow_online_models);
@@ -220,16 +220,16 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper-base"
-preferred_provider = "local_voxtral"
-preferred_source = "github.com/super-tts/voxtral"
+preferred_model = "kokoro-base"
+preferred_provider = "local_piper"
+preferred_source = "github.com/super-tts/piper"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert_eq!(
         config.synthesis.preferred_source,
-        "github.com/super-tts/voxtral"
+        "github.com/super-tts/piper"
     );
-    assert_eq!(config.synthesis.preferred_provider, "local_voxtral");
+    assert_eq!(config.synthesis.preferred_provider, "local_piper");
 }
 
 /// `synthesis.active_backend` defaults to `None` (no backend selected
@@ -270,7 +270,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper-tiny"
+preferred_model = "kokoro-tiny"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert!(config.synthesis.active_backend.is_none());
@@ -288,7 +288,7 @@ theme = "Nonexistent"
 volume = 80
 
 [synthesis]
-preferred_model = "WhisperTiny"
+preferred_model = "KokoroTiny"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml_str).expect("must parse, not error");
     assert_eq!(cfg.audio.theme, AudioTheme::default()); // bad field reset
@@ -350,9 +350,9 @@ fn cleared_preferred_model_persists_as_idle_with_backend_kept() {
     // selected, and that state must survive a save/reload so a daemon restart
     // stays idle instead of reloading the just-unloaded model.
     let mut config = DaemonConfig::default();
-    config.synthesis.preferred_model = "whisper-large-v3".to_string();
-    config.synthesis.preferred_source = "openai-whisper".to_string();
-    config.synthesis.active_backend = Some("openai-whisper".to_string());
+    config.synthesis.preferred_model = "kokoro-large-v3".to_string();
+    config.synthesis.preferred_source = "openai-kokoro".to_string();
+    config.synthesis.active_backend = Some("openai-kokoro".to_string());
 
     // Simulate the clear (the method itself also calls save(), which touches
     // the real config path, so exercise the field effect directly).
@@ -369,7 +369,7 @@ fn cleared_preferred_model_persists_as_idle_with_backend_kept() {
     assert!(parsed.synthesis.preferred_source.is_empty());
     assert_eq!(
         parsed.synthesis.active_backend.as_deref(),
-        Some("openai-whisper"),
+        Some("openai-kokoro"),
         "unload keeps the active backend selected"
     );
 }
@@ -391,19 +391,19 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "voxtral-mini"
-preferred_provider = "local_voxtral"
-preferred_source = "github.com/super-tts/voxtral"
+preferred_model = "piper-mini"
+preferred_provider = "local_piper"
+preferred_source = "github.com/super-tts/piper"
 
 [online]
 allow_online_models = false
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("fixture parses");
-    assert_eq!(config.synthesis.preferred_provider, "local_voxtral");
+    assert_eq!(config.synthesis.preferred_provider, "local_piper");
 
     let written = toml::to_string_pretty(&config).expect("serializes");
     assert!(
-        written.contains("preferred_provider = \"local_voxtral\""),
+        written.contains("preferred_provider = \"local_piper\""),
         "a save dropped `preferred_provider`; a rollback to v0.2.0 comes up idle:\n{written}"
     );
 }
@@ -416,19 +416,19 @@ allow_online_models = false
 fn a_model_switch_updates_preferred_provider() {
     let mut config = DaemonConfig::default();
     config.update_preferred_model(
-        "voxtral-mini".to_string(),
-        "github.com/super-tts/voxtral".to_string(),
-        Some("local_voxtral".to_string()),
+        "piper-mini".to_string(),
+        "github.com/super-tts/piper".to_string(),
+        Some("local_piper".to_string()),
     );
-    assert_eq!(config.synthesis.preferred_provider, "local_voxtral");
+    assert_eq!(config.synthesis.preferred_provider, "local_piper");
 
     // Switching to a model from another backend must not leave the old one.
     config.update_preferred_model(
-        "whisper-tiny".to_string(),
-        "github.com/super-tts/whisper".to_string(),
-        Some("local_whisper".to_string()),
+        "kokoro-tiny".to_string(),
+        "github.com/super-tts/kokoro".to_string(),
+        Some("local_kokoro".to_string()),
     );
-    assert_eq!(config.synthesis.preferred_provider, "local_whisper");
+    assert_eq!(config.synthesis.preferred_provider, "local_kokoro");
 
     // A model whose manifest declares none clears it rather than keeping a
     // provider that belongs to a different model.
@@ -452,7 +452,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper"
+preferred_model = "kokoro"
 notification_method = "off"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml).unwrap();
@@ -473,7 +473,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper"
+preferred_model = "kokoro"
 notification_method = "BogusMethod"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml).unwrap();
@@ -495,7 +495,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper"
+preferred_model = "kokoro"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml).unwrap();
     assert_eq!(cfg.synthesis.notification_method, NotificationMethod::Auto);
@@ -524,7 +524,7 @@ theme = "classic"
 volume = 100
 
 [synthesis]
-preferred_model = "whisper-tiny"
+preferred_model = "kokoro-tiny"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml_str).expect("must parse");
     assert!(cfg.update.check_enabled);
@@ -543,7 +543,7 @@ theme = "classic"
 volume = 80
 
 [synthesis]
-preferred_model = "whisper-tiny"
+preferred_model = "kokoro-tiny"
 
 [update]
 check_enabled = false
@@ -576,9 +576,9 @@ fn clearing_the_model_preference_clears_the_provider() {
     let seeded = || {
         let mut c = DaemonConfig::default();
         c.update_preferred_model(
-            "voxtral-mini".to_string(),
-            "github.com/super-tts/voxtral".to_string(),
-            Some("local_voxtral".to_string()),
+            "piper-mini".to_string(),
+            "github.com/super-tts/piper".to_string(),
+            Some("local_piper".to_string()),
         );
         c
     };
@@ -588,7 +588,7 @@ fn clearing_the_model_preference_clears_the_provider() {
     assert_eq!(c.synthesis.preferred_provider, "");
 
     let mut c = seeded();
-    c.update_active_backend("whisper".to_string());
+    c.update_active_backend("kokoro".to_string());
     assert_eq!(
         c.synthesis.preferred_provider, "",
         "selecting a backend drops the model preference; the provider must go too"
@@ -606,19 +606,19 @@ fn clearing_the_model_preference_clears_the_provider() {
 #[test]
 fn rename_active_backend_preserves_the_model_preference() {
     let mut c = DaemonConfig::default();
-    c.synthesis.active_backend = Some("super-tts-voxtral".to_string());
+    c.synthesis.active_backend = Some("super-tts-piper".to_string());
     c.update_preferred_model(
-        "voxtral-mini".to_string(),
-        "github.com/super-tts/voxtral".to_string(),
-        Some("local_voxtral".to_string()),
+        "piper-mini".to_string(),
+        "github.com/super-tts/piper".to_string(),
+        Some("local_piper".to_string()),
     );
 
-    c.rename_active_backend("app.super-tts.voxtral".to_string());
+    c.rename_active_backend("app.super-tts.piper".to_string());
 
     assert_eq!(
         c.synthesis.active_backend.as_deref(),
-        Some("app.super-tts.voxtral")
+        Some("app.super-tts.piper")
     );
-    assert_eq!(c.synthesis.preferred_model, "voxtral-mini");
-    assert_eq!(c.synthesis.preferred_provider, "local_voxtral");
+    assert_eq!(c.synthesis.preferred_model, "piper-mini");
+    assert_eq!(c.synthesis.preferred_provider, "local_piper");
 }

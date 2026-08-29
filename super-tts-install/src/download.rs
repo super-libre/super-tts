@@ -132,7 +132,7 @@ mod tests {
             .with_body(vec![7u8; 4096])
             .create_async()
             .await;
-        let dir = std::env::temp_dir().join(format!("stts-install-dl-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("super-tts-install-dl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("blob");
         let mut calls: Vec<(u64, u64)> = Vec::new();
@@ -164,8 +164,10 @@ mod tests {
             .with_body(vec![9u8; size])
             .create_async()
             .await;
-        let dir =
-            std::env::temp_dir().join(format!("stts-install-dl-throttle-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-install-dl-throttle-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("blob");
         let mut calls: Vec<(u64, u64)> = Vec::new();
@@ -216,7 +218,7 @@ mod tests {
             .create_async()
             .await;
         let dir =
-            std::env::temp_dir().join(format!("stts-install-dl-nolen-{}", std::process::id()));
+            std::env::temp_dir().join(format!("super-tts-install-dl-nolen-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("blob");
         let mut calls: Vec<(u64, u64)> = Vec::new();
@@ -243,7 +245,8 @@ mod tests {
             .with_status(404)
             .create_async()
             .await;
-        let dir = std::env::temp_dir().join(format!("stts-install-dl-404-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("super-tts-install-dl-404-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("blob");
         let err = download_to_file(&format!("{}/missing", s.url()), &dest, |_, _| {})
@@ -263,8 +266,10 @@ mod tests {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.local_addr().unwrap().port()
         };
-        let dir =
-            std::env::temp_dir().join(format!("stts-install-dl-refused-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "super-tts-install-dl-refused-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("blob");
         let err = download_to_file(&format!("http://127.0.0.1:{port}/blob"), &dest, |_, _| {})

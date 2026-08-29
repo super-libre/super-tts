@@ -145,8 +145,8 @@ mod tests {
     #[test]
     fn the_response_still_carries_the_provider_key() {
         let body = active_model_body(
-            Some("voxtral-mini"),
-            Some("github.com/super-tts/voxtral"),
+            Some("piper-mini"),
+            Some("github.com/super-tts/piper"),
             true,
             "cuda",
             None,

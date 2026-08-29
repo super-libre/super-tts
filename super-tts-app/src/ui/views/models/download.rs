@@ -177,7 +177,7 @@ pub(super) fn download_toolbar<'a>(
 
 /// Whether a registry entry matches the search needle. Searches the backend
 /// name, description, and repo id, plus the name of every model it serves —
-/// so "whisper" or "voxtral" find their backend even when the term isn't in
+/// so "kokoro" or "piper" find their backend even when the term isn't in
 /// the display name, and "openai" matches through the repo id.
 pub(super) fn registry_entry_matches(
     entry: &super_tts_shared::registry::RegistryBackend,

@@ -998,14 +998,14 @@ supported_devices = ["cpu"]
 
     #[test]
     fn the_install_dir_is_the_backend_id_when_one_is_declared() {
-        let e = index_entry("voxtral", Some("app.super-tts.voxtral"));
-        assert_eq!(install_dir_name(&e), "app.super-tts.voxtral");
+        let e = index_entry("piper", Some("app.super-tts.piper"));
+        assert_eq!(install_dir_name(&e), "app.super-tts.piper");
     }
 
     #[test]
     fn the_install_dir_falls_back_to_the_registry_key() {
-        let e = index_entry("voxtral", None);
-        assert_eq!(install_dir_name(&e), "voxtral");
+        let e = index_entry("piper", None);
+        assert_eq!(install_dir_name(&e), "piper");
     }
 
     /// `backend_id` arrives from `index.json` over the network. Even if the
@@ -1021,10 +1021,10 @@ supported_devices = ["cpu"]
             "a/b",
             "",
         ] {
-            let e = index_entry("voxtral", Some(unsafe_id));
+            let e = index_entry("piper", Some(unsafe_id));
             assert_eq!(
                 install_dir_name(&e),
-                "voxtral",
+                "piper",
                 "unsafe backend_id {unsafe_id:?} must not be used"
             );
         }
@@ -1042,8 +1042,8 @@ supported_devices = ["cpu"]
             super_tts_shared::registry::is_safe_component(".staging"),
             "the premise: a component-level check accepts .staging"
         );
-        let e = index_entry("voxtral", Some(".staging"));
-        assert_eq!(install_dir_name(&e), "voxtral");
+        let e = index_entry("piper", Some(".staging"));
+        assert_eq!(install_dir_name(&e), "piper");
     }
 
     /// More broadly: `index.json` is the only route into an install directory
@@ -1053,12 +1053,12 @@ supported_devices = ["cpu"]
     fn install_dir_name_rejects_a_malformed_backend_id() {
         for malformed in [
             ".staging",
-            "voxtral",
-            "app.voxtral",
-            "App.Super-STT.Voxtral",
-            "app.super_tts.voxtral",
-            "app..voxtral",
-            "app.super-tts.voxtral-",
+            "piper",
+            "app.piper",
+            "App.Super-TTS.Piper",
+            "app.super_tts.piper",
+            "app..piper",
+            "app.super-tts.piper-",
         ] {
             let e = index_entry("registry-key", Some(malformed));
             assert_eq!(
@@ -1076,7 +1076,7 @@ supported_devices = ["cpu"]
     fn install_dir_name_never_escapes_the_backends_dir_when_joined() {
         let backends_dir = Path::new("/var/lib/super-tts/backends");
         for unsafe_id in ["..", "../../../../home/jorge/.ssh", "/etc/passwd", "a/b"] {
-            let e = index_entry("voxtral", Some(unsafe_id));
+            let e = index_entry("piper", Some(unsafe_id));
             let joined = backends_dir.join(install_dir_name(&e));
             assert!(
                 joined.starts_with(backends_dir),
@@ -1197,7 +1197,7 @@ supported_devices = ["cpu"]
         assert!(!out.join(".git").exists());
     }
 
-    /// A nested entrypoint (`bin/qwen3-asr`) needs its parent created.
+    /// A nested entrypoint (`bin/xtts`) needs its parent created.
     #[test]
     fn wasm_import_creates_the_entrypoints_parent() {
         let src = tempfile::tempdir().unwrap();
@@ -1387,9 +1387,9 @@ description = "Test backend."
     #[test]
     fn ensure_dir_free_for_allows_an_update_of_the_same_backend() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("app.super-tts.voxtral");
-        occupied_backend_dir(&dir, "github.com/x/voxtral");
-        ensure_dir_free_for(&dir, "github.com/x/voxtral").expect("same source is an update");
+        let dir = root.path().join("app.super-tts.piper");
+        occupied_backend_dir(&dir, "github.com/x/piper");
+        ensure_dir_free_for(&dir, "github.com/x/piper").expect("same source is an update");
     }
 
     /// Replacing a half-written or corrupt install is the ordinary repair
@@ -1398,21 +1398,20 @@ description = "Test backend."
     #[test]
     fn ensure_dir_free_for_allows_an_unreadable_directory() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("app.super-tts.voxtral");
+        let dir = root.path().join("app.super-tts.piper");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("backend.toml"), b"this is not toml = = =").unwrap();
-        ensure_dir_free_for(&dir, "github.com/x/voxtral")
-            .expect("a corrupt install is replaceable");
+        ensure_dir_free_for(&dir, "github.com/x/piper").expect("a corrupt install is replaceable");
 
         let empty = root.path().join("brand-new");
-        ensure_dir_free_for(&empty, "github.com/x/voxtral").expect("a fresh install has no dir");
+        ensure_dir_free_for(&empty, "github.com/x/piper").expect("a fresh install has no dir");
     }
 
     #[test]
     fn ensure_dir_free_for_refuses_a_directory_serving_another_backend() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("app.super-tts.voxtral");
-        occupied_backend_dir(&dir, "github.com/x/voxtral");
+        let dir = root.path().join("app.super-tts.piper");
+        occupied_backend_dir(&dir, "github.com/x/piper");
         let err = ensure_dir_free_for(&dir, "github.com/someone/thing").unwrap_err();
         assert_eq!(err.1, InstallError::InstallDirConflict);
     }
@@ -1427,11 +1426,11 @@ description = "Test backend."
     async fn run_local_refuses_to_install_over_a_different_backend() {
         let root = tempfile::tempdir().unwrap();
         let backends_dir = root.path().join("backends");
-        let victim = backends_dir.join("app.super-tts.voxtral");
-        occupied_backend_dir(&victim, "github.com/x/voxtral");
+        let victim = backends_dir.join("app.super-tts.piper");
+        occupied_backend_dir(&victim, "github.com/x/piper");
         let victim_manifest = std::fs::read(victim.join("backend.toml")).unwrap();
 
-        // The staged import: a different backend, but claiming Voxtral's
+        // The staged import: a different backend, but claiming Piper's
         // install directory via `backend_id`.
         let staged = root.path().join("staged");
         std::fs::create_dir_all(&staged).unwrap();
@@ -1440,7 +1439,7 @@ description = "Test backend."
             r#"
 [backend]
 source = "github.com/someone/thing"
-id = "app.super-tts.voxtral"
+id = "app.super-tts.piper"
 name = "Thing"
 version = "9.9.9"
 kind = "subprocess"
@@ -1454,7 +1453,7 @@ description = "Test backend."
 
         let mut entry = minimal_entry();
         entry.id = "thing".into();
-        entry.backend_id = Some("app.super-tts.voxtral".into());
+        entry.backend_id = Some("app.super-tts.piper".into());
         entry.source = "github.com/someone/thing".into();
         entry.entrypoint = "thing".into();
 
@@ -1496,14 +1495,14 @@ description = "Test backend."
         let _ = rustls::crypto::ring::default_provider().install_default();
         let root = tempfile::tempdir().unwrap();
         let backends_dir = root.path().join("backends");
-        let victim = backends_dir.join("app.super-tts.voxtral");
-        occupied_backend_dir(&victim, "github.com/x/voxtral");
+        let victim = backends_dir.join("app.super-tts.piper");
+        occupied_backend_dir(&victim, "github.com/x/piper");
 
         let component = b"\0asm-not-really".to_vec();
         let manifest = r#"
 [backend]
 source = "github.com/someone/thing"
-id = "app.super-tts.voxtral"
+id = "app.super-tts.piper"
 name = "Thing"
 version = "9.9.9"
 kind = "wasm"
@@ -1535,7 +1534,7 @@ supported_devices = ["cpu"]
         entry.id = "thing".into();
         // The poisoned value: a legitimate `source`, but an `id` naming a
         // directory that belongs to someone else.
-        entry.backend_id = Some("app.super-tts.voxtral".into());
+        entry.backend_id = Some("app.super-tts.piper".into());
         entry.source = "github.com/someone/thing".into();
         entry.kind = "wasm".into();
         entry.entrypoint = "thing.wasm".into();
@@ -1577,19 +1576,19 @@ supported_devices = ["cpu"]
     #[tokio::test]
     async fn retire_previous_dir_removes_the_superseded_directory() {
         let root = tempfile::tempdir().unwrap();
-        let old = root.path().join("super-tts-voxtral");
-        let new = root.path().join("app.super-tts.voxtral");
+        let old = root.path().join("super-tts-piper");
+        let new = root.path().join("app.super-tts.piper");
         std::fs::create_dir_all(&old).unwrap();
         std::fs::create_dir_all(&new).unwrap();
         std::fs::write(
             old.join("backend.toml"),
             r#"
 [backend]
-source = "github.com/x/super-tts-voxtral"
-name = "Voxtral"
+source = "github.com/x/super-tts-piper"
+name = "Piper"
 version = "1.0.0"
 kind = "subprocess"
-entrypoint = "voxtral"
+entrypoint = "piper"
 contract = "v1"
 description = "Test backend."
 "#,
@@ -1597,7 +1596,7 @@ description = "Test backend."
         .unwrap();
 
         let removed =
-            super::retire_previous_dir(root.path(), "github.com/x/super-tts-voxtral", &new).await;
+            super::retire_previous_dir(root.path(), "github.com/x/super-tts-piper", &new).await;
 
         assert_eq!(removed.as_deref(), Some(old.as_path()));
         assert!(!old.exists(), "the superseded directory is gone");
@@ -1607,17 +1606,17 @@ description = "Test backend."
     #[tokio::test]
     async fn retire_previous_dir_never_removes_the_directory_it_was_told_to_keep() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("app.super-tts.voxtral");
+        let dir = root.path().join("app.super-tts.piper");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("backend.toml"),
             r#"
 [backend]
-source = "github.com/x/super-tts-voxtral"
-name = "Voxtral"
+source = "github.com/x/super-tts-piper"
+name = "Piper"
 version = "1.0.0"
 kind = "subprocess"
-entrypoint = "voxtral"
+entrypoint = "piper"
 contract = "v1"
 description = "Test backend."
 "#,
@@ -1625,7 +1624,7 @@ description = "Test backend."
         .unwrap();
 
         let removed =
-            super::retire_previous_dir(root.path(), "github.com/x/super-tts-voxtral", &dir).await;
+            super::retire_previous_dir(root.path(), "github.com/x/super-tts-piper", &dir).await;
 
         assert!(removed.is_none());
         assert!(dir.exists());
@@ -1639,13 +1638,13 @@ description = "Test backend."
     async fn retire_previous_dir_skips_a_directory_whose_manifest_does_not_parse() {
         let root = tempfile::tempdir().unwrap();
         let unparseable = root.path().join("mystery-dir");
-        let keep = root.path().join("app.super-tts.voxtral");
+        let keep = root.path().join("app.super-tts.piper");
         std::fs::create_dir_all(&unparseable).unwrap();
         std::fs::create_dir_all(&keep).unwrap();
         std::fs::write(unparseable.join("backend.toml"), "this is not toml = = =").unwrap();
 
         let removed =
-            super::retire_previous_dir(root.path(), "github.com/x/super-tts-voxtral", &keep).await;
+            super::retire_previous_dir(root.path(), "github.com/x/super-tts-piper", &keep).await;
 
         assert!(removed.is_none());
         assert!(
@@ -1657,24 +1656,24 @@ description = "Test backend."
     #[tokio::test]
     async fn previous_dir_for_finds_the_directory_serving_a_source() {
         let root = tempfile::tempdir().unwrap();
-        let old = root.path().join("super-tts-voxtral");
+        let old = root.path().join("super-tts-piper");
         std::fs::create_dir_all(&old).unwrap();
         std::fs::write(
             old.join("backend.toml"),
             r#"
 [backend]
-source = "github.com/x/super-tts-voxtral"
-name = "Voxtral"
+source = "github.com/x/super-tts-piper"
+name = "Piper"
 version = "1.0.0"
 kind = "subprocess"
-entrypoint = "voxtral"
+entrypoint = "piper"
 contract = "v1"
 description = "Test backend."
 "#,
         )
         .unwrap();
 
-        let found = super::previous_dir_for(root.path(), "github.com/x/super-tts-voxtral").await;
+        let found = super::previous_dir_for(root.path(), "github.com/x/super-tts-piper").await;
 
         assert_eq!(found.as_deref(), Some(old.as_path()));
     }
@@ -1684,7 +1683,7 @@ description = "Test backend."
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("something-else")).unwrap();
 
-        let found = super::previous_dir_for(root.path(), "github.com/x/super-tts-voxtral").await;
+        let found = super::previous_dir_for(root.path(), "github.com/x/super-tts-piper").await;
 
         assert!(found.is_none());
     }
@@ -1708,27 +1707,27 @@ description = "Test backend."
             staging_root.join("backend.toml"),
             r#"
 [backend]
-source = "github.com/x/super-tts-voxtral"
-name = "Voxtral"
+source = "github.com/x/super-tts-piper"
+name = "Piper"
 version = "1.0.0"
 kind = "subprocess"
-entrypoint = "voxtral"
+entrypoint = "piper"
 contract = "v1"
 description = "Test backend."
 "#,
         )
         .unwrap();
-        let keep = root.path().join("app.super-tts.voxtral");
+        let keep = root.path().join("app.super-tts.piper");
         std::fs::create_dir_all(&keep).unwrap();
 
-        let found = super::previous_dir_for(root.path(), "github.com/x/super-tts-voxtral").await;
+        let found = super::previous_dir_for(root.path(), "github.com/x/super-tts-piper").await;
         assert!(
             found.is_none(),
             ".staging must never be matched as a backend directory"
         );
 
         let removed =
-            super::retire_previous_dir(root.path(), "github.com/x/super-tts-voxtral", &keep).await;
+            super::retire_previous_dir(root.path(), "github.com/x/super-tts-piper", &keep).await;
         assert!(removed.is_none());
         assert!(
             staging_root.exists(),
@@ -1743,9 +1742,9 @@ description = "Test backend."
     #[tokio::test]
     async fn a_migration_preserves_model_files_via_previous_dir_for() {
         let root = tempfile::tempdir().unwrap();
-        let old_dir = root.path().join("super-tts-voxtral");
-        let staging = root.path().join(".staging/app.super-tts.voxtral-1.0.1");
-        let final_path = root.path().join("app.super-tts.voxtral");
+        let old_dir = root.path().join("super-tts-piper");
+        let staging = root.path().join(".staging/app.super-tts.piper-1.0.1");
+        let final_path = root.path().join("app.super-tts.piper");
         std::fs::create_dir_all(old_dir.join("models/m")).unwrap();
         std::fs::create_dir_all(&staging).unwrap();
         assert!(!final_path.exists(), "final_path must not exist yet");
@@ -1754,17 +1753,17 @@ description = "Test backend."
             format!(
                 r#"
 [backend]
-    source     = "github.com/x/voxtral"
-    name       = "Voxtral"
+    source     = "github.com/x/piper"
+    name       = "Piper"
     version    = "{version}"
     kind       = "subprocess"
-    entrypoint = "voxtral"
+    entrypoint = "piper"
     contract   = "v1"
     license    = "Apache-2.0"
     description = "Test backend."
 
 [[assets.subprocess]]
-    file   = "voxtral.tar.gz"
+    file   = "piper.tar.gz"
     target = "x86_64-unknown-linux-gnu"
     accel  = ["cpu"]
 
@@ -1783,7 +1782,7 @@ description = "Test backend."
         std::fs::write(staging.join("backend.toml"), toml("1.0.1")).unwrap();
         std::fs::write(old_dir.join("models/m/a.bin"), b"weights").unwrap();
 
-        let inherit_from = super::previous_dir_for(root.path(), "github.com/x/voxtral")
+        let inherit_from = super::previous_dir_for(root.path(), "github.com/x/piper")
             .await
             .unwrap_or_else(|| final_path.clone());
         assert_eq!(inherit_from, old_dir, "must inherit from the old directory");

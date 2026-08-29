@@ -35,16 +35,12 @@ pub enum ParseError {
 }
 
 /// Entries that predate the `id` requirement. They parse without one; every
-/// other entry must declare one. Remove a key from this list once its entry
-/// declares an `id` — the list is meant to shrink to empty.
-const GRANDFATHERED: &[&str] = &[
-    "deepgram",
-    "mistral",
-    "openai",
-    "qwen3_asr",
-    "voxtral",
-    "whisper",
-];
+/// other entry must declare one.
+///
+/// Empty, and it stays that way: the exemptions were the ASR catalog inherited
+/// from Super STT, and `registry/registry.toml` no longer lists them. Nothing
+/// predates the requirement now, so every entry must declare an `id`.
+const GRANDFATHERED: &[&str] = &[];
 
 /// Parsed registry file: id → entry. Backed by a `BTreeMap`, so iteration is in
 /// sorted id order — not the file's declaration order.
@@ -145,8 +141,8 @@ fn validate_monorepo_groups(raw: &BTreeMap<String, Entry>) -> Result<(), ParseEr
                         prefix: prefix_a.unwrap_or_default().into(),
                     });
                 }
-                // A prefix that is a prefix of another (e.g. `voxtral-` and
-                // `voxtral-mini-`) lets one entry's tag resolve as another's.
+                // A prefix that is a prefix of another (e.g. `piper-` and
+                // `piper-mini-`) lets one entry's tag resolve as another's.
                 if let (Some(pa), Some(pb)) = (*prefix_a, *prefix_b)
                     && (pa.starts_with(pb) || pb.starts_with(pa))
                 {
@@ -171,6 +167,7 @@ mod tests {
         let r = Registry::parse(
             r#"
             [openai]
+            id = "com.example.openai"
             repo = "github.com/jorge-menjivar/super-tts"
             forge = "github"
             subdir = "backends/openai"
@@ -269,12 +266,12 @@ mod tests {
             id = "com.example.a"
             repo = "github.com/x/mono"
             forge = "github"
-            tag_prefix = "voxtral-"
+            tag_prefix = "piper-"
             [b]
             id = "com.example.b"
             repo = "github.com/x/mono"
             forge = "github"
-            tag_prefix = "voxtral-mini-"
+            tag_prefix = "piper-mini-"
         "#,
         )
         .unwrap_err();
@@ -349,10 +346,14 @@ mod id_tests {
         assert!(matches!(err, ParseError::MissingId { .. }), "{err:?}");
     }
 
+    /// The exemption list is empty, so the `id` requirement is unconditional.
+    /// A key that looks like one of the old inherited entries gets no pass.
     #[test]
-    fn accepts_a_grandfathered_entry_without_an_id() {
-        let text = "[voxtral]\n    repo = \"github.com/jorge-menjivar/super-tts-voxtral\"\n    forge = \"github\"\n";
-        Registry::parse(text).expect("existing entries are exempt");
+    fn the_grandfather_list_is_empty_so_no_key_is_exempt() {
+        assert!(super::GRANDFATHERED.is_empty());
+        let text = "[piper]\n    repo = \"github.com/jorge-menjivar/super-tts-piper\"\n    forge = \"github\"\n";
+        let err = Registry::parse(text).unwrap_err();
+        assert!(matches!(err, ParseError::MissingId { .. }), "{err:?}");
     }
 
     #[test]

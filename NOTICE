@@ -52,17 +52,12 @@ Audio Processing Libraries:
 
 Security and System Libraries:
 - ring (Apache-2.0 AND ISC) - Cryptographic operations
-- dashmap (MIT) - Concurrent hash maps
 
 For a complete list of all dependencies and their exact licenses, run:
 `cargo license` in the project directory.
 
 Full license texts and attribution information for all dependencies can be
 found in their respective source repositories and documentation.
-
-Python Libraries (References only)
-----------------------------------
-- RealtimeSTT (MIT) - Speech-to-text library
 
 ================================================================================
 

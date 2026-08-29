@@ -11,7 +11,7 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// A WASM backend (OpenAI-shaped) and a subprocess backend (Voxtral-shaped)
+/// A WASM backend (OpenAI-shaped) and a subprocess backend (Piper-shaped)
 /// are both discovered, and their models resolve by `(name, source)`.
 #[test]
 fn discovers_wasm_and_subprocess_backends() {
@@ -45,7 +45,7 @@ description = "Base URL."
 type = "string"
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -54,22 +54,22 @@ supported_devices = ["none"]
     )
     .unwrap();
 
-    let voxtral = root.join("voxtral");
-    fs::create_dir_all(&voxtral).unwrap();
+    let piper = root.join("piper");
+    fs::create_dir_all(&piper).unwrap();
     fs::write(
-        voxtral.join("backend.toml"),
+        piper.join("backend.toml"),
         r#"
 [backend]
-source = "github.com/super-tts/voxtral"
-name = "Voxtral (local)"
+source = "github.com/super-tts/piper"
+name = "Piper (local)"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "super-tts-backend-voxtral"
+entrypoint = "super-tts-backend-piper"
 contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "voxtral-mini"
+name = "piper-mini"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -101,8 +101,8 @@ processing_interval_ms = 2000
     assert_eq!(oai.version, "0.1.0");
 
     // find_model resolves the pair against the declaring backend.
-    let (b, def) = find_model(&backends, "whisper-1", "github.com/super-tts/openai")
-        .expect("resolve whisper-1");
+    let (b, def) =
+        find_model(&backends, "kokoro-1", "github.com/super-tts/openai").expect("resolve kokoro-1");
     assert_eq!(b.kind, "wasm");
     assert_eq!(def.source, "github.com/super-tts/openai");
     assert_eq!(
@@ -111,9 +111,9 @@ processing_interval_ms = 2000
         "online model carries its declared supported_devices"
     );
 
-    let (_, vox) = find_model(&backends, "voxtral-mini", "github.com/super-tts/voxtral")
-        .expect("resolve voxtral-mini");
-    assert_eq!(vox.source, "github.com/super-tts/voxtral");
+    let (_, vox) = find_model(&backends, "piper-mini", "github.com/super-tts/piper")
+        .expect("resolve piper-mini");
+    assert_eq!(vox.source, "github.com/super-tts/piper");
     assert_eq!(vox.estimated_vram_bytes, 8_589_934_592);
     assert_eq!(vox.processing_interval, Duration::from_secs(2));
     assert_eq!(
@@ -131,7 +131,7 @@ processing_interval_ms = 2000
     assert!(
         listed
             .iter()
-            .any(|(n, s)| n == "whisper-1" && s == "github.com/super-tts/openai")
+            .any(|(n, s)| n == "kokoro-1" && s == "github.com/super-tts/openai")
     );
 }
 
@@ -175,7 +175,7 @@ contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 multilingual = true
 # supported_devices intentionally absent
 "#,
@@ -209,7 +209,7 @@ contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -243,7 +243,7 @@ contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -275,7 +275,7 @@ contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -362,7 +362,7 @@ supported_devices = ["none"]
 /// exactly what `handle_set_active_backend` does
 /// (`find(|b| b.source == source).and_then(dir_name)`) — lands on the
 /// requested backend. This is the regression test for the bug where all
-/// three shared one source and selecting Voxtral activated Mistral.
+/// three shared one source and selecting Piper activated Mistral.
 #[test]
 fn distinct_sources_resolve_to_the_right_backend() {
     let root = scratch("distinct-sources");
@@ -380,9 +380,9 @@ fn distinct_sources_resolve_to_the_right_backend() {
     );
     write_backend(
         &root,
-        "voxtral",
-        "github.com/jorge-menjivar/super-tts/voxtral",
-        "Voxtral",
+        "piper",
+        "github.com/jorge-menjivar/super-tts/piper",
+        "Piper",
     );
 
     let (backends, losers) = discover(&root);
@@ -395,7 +395,7 @@ fn distinct_sources_resolve_to_the_right_backend() {
     for (source, want_dir) in [
         ("github.com/jorge-menjivar/super-tts/openai", "openai"),
         ("github.com/jorge-menjivar/super-tts/mistral", "mistral"),
-        ("github.com/jorge-menjivar/super-tts/voxtral", "voxtral"),
+        ("github.com/jorge-menjivar/super-tts/piper", "piper"),
     ] {
         let resolved = backends
             .iter()
@@ -437,26 +437,26 @@ fn duplicate_sources_are_deduplicated() {
     assert_eq!(matches.len(), 1);
 }
 
-/// The qwen3-asr subprocess backend is discovered.
+/// The xtts subprocess backend is discovered.
 #[test]
-fn discovers_qwen3_asr_backend() {
-    let root = scratch("qwen3");
-    let dir = root.join("qwen3-asr");
+fn discovers_xtts_asr_backend() {
+    let root = scratch("xtts");
+    let dir = root.join("xtts");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("backend.toml"),
         r#"
 [backend]
-source = "github.com/jorge-menjivar/super-tts/qwen3-asr"
-name = "Qwen3-ASR"
+source = "github.com/jorge-menjivar/super-tts/xtts"
+name = "XTTS"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "qwen3-asr"
+entrypoint = "xtts"
 contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "qwen3-asr-0.6b"
+name = "xtts-0.6b"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -465,7 +465,7 @@ estimated_vram_bytes = 2500000000
 processing_interval_ms = 1000
 
 [[models]]
-name = "qwen3-asr-1.7b"
+name = "xtts-1.7b"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -482,12 +482,12 @@ processing_interval_ms = 1500
 
     let (b, def) = find_model(
         &backends,
-        "qwen3-asr-0.6b",
-        "github.com/jorge-menjivar/super-tts/qwen3-asr",
+        "xtts-0.6b",
+        "github.com/jorge-menjivar/super-tts/xtts",
     )
-    .expect("resolve qwen3-asr-0.6b");
+    .expect("resolve xtts-0.6b");
     assert_eq!(b.kind, "subprocess");
-    assert_eq!(b.entrypoint, "qwen3-asr");
+    assert_eq!(b.entrypoint, "xtts");
     assert_eq!(
         def.supported_devices,
         vec![
@@ -498,10 +498,10 @@ processing_interval_ms = 1500
 
     let (_, big) = find_model(
         &backends,
-        "qwen3-asr-1.7b",
-        "github.com/jorge-menjivar/super-tts/qwen3-asr",
+        "xtts-1.7b",
+        "github.com/jorge-menjivar/super-tts/xtts",
     )
-    .expect("resolve qwen3-asr-1.7b");
+    .expect("resolve xtts-1.7b");
     assert_eq!(big.estimated_vram_bytes, 6_000_000_000);
     assert_eq!(big.processing_interval, Duration::from_millis(1500));
 }
@@ -583,28 +583,28 @@ fn an_empty_source_resolves_nothing() {
     // Two backends serving the same model name — the case the contract calls
     // out as supported, and the one that made scan order load-bearing.
     let backends = vec![
-        serving("zeta", "github.com/other/zeta", "whisper-tiny"),
-        serving("whisper", "github.com/super-tts/whisper", "whisper-tiny"),
+        serving("zeta", "github.com/other/zeta", "kokoro-tiny"),
+        serving("kokoro", "github.com/super-tts/kokoro", "kokoro-tiny"),
     ];
 
     assert!(
-        find_model(&backends, "whisper-tiny", "").is_none(),
+        find_model(&backends, "kokoro-tiny", "").is_none(),
         "an empty source must not silently bind to a scan-order winner"
     );
 
     // Each concrete source resolves to its own backend, regardless of order.
     for (source, dir) in [
         ("github.com/other/zeta", "zeta"),
-        ("github.com/super-tts/whisper", "whisper"),
+        ("github.com/super-tts/kokoro", "kokoro"),
     ] {
-        let (b, def) = find_model(&backends, "whisper-tiny", source)
-            .unwrap_or_else(|| panic!("resolve whisper-tiny from {source}"));
+        let (b, def) = find_model(&backends, "kokoro-tiny", source)
+            .unwrap_or_else(|| panic!("resolve kokoro-tiny from {source}"));
         assert_eq!(b.dir, PathBuf::from(dir));
         assert_eq!(def.source, source);
     }
 
     // A source that serves a different name is still a miss.
-    assert!(find_model(&backends, "whisper-large", "github.com/other/zeta").is_none());
+    assert!(find_model(&backends, "kokoro-large", "github.com/other/zeta").is_none());
 }
 
 /// A manifest that declares a `default` for `base_url` is wrong — that value
@@ -643,7 +643,7 @@ type = "string"
 default = "us-east-1"
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 primary_language = "en"
 supported_languages = ["en"]
 supported_devices = ["none"]
@@ -715,20 +715,20 @@ fn at(dir: &str, source: &str, version: &str, id: Option<&str>) -> DiscoveredBac
 fn the_higher_version_wins_even_against_the_id_named_dir() {
     let (winners, losers) = dedup_sources(vec![
         at(
-            "app.super-tts.voxtral",
+            "app.super-tts.piper",
             "github.com/x/v",
             "0.1.0",
-            Some("app.super-tts.voxtral"),
+            Some("app.super-tts.piper"),
         ),
         at(
-            "super-tts-voxtral",
+            "super-tts-piper",
             "github.com/x/v",
             "0.1.1",
-            Some("app.super-tts.voxtral"),
+            Some("app.super-tts.piper"),
         ),
     ]);
     assert_eq!(winners.len(), 1);
-    assert!(winners[0].dir.ends_with("super-tts-voxtral"));
+    assert!(winners[0].dir.ends_with("super-tts-piper"));
     assert_eq!(losers.len(), 1);
 }
 
@@ -736,19 +736,19 @@ fn the_higher_version_wins_even_against_the_id_named_dir() {
 fn the_id_named_dir_wins_at_equal_versions() {
     let (winners, losers) = dedup_sources(vec![
         at(
-            "super-tts-voxtral",
+            "super-tts-piper",
             "github.com/x/v",
             "0.1.1",
-            Some("app.super-tts.voxtral"),
+            Some("app.super-tts.piper"),
         ),
         at(
-            "app.super-tts.voxtral",
+            "app.super-tts.piper",
             "github.com/x/v",
             "0.1.1",
-            Some("app.super-tts.voxtral"),
+            Some("app.super-tts.piper"),
         ),
     ]);
-    assert!(winners[0].dir.ends_with("app.super-tts.voxtral"));
+    assert!(winners[0].dir.ends_with("app.super-tts.piper"));
     assert_eq!(losers.len(), 1);
 }
 

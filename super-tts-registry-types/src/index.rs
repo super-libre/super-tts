@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn an_index_model_parses_with_or_without_the_provider_key() {
         let with: IndexModel = serde_json::from_str(
-            r#"{"name":"m1","provider":"local_whisper","supported_devices":["cpu"]}"#,
+            r#"{"name":"m1","provider":"local_kokoro","supported_devices":["cpu"]}"#,
         )
         .expect("an index carrying `provider` must parse");
         assert_eq!(with.name, "m1");
@@ -555,7 +555,7 @@ mod tests {
         let m = crate::manifest::Manifest::parse(
             r#"
             [backend]
-            id = "app.super-tts.voxtral"
+            id = "app.super-tts.piper"
             source = "github.com/x/y"
             name = "Y"
             version = "1.0.0"
@@ -580,7 +580,7 @@ mod tests {
         );
 
         assert_eq!(b.id, "y", "id stays the registry key, unaffected");
-        assert_eq!(b.backend_id.as_deref(), Some("app.super-tts.voxtral"));
+        assert_eq!(b.backend_id.as_deref(), Some("app.super-tts.piper"));
     }
 
     /// A manifest that predates `[backend].id` yields a `None` `backend_id`,

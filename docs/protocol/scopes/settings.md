@@ -38,7 +38,7 @@ scope and asked for `daemon_status_changed` or `download_progress`.
 
 | Endpoint                                                    | Methods    | Notes                                                                                                |
 |-------------------------------------------------------------|------------|------------------------------------------------------------------------------------------------------|
-| [`/active_model`](../endpoints/v1/active_model.md)          | POST, GET  | Switch the active STT model and read its current state + any in-flight switch                        |
+| [`/active_model`](../endpoints/v1/active_model.md)          | POST, GET  | Switch the active TTS model and read its current state + any in-flight switch                        |
 | [`/active_model/cancel`](../endpoints/v1/active_model/cancel.md) | POST  | Abort an in-flight model switch                                                                       |
 | [`/backends/{source}/models/{model}/language`](../endpoints/v1/backends/model-language.md) | GET, POST, DELETE | Per-model language override + resolved effective language |
 | [`/models`](../endpoints/v1/models.md)                      | GET        | List built-in + custom models                                                                         |

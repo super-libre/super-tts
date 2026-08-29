@@ -50,7 +50,7 @@ End users do not interact with this directory.
 ### `id`
 
 Every new entry must declare an `id`: a reverse-DNS identifier under a domain
-you control, e.g. `com.example.voxtral`. See
+you control, e.g. `com.example.piper`. See
 [backend/config.md](../docs/protocol/backend/config.md) for the format.
 
 - It must be unique across the registry.

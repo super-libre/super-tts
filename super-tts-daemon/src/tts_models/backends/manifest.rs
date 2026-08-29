@@ -184,7 +184,7 @@ contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "voxtral-mini-latest"
+name = "piper-mini-latest"
 multilingual = true
 primary_language = "en"
 supported_languages = ["en"]
@@ -198,11 +198,11 @@ supported_devices = ["none"]
     fn subprocess_with_websocket_capability_is_rejected() {
         let toml_src = r#"
 [backend]
-source = "github.com/super-tts/whisper"
-name = "Whisper"
+source = "github.com/super-tts/kokoro"
+name = "Kokoro"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "super-tts-backend-whisper"
+entrypoint = "super-tts-backend-kokoro"
 contract = "v1"
 description = "Test backend."
 
@@ -218,11 +218,11 @@ websocket = true
     fn subprocess_with_allowed_hosts_is_rejected() {
         let toml_src = r#"
 [backend]
-source = "github.com/super-tts/whisper"
-name = "Whisper"
+source = "github.com/super-tts/kokoro"
+name = "Kokoro"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "whisper-backend"
+entrypoint = "kokoro-backend"
 contract = "v1"
 description = "Test backend."
 
@@ -257,16 +257,16 @@ allowed_hosts = ["api.openai.com"]
     fn primary_language_not_in_supported_is_rejected() {
         let toml_src = r#"
 [backend]
-source = "github.com/super-tts/whisper"
-name = "Whisper"
+source = "github.com/super-tts/kokoro"
+name = "Kokoro"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "whisper-backend"
+entrypoint = "kokoro-backend"
 contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-tiny"
+name = "kokoro-tiny"
 multilingual = true
 primary_language = "en"
 supported_languages = ["es", "fr"]
@@ -282,16 +282,16 @@ supported_devices = ["cpu"]
     fn multilingual_false_with_extra_languages_is_rejected() {
         let toml_src = r#"
 [backend]
-source = "github.com/super-tts/whisper"
-name = "Whisper"
+source = "github.com/super-tts/kokoro"
+name = "Kokoro"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "whisper-backend"
+entrypoint = "kokoro-backend"
 contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-en"
+name = "kokoro-en"
 multilingual = false
 primary_language = "en"
 supported_languages = ["en", "es"]
@@ -307,16 +307,16 @@ supported_devices = ["cpu"]
     fn multilingual_false_with_exact_primary_language_is_accepted() {
         let toml_src = r#"
 [backend]
-source = "github.com/super-tts/whisper"
-name = "Whisper"
+source = "github.com/super-tts/kokoro"
+name = "Kokoro"
 version = "0.1.0"
 kind = "subprocess"
-entrypoint = "whisper-backend"
+entrypoint = "kokoro-backend"
 contract = "v1"
 description = "Test backend."
 
 [[models]]
-name = "whisper-en"
+name = "kokoro-en"
 multilingual = false
 primary_language = "en"
 supported_languages = ["en"]

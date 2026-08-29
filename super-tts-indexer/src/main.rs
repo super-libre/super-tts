@@ -431,23 +431,23 @@ mod tests {
     #[test]
     fn duplicate_backend_ids_are_rejected() {
         let mut a = backend("mistral", "github.com/x/mistral");
-        a.backend_id = Some("app.super-tts.voxtral".into());
-        let mut b = backend("voxtral", "github.com/x/voxtral");
-        b.backend_id = Some("app.super-tts.voxtral".into());
+        a.backend_id = Some("app.super-tts.piper".into());
+        let mut b = backend("piper", "github.com/x/piper");
+        b.backend_id = Some("app.super-tts.piper".into());
 
         let err = ensure_unique_backend_ids(&[a, b]).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("duplicate backend id"), "{msg}");
-        assert!(msg.contains("app.super-tts.voxtral"), "{msg}");
-        assert!(msg.contains("mistral") && msg.contains("voxtral"), "{msg}");
+        assert!(msg.contains("app.super-tts.piper"), "{msg}");
+        assert!(msg.contains("mistral") && msg.contains("piper"), "{msg}");
     }
 
     #[test]
     fn distinct_backend_ids_pass() {
         let mut a = backend("mistral", "github.com/x/mistral");
         a.backend_id = Some("app.super-tts.mistral".into());
-        let mut b = backend("voxtral", "github.com/x/voxtral");
-        b.backend_id = Some("app.super-tts.voxtral".into());
+        let mut b = backend("piper", "github.com/x/piper");
+        b.backend_id = Some("app.super-tts.piper".into());
 
         ensure_unique_backend_ids(&[a, b]).unwrap();
     }
@@ -459,7 +459,7 @@ mod tests {
     fn entries_without_a_backend_id_never_collide() {
         let backends = vec![
             backend("mistral", "github.com/x/mistral"),
-            backend("voxtral", "github.com/x/voxtral"),
+            backend("piper", "github.com/x/piper"),
         ];
         assert!(backends.iter().all(|b| b.backend_id.is_none()));
         ensure_unique_backend_ids(&backends).unwrap();

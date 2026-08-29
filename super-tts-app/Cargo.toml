@@ -39,8 +39,6 @@
     # Cosmic settings dependencies
     slab = "0.4"
     slotmap = "1.1"
-    strum.workspace = true
-    strum_macros.workspace = true
     super-tts-forge = { path = "../super-tts-forge" }
     super-tts-registry-types = { path = "../super-tts-registry-types" }
     # Workspace dependencies

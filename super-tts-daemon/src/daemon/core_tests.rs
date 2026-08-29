@@ -270,12 +270,12 @@ async fn set_model_online_rejected_when_disabled() {
 
     // Online-ness is now resolved from the model's `supported_devices` (`none`),
     // so the online gate only fires once the model resolves. Register an online
-    // backend serving `whisper-1` so resolution succeeds and the gate engages.
+    // backend serving `kokoro-1` so resolution succeeds and the gate engages.
     *daemon.backends.write().await = vec![fixture_backend(
         "openai",
         "github.com/super-tts/openai",
         "OpenAI",
-        "whisper-1",
+        "kokoro-1",
     )];
 
     // No `source` on the request: it resolves to the selected backend, so
@@ -290,7 +290,7 @@ async fn set_model_online_rejected_when_disabled() {
         since_timestamp: None,
         limit: None,
         event_type: None,
-        data: Some(serde_json::json!({ "model": "whisper-1"})),
+        data: Some(serde_json::json!({ "model": "kokoro-1"})),
         language: None,
         enabled: None,
     };
@@ -300,7 +300,7 @@ async fn set_model_online_rejected_when_disabled() {
     assert_eq!(
         response.error_code,
         Some(ErrorCode::OnlineModelsDisabled),
-        "expected the online gate to reject whisper-1, got: {:?} / {:?}",
+        "expected the online gate to reject kokoro-1, got: {:?} / {:?}",
         response.error_code,
         response.message
     );
@@ -308,27 +308,27 @@ async fn set_model_online_rejected_when_disabled() {
 
 /// An omitted `source` resolves to the active backend — not to whichever
 /// installed backend happens to serve the name. Two backends serve
-/// `whisper-tiny` here; the selected one must win regardless of their order in
+/// `kokoro-tiny` here; the selected one must win regardless of their order in
 /// the registry, since the backend that wins is persisted as the active one.
 #[tokio::test]
 async fn an_omitted_source_resolves_to_the_active_backend() {
     let daemon = test_daemon().await;
-    // `whisper` sorts before `zeta`, and is listed second — a scan-order
+    // `kokoro` sorts before `zeta`, and is listed second — a scan-order
     // resolution would return `zeta` here.
     *daemon.backends.write().await = vec![
-        fixture_backend_local("zeta", "github.com/other/zeta", "Zeta", "whisper-tiny"),
+        fixture_backend_local("zeta", "github.com/other/zeta", "Zeta", "kokoro-tiny"),
         fixture_backend_local(
-            "whisper",
-            "github.com/super-tts/whisper",
-            "Whisper",
-            "whisper-tiny",
+            "kokoro",
+            "github.com/super-tts/kokoro",
+            "Kokoro",
+            "kokoro-tiny",
         ),
     ];
-    *daemon.active_backend.write().await = Some("whisper".to_string());
+    *daemon.active_backend.write().await = Some("kokoro".to_string());
 
     assert_eq!(
         daemon.active_backend_source().await.as_deref(),
-        Some("github.com/super-tts/whisper"),
+        Some("github.com/super-tts/kokoro"),
         "an omitted source must resolve to the selected backend, not the first scanned"
     );
 }
@@ -339,15 +339,15 @@ async fn an_omitted_source_resolves_to_the_active_backend() {
 async fn an_omitted_source_with_no_active_backend_is_an_error() {
     let daemon = test_daemon().await;
     *daemon.backends.write().await = vec![fixture_backend_local(
-        "whisper",
-        "github.com/super-tts/whisper",
-        "Whisper",
-        "whisper-tiny",
+        "kokoro",
+        "github.com/super-tts/kokoro",
+        "Kokoro",
+        "kokoro-tiny",
     )];
     assert!(daemon.active_backend.read().await.is_none());
 
     let mut request = make_request("set_model");
-    request.data = Some(serde_json::json!({ "model": "whisper-tiny" }));
+    request.data = Some(serde_json::json!({ "model": "kokoro-tiny" }));
 
     let response = daemon.handle_command(request).await;
     assert_eq!(response.status, "error");
@@ -463,17 +463,17 @@ async fn list_models_reflects_discovered_backends() {
 #[tokio::test]
 async fn set_model_local_works_without_online_toggle() {
     let daemon = test_daemon().await;
-    let source = "github.com/super-tts/whisper";
+    let source = "github.com/super-tts/kokoro";
     *daemon.backends.write().await = vec![fixture_backend_local(
-        "whisper",
+        "kokoro",
         source,
-        "Whisper",
-        "whisper-tiny",
+        "Kokoro",
+        "kokoro-tiny",
     )];
     assert!(!daemon.config.read().await.online.allow_online_models);
 
     let mut request = make_request("set_model");
-    request.data = Some(serde_json::json!({ "model": "whisper-tiny", "source": source }));
+    request.data = Some(serde_json::json!({ "model": "kokoro-tiny", "source": source }));
 
     let response = daemon.handle_command(request).await;
     // The load itself fails (the fixture has no files on disk), but it must get
@@ -506,7 +506,7 @@ async fn list_backends_catalog_and_option_override() {
     let backend = openai_backend(
         source,
         vec![ModelDefinition {
-            name: "whisper-1".to_string(),
+            name: "kokoro-1".to_string(),
             source: source.to_string(),
             is_multilingual: true,
             primary_language: "en".to_string(),
@@ -531,7 +531,7 @@ async fn list_backends_catalog_and_option_override() {
     // The backend's `[network].allowed_hosts` reaches the catalog JSON so the
     // app's "Online model" badge can name where a cloud backend's audio goes.
     assert_eq!(cat[0]["allowed_hosts"][0], "api.openai.com");
-    assert_eq!(cat[0]["models"][0]["name"], "whisper-1");
+    assert_eq!(cat[0]["models"][0]["name"], "kokoro-1");
     assert_eq!(cat[0]["secrets"][0]["name"], "openai_api_key");
     assert_eq!(cat[0]["secrets"][0]["label"], "OpenAI API key");
     // No override yet, and `base_url` may carry no manifest default → no value.
@@ -743,7 +743,7 @@ async fn gpu_info_reports_real_hardware() {
 async fn set_active_backend_records_dir_and_returns_payload() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
 
     let resp = daemon.handle_set_active_backend(source.to_string()).await;
     assert_eq!(resp.status, "success");
@@ -781,7 +781,7 @@ async fn set_active_backend_unknown_source_errors() {
         "openai",
         "github.com/super-tts/openai",
         "OpenAI",
-        "whisper-1",
+        "kokoro-1",
     )];
 
     let resp = daemon
@@ -805,7 +805,7 @@ async fn set_active_backend_unknown_source_errors() {
 async fn get_active_backend_reflects_set() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
 
     let _ = daemon.handle_set_active_backend(source.to_string()).await;
     let resp = daemon.handle_get_active_backend().await;
@@ -820,7 +820,7 @@ async fn get_active_backend_reflects_set() {
 async fn clear_active_backend_returns_to_idle() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
     let _ = daemon.handle_set_active_backend(source.to_string()).await;
     assert!(daemon.active_backend.read().await.is_some());
 
@@ -850,8 +850,8 @@ async fn list_models_is_scoped_to_active_backend() {
     let openai = "github.com/super-tts/openai";
     let mistral = "github.com/super-tts/mistral";
     *daemon.backends.write().await = vec![
-        fixture_backend("openai", openai, "OpenAI", "whisper-1"),
-        fixture_backend("mistral", mistral, "Mistral", "voxtral-mini-latest"),
+        fixture_backend("openai", openai, "OpenAI", "kokoro-1"),
+        fixture_backend("mistral", mistral, "Mistral", "piper-mini-latest"),
     ];
 
     // Idle → empty list (even though two backends are installed).
@@ -867,7 +867,7 @@ async fn list_models_is_scoped_to_active_backend() {
     let response = daemon.handle_list_models().await;
     let models = response.available_models.expect("available_models");
     assert_eq!(models.len(), 1);
-    assert_eq!(models[0].0, "whisper-1");
+    assert_eq!(models[0].0, "kokoro-1");
     assert_eq!(models[0].1, openai);
 
     // Switch to Mistral → only its model.
@@ -875,7 +875,7 @@ async fn list_models_is_scoped_to_active_backend() {
     let response = daemon.handle_list_models().await;
     let models = response.available_models.expect("available_models");
     assert_eq!(models.len(), 1);
-    assert_eq!(models[0].0, "voxtral-mini-latest");
+    assert_eq!(models[0].0, "piper-mini-latest");
     assert_eq!(models[0].1, mistral);
 }
 
@@ -999,13 +999,13 @@ async fn set_active_backend_unloads_model_on_dir_change() {
     let a = "github.com/super-tts/openai";
     let b = "github.com/super-tts/mistral";
     *daemon.backends.write().await = vec![
-        fixture_backend("openai", a, "OpenAI", "whisper-1"),
-        fixture_backend("mistral", b, "Mistral", "voxtral-mini-latest"),
+        fixture_backend("openai", a, "OpenAI", "kokoro-1"),
+        fixture_backend("mistral", b, "Mistral", "piper-mini-latest"),
     ];
 
     // Start active on A with a model loaded.
     let _ = daemon.handle_set_active_backend(a.to_string()).await;
-    seed_loaded_model(&daemon, "whisper-1", a).await;
+    seed_loaded_model(&daemon, "kokoro-1", a).await;
     assert!(daemon.model.read().await.is_some());
 
     // Switch to B — model must be gone.
@@ -1027,10 +1027,10 @@ async fn set_active_backend_unloads_model_on_dir_change() {
 async fn set_active_backend_same_source_does_not_unload() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
 
     let _ = daemon.handle_set_active_backend(source.to_string()).await;
-    seed_loaded_model(&daemon, "whisper-1", source).await;
+    seed_loaded_model(&daemon, "kokoro-1", source).await;
     assert!(daemon.model.read().await.is_some());
 
     // Redundant set — should not touch the model.
@@ -1047,7 +1047,7 @@ async fn set_active_backend_same_source_does_not_unload() {
 async fn set_active_backend_from_idle_keeps_model_none() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
 
     let _ = daemon.handle_set_active_backend(source.to_string()).await;
     assert!(daemon.model.read().await.is_none());
@@ -1138,7 +1138,7 @@ async fn set_device_with_online_model_keeps_model_and_updates_preference() {
 async fn unload_active_model_drops_model_keeps_backend() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
 
     // No-op case: nothing to unload.
     let resp = daemon.handle_unload_active_model().await;
@@ -1147,7 +1147,7 @@ async fn unload_active_model_drops_model_keeps_backend() {
 
     // Activate backend + seed a loaded model, then unload.
     let _ = daemon.handle_set_active_backend(source.to_string()).await;
-    seed_loaded_model(&daemon, "whisper-1", source).await;
+    seed_loaded_model(&daemon, "kokoro-1", source).await;
     assert!(daemon.model.read().await.is_some());
 
     let resp = daemon.handle_unload_active_model().await;
@@ -1176,7 +1176,7 @@ async fn unload_active_model_drops_model_keeps_backend() {
 async fn active_backend_commands_dispatch_through_handle_command() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/openai";
-    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "whisper-1")];
+    *daemon.backends.write().await = vec![fixture_backend("openai", source, "OpenAI", "kokoro-1")];
 
     // set_active_backend
     let mut request = make_request("set_active_backend");
@@ -1215,15 +1215,15 @@ async fn broadcast_model_active_carries_full_identity() {
     let daemon = test_daemon().await;
     let mut rx = daemon.events.subscribe(Topic::DaemonStatusChanged);
 
-    daemon.broadcast_model_active("voxtral-mini", "github.com/super-tts/mistral", "cuda");
+    daemon.broadcast_model_active("piper-mini", "github.com/super-tts/mistral", "cuda");
 
     let (_topic, switched) = rx.recv_json().await.expect("model_switched event");
     assert_eq!(switched["status"], "model_switched");
-    assert_eq!(switched["model_name"], "voxtral-mini");
+    assert_eq!(switched["model_name"], "piper-mini");
     assert_eq!(switched["source"], "github.com/super-tts/mistral");
 
     let (_topic, ready) = rx.recv_json().await.expect("ready event");
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["model_loaded"], true);
-    assert_eq!(ready["model_name"], "voxtral-mini");
+    assert_eq!(ready["model_name"], "piper-mini");
 }

@@ -15,7 +15,7 @@ use crate::daemon::types::test_daemon;
 use crate::tts_models::backends::DiscoveredBackend;
 use std::path::PathBuf;
 
-const WHISPER_SOURCE: &str = "github.com/jorge-menjivar/super-tts-whisper";
+const KOKORO_SOURCE: &str = "github.com/jorge-menjivar/super-tts-kokoro";
 
 /// A discovered backend installed at `<backends_dir>/<dir>`, serving `source`.
 /// Only `dir` and `source` matter here: the adoption looks a backend up by
@@ -25,10 +25,10 @@ fn discovered(dir: &str, source: &str) -> DiscoveredBackend {
         dir: PathBuf::from("/var/lib/super-tts/backends").join(dir),
         source: source.to_string(),
         id: None,
-        name: "Whisper (local)".to_string(),
+        name: "Kokoro (local)".to_string(),
         version: "1.0.0".to_string(),
         kind: "subprocess".to_string(),
-        entrypoint: "whisper".to_string(),
+        entrypoint: "kokoro".to_string(),
         allowed_hosts: Vec::new(),
         secrets: Vec::new(),
         options: Vec::new(),
@@ -47,14 +47,14 @@ fn discovered(dir: &str, source: &str) -> DiscoveredBackend {
 #[tokio::test]
 async fn a_startup_load_adopts_the_backend_serving_the_model() {
     let daemon = test_daemon().await;
-    *daemon.backends.write().await = vec![discovered("whisper", WHISPER_SOURCE)];
+    *daemon.backends.write().await = vec![discovered("kokoro", KOKORO_SOURCE)];
 
-    let adopted = daemon.adopt_active_backend_for(WHISPER_SOURCE).await;
+    let adopted = daemon.adopt_active_backend_for(KOKORO_SOURCE).await;
 
     assert!(adopted, "a startup load left no backend selected");
     assert_eq!(
         daemon.active_backend.read().await.as_deref(),
-        Some("whisper"),
+        Some("kokoro"),
         "runtime active_backend was not set to the install dir"
     );
     assert_eq!(
@@ -65,7 +65,7 @@ async fn a_startup_load_adopts_the_backend_serving_the_model() {
             .synthesis
             .active_backend
             .as_deref(),
-        Some("whisper"),
+        Some("kokoro"),
         "active_backend was not recorded in config, so it would not survive a restart"
     );
 }
@@ -78,15 +78,15 @@ async fn a_startup_load_adopts_the_backend_serving_the_model() {
 #[tokio::test]
 async fn the_adopted_value_is_the_install_dir_not_the_source() {
     let daemon = test_daemon().await;
-    *daemon.backends.write().await = vec![discovered("whisper", WHISPER_SOURCE)];
+    *daemon.backends.write().await = vec![discovered("kokoro", KOKORO_SOURCE)];
 
-    daemon.adopt_active_backend_for(WHISPER_SOURCE).await;
+    daemon.adopt_active_backend_for(KOKORO_SOURCE).await;
 
     let active = daemon.active_backend.read().await.clone();
-    assert_eq!(active.as_deref(), Some("whisper"));
+    assert_eq!(active.as_deref(), Some("kokoro"));
     assert_ne!(
         active.as_deref(),
-        Some(WHISPER_SOURCE),
+        Some(KOKORO_SOURCE),
         "stored the source where a directory name is expected"
     );
 }
@@ -97,10 +97,10 @@ async fn the_adopted_value_is_the_install_dir_not_the_source() {
 #[tokio::test]
 async fn an_existing_selection_is_never_overridden() {
     let daemon = test_daemon().await;
-    *daemon.backends.write().await = vec![discovered("whisper", WHISPER_SOURCE)];
+    *daemon.backends.write().await = vec![discovered("kokoro", KOKORO_SOURCE)];
     *daemon.active_backend.write().await = Some("openai".to_string());
 
-    let adopted = daemon.adopt_active_backend_for(WHISPER_SOURCE).await;
+    let adopted = daemon.adopt_active_backend_for(KOKORO_SOURCE).await;
 
     assert!(!adopted, "reported a change it did not make");
     assert_eq!(
@@ -115,7 +115,7 @@ async fn an_existing_selection_is_never_overridden() {
 #[tokio::test]
 async fn an_undiscovered_source_adopts_nothing() {
     let daemon = test_daemon().await;
-    *daemon.backends.write().await = vec![discovered("whisper", WHISPER_SOURCE)];
+    *daemon.backends.write().await = vec![discovered("kokoro", KOKORO_SOURCE)];
 
     let adopted = daemon
         .adopt_active_backend_for("github.com/someone/uninstalled")

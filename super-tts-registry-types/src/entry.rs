@@ -12,10 +12,10 @@ use crate::forge::Forge;
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Entry {
-    /// Reverse-DNS identifier for the backend, e.g. `com.example.voxtral`.
+    /// Reverse-DNS identifier for the backend, e.g. `com.example.piper`.
     /// Must equal the `[backend].id` of the release manifest this entry points
-    /// at. Required for entries added after the field was introduced; the
-    /// entries that predate it are listed in `registry_toml::GRANDFATHERED`.
+    /// at. Required for every entry: `registry_toml::GRANDFATHERED`, which
+    /// exempted the inherited ASR catalog, is now empty.
     #[serde(default)]
     pub id: Option<String>,
     /// Repository hosting the backend, as `<host>/<owner>/<repo>` (e.g.

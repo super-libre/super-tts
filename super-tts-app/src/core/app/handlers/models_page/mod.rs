@@ -462,8 +462,8 @@ mod tests {
     #[test]
     fn a_stale_pair_sends_nothing() {
         let installed = vec![backend(
-            "github.com/super-tts/whisper",
-            "whisper-tiny",
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
             &["cuda"],
         )];
 
@@ -472,7 +472,7 @@ mod tests {
             staged_load_device(
                 &installed,
                 "github.com/super-tts/gone",
-                "whisper-tiny",
+                "kokoro-tiny",
                 Some("cuda"),
                 "cpu"
             ),
@@ -482,8 +482,8 @@ mod tests {
         assert_eq!(
             staged_load_device(
                 &installed,
-                "github.com/super-tts/whisper",
-                "whisper-large",
+                "github.com/super-tts/kokoro",
+                "kokoro-large",
                 Some("cuda"),
                 "cpu"
             ),
@@ -493,8 +493,8 @@ mod tests {
         assert_eq!(
             staged_load_device(
                 &[],
-                "github.com/super-tts/whisper",
-                "whisper-tiny",
+                "github.com/super-tts/kokoro",
+                "kokoro-tiny",
                 Some("cuda"),
                 "cpu"
             ),
@@ -507,15 +507,15 @@ mod tests {
     #[test]
     fn a_local_model_on_a_new_device_sets_it() {
         let installed = vec![backend(
-            "github.com/super-tts/whisper",
-            "whisper-tiny",
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
             &["cpu", "cuda"],
         )];
         assert_eq!(
             staged_load_device(
                 &installed,
-                "github.com/super-tts/whisper",
-                "whisper-tiny",
+                "github.com/super-tts/kokoro",
+                "kokoro-tiny",
                 Some("cuda"),
                 "cpu"
             ),
@@ -530,16 +530,16 @@ mod tests {
     #[test]
     fn an_unchanged_device_is_not_resent() {
         let installed = vec![backend(
-            "github.com/super-tts/whisper",
-            "whisper-tiny",
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
             &["cpu", "cuda"],
         )];
         for staged in [Some("cpu"), None] {
             assert_eq!(
                 staged_load_device(
                     &installed,
-                    "github.com/super-tts/whisper",
-                    "whisper-tiny",
+                    "github.com/super-tts/kokoro",
+                    "kokoro-tiny",
                     staged,
                     "cpu"
                 ),
@@ -557,14 +557,14 @@ mod tests {
     fn an_online_model_sets_no_device() {
         let online = vec![backend(
             "github.com/super-tts/openai",
-            "whisper-1",
+            "kokoro-1",
             &["none"],
         )];
         assert_eq!(
             staged_load_device(
                 &online,
                 "github.com/super-tts/openai",
-                "whisper-1",
+                "kokoro-1",
                 Some("none"),
                 "cpu"
             ),
@@ -577,7 +577,7 @@ mod tests {
             staged_load_device(
                 &online,
                 "github.com/super-tts/openai",
-                "whisper-1",
+                "kokoro-1",
                 Some("cuda"),
                 "cpu"
             ),
@@ -586,15 +586,15 @@ mod tests {
             },
         );
         let local = vec![backend(
-            "github.com/super-tts/whisper",
-            "whisper-tiny",
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
             &["cpu"],
         )];
         assert_eq!(
             staged_load_device(
                 &local,
-                "github.com/super-tts/whisper",
-                "whisper-tiny",
+                "github.com/super-tts/kokoro",
+                "kokoro-tiny",
                 Some("none"),
                 "cpu"
             ),
@@ -613,16 +613,16 @@ mod tests {
     #[test]
     fn a_staged_gpu_is_not_resent_to_a_daemon_already_on_an_accelerator() {
         let installed = vec![backend(
-            "github.com/super-tts/whisper",
-            "whisper-tiny",
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
             &["cpu", "gpu"],
         )];
         for current in ["cuda", "rocm", "metal", "vulkan", "gpu"] {
             assert_eq!(
                 staged_load_device(
                     &installed,
-                    "github.com/super-tts/whisper",
-                    "whisper-tiny",
+                    "github.com/super-tts/kokoro",
+                    "kokoro-tiny",
                     Some("gpu"),
                     current
                 ),
@@ -639,15 +639,15 @@ mod tests {
     #[test]
     fn a_staged_gpu_is_resent_when_the_daemon_actually_fell_back_to_the_cpu() {
         let installed = vec![backend(
-            "github.com/super-tts/whisper",
-            "whisper-tiny",
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
             &["cpu", "gpu"],
         )];
         assert_eq!(
             staged_load_device(
                 &installed,
-                "github.com/super-tts/whisper",
-                "whisper-tiny",
+                "github.com/super-tts/kokoro",
+                "kokoro-tiny",
                 Some("gpu"),
                 "cpu"
             ),
@@ -658,8 +658,8 @@ mod tests {
         assert_eq!(
             staged_load_device(
                 &installed,
-                "github.com/super-tts/whisper",
-                "whisper-tiny",
+                "github.com/super-tts/kokoro",
+                "kokoro-tiny",
                 Some("cpu"),
                 "cuda"
             ),
@@ -670,7 +670,7 @@ mod tests {
     }
 
     fn backend_with_accel(devices: &[&str], installed_accel: &[&str]) -> Vec<BackendInfo> {
-        let mut b = backend("github.com/super-tts/voxtral", "voxtral-mini", devices);
+        let mut b = backend("github.com/super-tts/piper", "piper-mini", devices);
         b.installed_accel = installed_accel.iter().map(|a| (*a).to_string()).collect();
         vec![b]
     }
@@ -684,11 +684,7 @@ mod tests {
     fn a_gpu_only_model_on_a_cpu_install_stages_no_device() {
         let installed = backend_with_accel(&["gpu"], &["cpu"]);
         assert_eq!(
-            staged_default_device(
-                &installed,
-                Some("github.com/super-tts/voxtral"),
-                "voxtral-mini"
-            ),
+            staged_default_device(&installed, Some("github.com/super-tts/piper"), "piper-mini"),
             None,
         );
     }
@@ -701,14 +697,11 @@ mod tests {
     #[test]
     fn a_gpu_first_model_on_a_cpu_install_stages_the_cpu() {
         let installed = backend_with_accel(&["gpu", "cpu"], &["cpu"]);
-        let staged = staged_default_device(
-            &installed,
-            Some("github.com/super-tts/voxtral"),
-            "voxtral-mini",
-        );
+        let staged =
+            staged_default_device(&installed, Some("github.com/super-tts/piper"), "piper-mini");
         assert_eq!(staged, Some("cpu".to_string()));
         assert!(
-            crate::ui::views::models::offered_devices(&installed[0], "voxtral-mini")
+            crate::ui::views::models::offered_devices(&installed[0], "piper-mini")
                 .contains(&staged.expect("staged")),
             "the staged device must be one the picker offers"
         );
@@ -720,11 +713,7 @@ mod tests {
     fn an_accelerated_install_stages_the_models_first_device() {
         let installed = backend_with_accel(&["gpu", "cpu"], &["cuda"]);
         assert_eq!(
-            staged_default_device(
-                &installed,
-                Some("github.com/super-tts/voxtral"),
-                "voxtral-mini"
-            ),
+            staged_default_device(&installed, Some("github.com/super-tts/piper"), "piper-mini"),
             Some("gpu".to_string()),
         );
     }
@@ -735,25 +724,17 @@ mod tests {
     fn an_online_or_unknown_model_stages_no_device() {
         let online = backend_with_accel(&["none"], &[]);
         assert_eq!(
-            staged_default_device(
-                &online,
-                Some("github.com/super-tts/voxtral"),
-                "voxtral-mini"
-            ),
+            staged_default_device(&online, Some("github.com/super-tts/piper"), "piper-mini"),
             None,
         );
         let installed = backend_with_accel(&["cpu"], &["cpu"]);
         assert_eq!(
-            staged_default_device(&installed, None, "voxtral-mini"),
+            staged_default_device(&installed, None, "piper-mini"),
             None,
             "no active backend stages nothing"
         );
         assert_eq!(
-            staged_default_device(
-                &installed,
-                Some("github.com/super-tts/gone"),
-                "voxtral-mini"
-            ),
+            staged_default_device(&installed, Some("github.com/super-tts/gone"), "piper-mini"),
             None,
         );
     }

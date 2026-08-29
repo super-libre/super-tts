@@ -56,7 +56,7 @@ pub struct Manifest {
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BackendMeta {
-    /// Globally unique reverse-DNS identifier, e.g. `app.super-tts.voxtral`.
+    /// Globally unique reverse-DNS identifier, e.g. `app.super-tts.piper`.
     /// Names the directory this backend installs into. Optional on disk so a
     /// backend installed before the field existed keeps loading; required for
     /// registry listing, which the indexer enforces.
@@ -633,10 +633,10 @@ impl VoiceEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FileSpec {
     /// Full download URL for this file, e.g.
-    /// `https://huggingface.co/openai/whisper-tiny/resolve/main/config.json`.
+    /// `https://huggingface.co/openai/kokoro-tiny/resolve/main/config.json`.
     pub url: String,
     /// Relative file path (including filename) under the backend directory to
-    /// write the download to, e.g. `models/whisper-tiny/config.json`.
+    /// write the download to, e.g. `models/kokoro-tiny/config.json`.
     /// Validated as a safe relative path so it cannot escape the backend dir.
     pub destination: String,
     /// Expected SHA-256 of the file, hex-encoded, for integrity verification.
@@ -1192,9 +1192,9 @@ mod tests {
 
     #[test]
     fn parses_a_manifest_declaring_a_backend_id() {
-        let t = VALID.replace("[backend]", "[backend]\n    id = \"app.super-tts.voxtral\"");
+        let t = VALID.replace("[backend]", "[backend]\n    id = \"app.super-tts.piper\"");
         let m = Manifest::parse(&t).expect("a manifest with a valid id parses");
-        assert_eq!(m.backend.id.as_deref(), Some("app.super-tts.voxtral"));
+        assert_eq!(m.backend.id.as_deref(), Some("app.super-tts.piper"));
     }
 
     #[test]
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn rejects_a_malformed_backend_id() {
-        let t = VALID.replace("[backend]", "[backend]\n    id = \"voxtral\"");
+        let t = VALID.replace("[backend]", "[backend]\n    id = \"piper\"");
         let err = Manifest::parse(&t).unwrap_err();
         assert!(matches!(err, ManifestError::InvalidId(_)));
     }
@@ -1399,7 +1399,7 @@ mod tests {
 
             [[models]]
             name = "m1"
-            provider = "local_whisper"
+            provider = "local_kokoro"
             primary_language = "en"
             supported_languages = ["en"]
             supported_devices = ["cpu"]
@@ -1443,7 +1443,7 @@ mod tests {
             supported_devices = ["cpu"]
 
             [[models.files]]
-            url = "https://huggingface.co/openai/whisper-tiny/resolve/main/model.safetensors"
+            url = "https://huggingface.co/openai/kokoro-tiny/resolve/main/model.safetensors"
             destination = "models/m2/model.safetensors"
             sha256 = "abc123"
             "#,
@@ -1494,7 +1494,7 @@ mod tests {
 
     #[test]
     fn load_errors_carry_the_file_path() {
-        let dir = std::env::temp_dir().join("stts-manifest-err-test");
+        let dir = std::env::temp_dir().join("super-tts-manifest-err-test");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("backend.toml"), "not [ valid toml").unwrap();
         let err = Manifest::load(&dir).unwrap_err();

@@ -204,7 +204,7 @@ mod tests {
             "{VALID}
             [[models]]
             name = \"m1\"
-            provider = \"local_whisper\"
+            provider = \"local_kokoro\"
             primary_language = \"en\"
             supported_languages = [\"en\"]
             supported_devices = [\"cpu\"]

@@ -363,7 +363,7 @@ mod tests {
     fn test_dir() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("stts-install-root-{}-{n}", std::process::id()));
+            std::env::temp_dir().join(format!("super-tts-install-root-{}-{n}", std::process::id()));
         // F6: clear a pre-existing directory first — the pid+counter name
         // is only unique within one process run, so PID reuse across
         // separate test-binary invocations could otherwise leak files from

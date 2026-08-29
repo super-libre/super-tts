@@ -367,8 +367,8 @@ the limit, and listed in `parts` instead of `file`:
 ```toml
 [[assets.subprocess]]
 parts      = [
-    "qwen3-asr-x86_64-unknown-linux-gnu-cuda13.tar.gz.part00",
-    "qwen3-asr-x86_64-unknown-linux-gnu-cuda13.tar.gz.part01",
+    "xtts-x86_64-unknown-linux-gnu-cuda13.tar.gz.part00",
+    "xtts-x86_64-unknown-linux-gnu-cuda13.tar.gz.part01",
 ]
 target     = "x86_64-unknown-linux-gnu"
 accel      = "cuda"

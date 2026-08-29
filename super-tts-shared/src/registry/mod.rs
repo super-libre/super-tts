@@ -208,9 +208,9 @@ mod tests {
         assert!(without.backend_id.is_none());
 
         let mut v = minimal_backend_json();
-        v["backend_id"] = serde_json::json!("app.super-tts.voxtral");
+        v["backend_id"] = serde_json::json!("app.super-tts.piper");
         let with: RegistryBackend = serde_json::from_value(v).expect("parses with backend_id");
-        assert_eq!(with.backend_id.as_deref(), Some("app.super-tts.voxtral"));
+        assert_eq!(with.backend_id.as_deref(), Some("app.super-tts.piper"));
     }
 
     fn selected(accel: &[&str]) -> super::SelectedAsset {

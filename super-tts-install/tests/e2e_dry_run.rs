@@ -104,7 +104,7 @@ async fn dry_run_resolves_downloads_verifies_and_stages_against_a_mocked_release
     let tarball_name = format!("super-tts-{triple}-beta.tar.gz");
 
     let dir = std::env::temp_dir().join(format!(
-        "stts-install-e2e-{}-{}",
+        "super-tts-install-e2e-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

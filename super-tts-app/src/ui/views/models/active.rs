@@ -272,7 +272,7 @@ pub(super) fn active_backend_card<'a>(
 }
 
 /// Summary shown in the active-backend card when a model is currently
-/// loaded for this backend. Reads as e.g. "Active: whisper-1 · cuda" with
+/// loaded for this backend. Reads as e.g. "Active: kokoro-82m · cuda" with
 /// an Unload button on the right; the Unload click drops the model but
 /// keeps the active backend selected.
 pub(super) fn loaded_model_summary<'a>(

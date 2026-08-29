@@ -83,10 +83,10 @@ fn response_allow_online_models_skipped_when_none() {
 #[test]
 fn set_model_parses_online_models() {
     let cases: &[&str] = &[
-        "whisper-1",
+        "kokoro-1",
         "gpt-4o-mini-tts",
         "tts-1-hd",
-        "voxtral-mini-latest",
+        "piper-mini-latest",
         "nova-3",
     ];
     for model_name in cases {
@@ -109,12 +109,12 @@ fn set_model_parses_online_models() {
 fn set_model_parses_local_name() {
     let request = make_request(
         "set_model",
-        Some(json!({ "model": "whisper-tiny", "provider": "local_whisper" })),
+        Some(json!({ "model": "kokoro-tiny", "provider": "local_kokoro" })),
     );
     let command = Command::try_from(request).expect("should parse");
     match command {
         Command::SetModel { model, source } => {
-            assert_eq!(model, "whisper-tiny");
+            assert_eq!(model, "kokoro-tiny");
             assert_eq!(source, "");
         }
         _ => panic!("expected Command::SetModel"),
@@ -126,15 +126,15 @@ fn set_model_passes_source_repo_through() {
     let request = make_request(
         "set_model",
         Some(json!({
-            "model": "voxtral-mini",
-            "provider": "local_voxtral",
-            "source": "github.com/super-tts/voxtral",
+            "model": "piper-mini",
+            "provider": "local_piper",
+            "source": "github.com/super-tts/piper",
         })),
     );
     let command = Command::try_from(request).expect("should parse");
     match command {
         Command::SetModel { source, .. } => {
-            assert_eq!(source, "github.com/super-tts/voxtral");
+            assert_eq!(source, "github.com/super-tts/piper");
         }
         _ => panic!("expected Command::SetModel"),
     }

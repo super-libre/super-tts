@@ -25,7 +25,7 @@ impl Drop for CleanupDir {
 
 const MOCK_TOML: &str = r#"
 [backend]
-source = "github.com/jorge-menjivar/super-tts-voxtral"
+source = "github.com/jorge-menjivar/super-tts-piper"
 name = "Mock"
 version = "0.0.0"
 kind = "subprocess"

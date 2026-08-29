@@ -103,7 +103,7 @@ fn the_schema_still_accepts_the_legacy_provider_key() {
     let v = backend_validator();
     let mut doc = wasm_base();
     doc["models"] = json!([{ "name": "m",
-        "provider": "local_whisper",
+        "provider": "local_kokoro",
         "primary_language": "en", "supported_languages": ["en"],
         "supported_devices": ["cpu"] }]);
     let errors: Vec<String> = v.iter_errors(&doc).map(|e| format!("{e}")).collect();

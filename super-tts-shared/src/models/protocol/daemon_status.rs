@@ -88,13 +88,13 @@ mod tests {
     #[test]
     fn model_switched_wire_shape() {
         let json = serde_json::to_value(DaemonStatusEvent::ModelSwitched {
-            model_name: "whisper-tiny".into(),
-            source: "github.com/super-tts/whisper".into(),
+            model_name: "kokoro-tiny".into(),
+            source: "github.com/super-tts/kokoro".into(),
             actual_device: "cpu".into(),
         })
         .unwrap();
         assert_eq!(json["status"], "model_switched");
-        assert_eq!(json["model_name"], "whisper-tiny");
+        assert_eq!(json["model_name"], "kokoro-tiny");
         assert_eq!(json["actual_device"], "cpu");
     }
 
@@ -120,7 +120,7 @@ mod tests {
             "status": "switching_device",
             "from_device": "cpu",
             "target_device": "cuda",
-            "model": "whisper-tiny",
+            "model": "kokoro-tiny",
             "timestamp": "2026-07-16T00:00:00+00:00",
         });
         match serde_json::from_value::<DaemonStatusEvent>(v).unwrap() {

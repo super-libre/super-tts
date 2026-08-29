@@ -228,7 +228,7 @@ fn validate_tarball_read<R: Read>(
                 reason,
             }
         })?;
-        // Accept the entrypoint at its declared path (e.g. `bin/qwen3-asr`),
+        // Accept the entrypoint at its declared path (e.g. `bin/xtts`),
         // or the legacy bare-name-under-bin form (`bin/<entrypoint>`).
         if s == entrypoint || s == format!("bin/{entrypoint}") {
             found_entrypoint = true;
@@ -269,9 +269,9 @@ mod tests {
             h.set_size(3);
             h.set_mode(0o755);
             h.set_cksum();
-            tb.append_data(&mut h, "bin/voxtral", &b"abc"[..]).unwrap();
+            tb.append_data(&mut h, "bin/piper", &b"abc"[..]).unwrap();
         });
-        validate_tarball("v.tar.gz", "voxtral", &bytes).unwrap();
+        validate_tarball("v.tar.gz", "piper", &bytes).unwrap();
     }
 
     #[test]
@@ -281,10 +281,9 @@ mod tests {
             h.set_size(3);
             h.set_mode(0o755);
             h.set_cksum();
-            tb.append_data(&mut h, "bin/qwen3-asr", &b"abc"[..])
-                .unwrap();
+            tb.append_data(&mut h, "bin/xtts", &b"abc"[..]).unwrap();
         });
-        validate_tarball("q.tar.gz", "bin/qwen3-asr", &bytes).unwrap();
+        validate_tarball("q.tar.gz", "bin/xtts", &bytes).unwrap();
     }
 
     #[test]
@@ -300,16 +299,16 @@ mod tests {
             h.set_size(body.len() as u64);
             h.set_mode(0o755);
             h.set_cksum();
-            tb.append_data(&mut h, "bin/voxtral", &body[..]).unwrap();
+            tb.append_data(&mut h, "bin/piper", &body[..]).unwrap();
         });
         // total_cap = 100 < the 200-byte entry.
-        let err = validate_tarball_read("v.tar.gz", "voxtral", &bytes[..], 100).unwrap_err();
+        let err = validate_tarball_read("v.tar.gz", "piper", &bytes[..], 100).unwrap_err();
         assert!(
             matches!(err, AssetError::TarBudget { .. }),
             "expected TarBudget, got {err:?}"
         );
         // The same archive validates when the cap is generous.
-        validate_tarball_read("v.tar.gz", "voxtral", &bytes[..], 10_000).unwrap();
+        validate_tarball_read("v.tar.gz", "piper", &bytes[..], 10_000).unwrap();
     }
 
     #[test]
@@ -321,7 +320,7 @@ mod tests {
             h.set_cksum();
             tb.append_data(&mut h, "README", &b"abc"[..]).unwrap();
         });
-        let err = validate_tarball("v.tar.gz", "voxtral", &bytes).unwrap_err();
+        let err = validate_tarball("v.tar.gz", "piper", &bytes).unwrap_err();
         assert!(matches!(err, AssetError::TarMissingEntrypoint { .. }));
     }
 
@@ -366,7 +365,7 @@ mod tests {
     #[test]
     fn rejects_path_traversal() {
         let bytes = make_raw_tar_gz_with_path("../escape");
-        let err = validate_tarball("v.tar.gz", "voxtral", &bytes).unwrap_err();
+        let err = validate_tarball("v.tar.gz", "piper", &bytes).unwrap_err();
         assert!(matches!(err, AssetError::TarEscape { .. }));
     }
 
@@ -379,8 +378,7 @@ mod tests {
             h.set_size(3);
             h.set_mode(0o755);
             h.set_cksum();
-            tb.append_data(&mut h, "bin/qwen3-asr", &b"abc"[..])
-                .unwrap();
+            tb.append_data(&mut h, "bin/xtts", &b"abc"[..]).unwrap();
         });
         let dir = tempfile::tempdir().unwrap();
         let mid = bytes.len() / 2;
@@ -388,7 +386,7 @@ mod tests {
         let p1 = dir.path().join("a.part01");
         std::fs::write(&p0, &bytes[..mid]).unwrap();
         std::fs::write(&p1, &bytes[mid..]).unwrap();
-        validate_subprocess_parts(&[p0, p1], "q.tar.gz", "bin/qwen3-asr").unwrap();
+        validate_subprocess_parts(&[p0, p1], "q.tar.gz", "bin/xtts").unwrap();
     }
 
     /// Parts concatenated out of order do not reassemble into a valid archive.
@@ -399,8 +397,7 @@ mod tests {
             h.set_size(3);
             h.set_mode(0o755);
             h.set_cksum();
-            tb.append_data(&mut h, "bin/qwen3-asr", &b"abc"[..])
-                .unwrap();
+            tb.append_data(&mut h, "bin/xtts", &b"abc"[..]).unwrap();
         });
         let dir = tempfile::tempdir().unwrap();
         let mid = bytes.len() / 2;
@@ -409,6 +406,6 @@ mod tests {
         std::fs::write(&p0, &bytes[..mid]).unwrap();
         std::fs::write(&p1, &bytes[mid..]).unwrap();
         // Swapped order → corrupt gzip → an error (not a clean archive).
-        assert!(validate_subprocess_parts(&[p1, p0], "q.tar.gz", "bin/qwen3-asr").is_err());
+        assert!(validate_subprocess_parts(&[p1, p0], "q.tar.gz", "bin/xtts").is_err());
     }
 }

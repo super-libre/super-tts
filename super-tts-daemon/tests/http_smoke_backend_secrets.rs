@@ -85,7 +85,7 @@ description = "Your OpenAI API key."
 required = true
 
 [[models]]
-name = "whisper-1"
+name = "kokoro-1"
 primary_language = "en"
 supported_languages = ["en"]
 supported_devices = ["none"]

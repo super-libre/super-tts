@@ -400,7 +400,7 @@ mod tests {
     /// Per-file counters: `start_file` zeroes `total_bytes` and
     /// `bytes_downloaded` so the UI's "X.X / Y.Y MB" displays only
     /// the current file's size, not an aggregate across the whole
-    /// model. Without this, a multi-file model (e.g. Voxtral with two
+    /// model. Without this, a multi-file model (e.g. Piper with two
     /// 3GB safetensors plus a config) shows a cumulative "1500 /
     /// 6000 MB" mid-second-file, which is confusing.
     #[test]

@@ -245,10 +245,10 @@ mod tests {
             dir: PathBuf::from("/backends").join(dir),
             source: source.to_string(),
             id: None,
-            name: "Voxtral".to_string(),
+            name: "Piper".to_string(),
             version: version.to_string(),
             kind: "subprocess".to_string(),
-            entrypoint: "super-tts-backend-voxtral".to_string(),
+            entrypoint: "super-tts-backend-piper".to_string(),
             allowed_hosts: Vec::new(),
             secrets: Vec::new(),
             options: Vec::new(),
@@ -257,19 +257,19 @@ mod tests {
     }
 
     /// The regression this task exists for: the install directory is named
-    /// after the repo, the index id is `voxtral`, and the two never matched.
+    /// after the repo, the index id is `piper`, and the two never matched.
     /// Matching on `source` is what makes a custom-path install updatable.
     #[test]
     fn a_directory_not_named_after_the_index_id_still_reports_its_version() {
         let catalog = vec![discovered(
-            "super-tts-voxtral",
-            "github.com/jorge-menjivar/super-tts-voxtral",
+            "super-tts-piper",
+            "github.com/jorge-menjivar/super-tts-piper",
             "0.1.0",
         )];
         assert_eq!(
             super::installed_version_for_source(
                 &catalog,
-                "github.com/jorge-menjivar/super-tts-voxtral"
+                "github.com/jorge-menjivar/super-tts-piper"
             ),
             Some("0.1.0".to_string())
         );
@@ -279,12 +279,12 @@ mod tests {
     #[test]
     fn a_source_absent_from_the_catalog_has_no_installed_version() {
         let catalog = vec![discovered(
-            "whisper",
-            "github.com/x/super-tts-whisper",
+            "kokoro",
+            "github.com/x/super-tts-kokoro",
             "0.1.0",
         )];
         assert_eq!(
-            super::installed_version_for_source(&catalog, "github.com/x/super-tts-voxtral"),
+            super::installed_version_for_source(&catalog, "github.com/x/super-tts-piper"),
             None
         );
     }

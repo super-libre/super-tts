@@ -1,7 +1,7 @@
 # `/custom_models_dir`
 
 Read and set the filesystem path that gets scanned for
-user-supplied STT models. After a successful `POST`, the new
+user-supplied TTS models. After a successful `POST`, the new
 directory is scanned immediately and any discovered models become
 selectable via [`GET /models`](./models.md) (with `source:
 "custom"`) and switchable via

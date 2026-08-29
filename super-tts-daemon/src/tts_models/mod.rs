@@ -7,8 +7,9 @@
 //! [`subprocess`] are the two backend transports. [`download`] provisions a
 //! backend's model files before it is spawned.
 //!
-//! The previous in-tree Whisper/Voxtral/online implementations now live in
-//! their own standalone backend repositories.
+//! The in-tree Whisper/Voxtral implementations this daemon descends from were
+//! moved out to standalone repositories before the TTS fork. They transcribe
+//! rather than synthesize, so they are not backends this project can load.
 pub mod backends;
 pub mod download;
 pub mod model_definition;

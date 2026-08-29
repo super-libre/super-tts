@@ -151,11 +151,7 @@ mod tests {
     #[test]
     fn filters_by_tag_prefix() {
         let r = select_release(
-            vec![
-                rel("openai-1.0.0"),
-                rel("voxtral-2.0.0"),
-                rel("openai-1.5.0"),
-            ],
+            vec![rel("openai-1.0.0"), rel("piper-2.0.0"), rel("openai-1.5.0")],
             &entry(Some("openai-"), None),
         )
         .unwrap();

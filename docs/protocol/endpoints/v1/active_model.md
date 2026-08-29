@@ -1,6 +1,6 @@
 # `/active_model`
 
-Read and switch the active STT model. Cancellation of an in-flight
+Read and switch the active TTS model. Cancellation of an in-flight
 switch lives at [`POST /active_model/cancel`](./active_model/cancel.md);
 the catalog of available models lives at [`GET /models`](./models.md).
 

@@ -287,11 +287,11 @@ mod tests {
             old.join("backend.toml"),
             r#"
 [backend]
-source = "github.com/x/voxtral"
-name = "Voxtral"
+source = "github.com/x/piper"
+name = "Piper"
 version = "1.0.0"
 kind = "subprocess"
-entrypoint = "voxtral"
+entrypoint = "piper"
 contract = "v1"
 description = "Test backend."
 "#,
@@ -303,41 +303,40 @@ description = "Test backend."
     #[tokio::test]
     async fn a_migration_repoints_active_backend_when_it_named_the_retired_directory() {
         let root = tempfile::tempdir().unwrap();
-        migrated_layout(root.path(), "super-tts-voxtral", "app.super-tts.voxtral");
+        migrated_layout(root.path(), "super-tts-piper", "app.super-tts.piper");
 
         let daemon = test_daemon().await;
-        daemon.config.write().await.synthesis.active_backend =
-            Some("super-tts-voxtral".to_string());
+        daemon.config.write().await.synthesis.active_backend = Some("super-tts-piper".to_string());
         daemon.config.write().await.update_preferred_model(
-            "voxtral-mini".to_string(),
-            "github.com/x/voxtral".to_string(),
-            Some("local_voxtral".to_string()),
+            "piper-mini".to_string(),
+            "github.com/x/piper".to_string(),
+            Some("local_piper".to_string()),
         );
 
         retire_and_repoint(
             &daemon,
             root.path(),
-            "github.com/x/voxtral",
-            "app.super-tts.voxtral",
+            "github.com/x/piper",
+            "app.super-tts.piper",
         )
         .await;
 
-        assert!(!root.path().join("super-tts-voxtral").exists());
+        assert!(!root.path().join("super-tts-piper").exists());
         let cfg = daemon.config.read().await;
         assert_eq!(
             cfg.synthesis.active_backend.as_deref(),
-            Some("app.super-tts.voxtral"),
+            Some("app.super-tts.piper"),
             "the pointer must follow the migration"
         );
         assert_eq!(
-            cfg.synthesis.preferred_model, "voxtral-mini",
+            cfg.synthesis.preferred_model, "piper-mini",
             "the model preference must survive the rename"
         );
-        assert_eq!(cfg.synthesis.preferred_provider, "local_voxtral");
+        assert_eq!(cfg.synthesis.preferred_provider, "local_piper");
         drop(cfg);
         assert_eq!(
             daemon.active_backend.read().await.as_deref(),
-            Some("app.super-tts.voxtral"),
+            Some("app.super-tts.piper"),
             "the runtime mirror must agree with the persisted config"
         );
     }
@@ -345,7 +344,7 @@ description = "Test backend."
     #[tokio::test]
     async fn a_migration_leaves_a_different_active_backend_untouched() {
         let root = tempfile::tempdir().unwrap();
-        migrated_layout(root.path(), "super-tts-voxtral", "app.super-tts.voxtral");
+        migrated_layout(root.path(), "super-tts-piper", "app.super-tts.piper");
 
         let daemon = test_daemon().await;
         daemon.config.write().await.synthesis.active_backend =
@@ -359,8 +358,8 @@ description = "Test backend."
         retire_and_repoint(
             &daemon,
             root.path(),
-            "github.com/x/voxtral",
-            "app.super-tts.voxtral",
+            "github.com/x/piper",
+            "app.super-tts.piper",
         )
         .await;
 
@@ -368,7 +367,7 @@ description = "Test backend."
         // but the pointer, which names a different backend entirely, must not
         // move.
         assert!(
-            !root.path().join("super-tts-voxtral").exists(),
+            !root.path().join("super-tts-piper").exists(),
             "the predecessor is retired regardless of what's active"
         );
         let cfg = daemon.config.read().await;
