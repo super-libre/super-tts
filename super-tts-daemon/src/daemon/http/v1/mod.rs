@@ -6,6 +6,7 @@ pub(crate) mod health;
 pub(crate) mod registry;
 pub(crate) mod settings;
 pub(crate) mod speak;
+pub(crate) mod speak_stream;
 pub(crate) mod transcribe;
 
 use crate::daemon::http::internal::auth::middleware::{
@@ -65,6 +66,7 @@ pub(crate) fn router(state: AppState) -> Router {
         ));
 
     let speak_scope = speak::routes()
+        .merge(speak_stream::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_rate_limit,

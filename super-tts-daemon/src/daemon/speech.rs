@@ -74,6 +74,46 @@ pub struct SpeakOptions<'a> {
     pub instructions: Option<&'a str>,
 }
 
+impl SpeakOptions<'_> {
+    /// Copy into owned strings so a session can outlive the request that
+    /// started it.
+    fn into_owned(self) -> OwnedSpeakOptions {
+        OwnedSpeakOptions {
+            voice: self.voice.map(str::to_owned),
+            language: self.language.map(str::to_owned),
+            speed: self.speed,
+            instructions: self.instructions.map(str::to_owned),
+        }
+    }
+}
+
+/// [`SpeakOptions`] with owned strings, held by a [`SpeakSession`].
+#[derive(Debug, Default, Clone)]
+struct OwnedSpeakOptions {
+    voice: Option<String>,
+    language: Option<String>,
+    speed: Option<f32>,
+    instructions: Option<String>,
+}
+
+impl OwnedSpeakOptions {
+    fn as_ref(&self) -> SpeakOptions<'_> {
+        SpeakOptions {
+            voice: self.voice.as_deref(),
+            language: self.language.as_deref(),
+            speed: self.speed,
+            instructions: self.instructions.as_deref(),
+        }
+    }
+}
+
+/// Something worth telling a streaming client about, as it happens.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpeechEvent {
+    /// The backend aligned a span of audio to a span of the text.
+    Mark(super_tts_shared::audio::frames::Mark),
+}
+
 /// Why a speak request could not be served.
 #[derive(Debug, thiserror::Error)]
 pub enum SpeakError {
@@ -119,6 +159,9 @@ struct PlaybackSink {
     leftover: Vec<u8>,
     marks: usize,
     cancelled: Arc<AtomicBool>,
+    /// Marks are forwarded as they decode so a streaming client can highlight
+    /// along with the audio; the one-shot path simply drops them.
+    events: mpsc::UnboundedSender<SpeechEvent>,
 }
 
 impl PlaybackSink {
@@ -168,19 +211,31 @@ impl SynthesisSink for PlaybackSink {
                     let _ = self.tx.send(PcmMsg::Samples(samples, params));
                 }
             }
-            FrameKind::Mark => self.marks += 1,
+            FrameKind::Mark => {
+                self.marks += 1;
+                if let Ok(mark) = serde_json::from_slice(&frame.payload) {
+                    let _ = self.events.send(SpeechEvent::Mark(mark));
+                }
+            }
             FrameKind::Done | FrameKind::Error => {}
         }
         Ok(())
     }
 }
 
+/// The utterance currently in flight: its id and its cancel flag.
+///
+/// Shared with the live [`SpeakSession`] so the session can release the slot
+/// when it ends, and so a cancel arriving from anywhere reaches the flag the
+/// session is checking.
+type CurrentSlot = Arc<Mutex<Option<(String, Arc<AtomicBool>)>>>;
+
 /// Owns the output device and the current utterance.
 pub struct SpeechEngine {
     /// `None` until the first utterance opens the device.
     playback: tokio::sync::Mutex<Option<Arc<Playback>>>,
     /// The in-flight utterance, if any.
-    current: Mutex<Option<(String, Arc<AtomicBool>)>>,
+    current: CurrentSlot,
     /// Overrides the real device; set by tests to run with no audio hardware.
     test_format: Option<DeviceFormat>,
 }
@@ -205,7 +260,7 @@ impl SpeechEngine {
     pub fn new() -> Self {
         Self {
             playback: tokio::sync::Mutex::new(None),
-            current: Mutex::new(None),
+            current: CurrentSlot::default(),
             test_format: None,
         }
     }
@@ -218,7 +273,7 @@ impl SpeechEngine {
     pub fn detached(format: DeviceFormat) -> Self {
         Self {
             playback: tokio::sync::Mutex::new(None),
-            current: Mutex::new(None),
+            current: CurrentSlot::default(),
             test_format: Some(format),
         }
     }
@@ -272,53 +327,25 @@ impl SpeechEngine {
         id
     }
 
-    /// Synthesize `text` with the loaded model and play it.
+    /// Begin a streaming utterance.
     ///
-    /// Returns once the backend has finished producing and every sample has
-    /// been queued; the device plays the tail out afterwards. A second call
-    /// cancels the first.
+    /// Text is fed in with [`SpeakSession::push`] and completed with
+    /// [`SpeakSession::end`]. This is the path an LLM drives: chunks are
+    /// synthesized as sentences complete, so speech starts long before the
+    /// model has finished generating.
     ///
     /// # Errors
     /// See [`SpeakError`].
-    pub async fn speak(
+    pub async fn begin(
         &self,
         model: &SharedLoadedModel,
-        text: &str,
-        voice: Option<&str>,
-        language: Option<&str>,
-        speed: Option<f32>,
-        instructions: Option<&str>,
-    ) -> Result<Utterance, SpeakError> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(SpeakError::EmptyText);
-        }
-        if trimmed.chars().count() > MAX_TEXT_CHARS {
-            return Err(SpeakError::TextTooLong);
-        }
-
-        // Strip markup before anything else. A model asked to read `**bold**`
-        // says "asterisk asterisk bold"; the chunker also needs clean text,
-        // since a code fence is full of characters that look like sentence
-        // ends.
-        let spoken = crate::text::normalize::normalize(trimmed);
-        if spoken.is_empty() {
-            // The input was entirely markup — a bare code fence, say. Nothing
-            // to say is not a failure.
-            return Err(SpeakError::EmptyText);
-        }
-
+        options: SpeakOptions<'_>,
+    ) -> Result<SpeakSession, SpeakError> {
         let policy = {
             let guard = model.read().await;
             let loaded = guard.as_ref().ok_or(SpeakError::NotLoaded)?;
             ChunkPolicy::for_model(loaded.definition.max_input_chars)
         };
-        let mut chunker = Chunker::new(policy);
-        let mut chunks = chunker.push(&spoken);
-        chunks.extend(chunker.finish());
-        if chunks.is_empty() {
-            return Err(SpeakError::EmptyText);
-        }
 
         // A new utterance supersedes the old. Cancelling before claiming the
         // slot means the ring is already flushed when the first chunk of the
@@ -352,107 +379,311 @@ impl SpeechEngine {
             }
         });
 
-        let mut sink = PlaybackSink {
-            tx,
-            params: None,
-            leftover: Vec::new(),
+        let (events_tx, events_rx) = mpsc::unbounded_channel::<SpeechEvent>();
+        Ok(SpeakSession {
+            slot: Arc::clone(&self.current),
+            id,
+            model: Arc::clone(model),
+            options: options.into_owned(),
+            normalizer: crate::text::normalize::Normalizer::new(),
+            chunker: Chunker::new(policy),
+            sink: Some(PlaybackSink {
+                tx,
+                params: None,
+                leftover: Vec::new(),
+                marks: 0,
+                cancelled: Arc::clone(&flag),
+                events: events_tx,
+            }),
+            events: events_rx,
+            pump: Some(pump),
+            playback,
+            flag,
+            chars: 0,
             marks: 0,
-            cancelled: Arc::clone(&flag),
-        };
+            chunks: 0,
+            finished: false,
+        })
+    }
 
-        let chunk_count = chunks.len();
+    /// Synthesize `text` with the loaded model and play it.
+    ///
+    /// Returns once the backend has finished producing and every sample has
+    /// been queued; the device plays the tail out afterwards. A second call
+    /// cancels the first.
+    ///
+    /// A thin wrapper over [`begin`](Self::begin): routing the one-shot path
+    /// through the same session means the two cannot drift on normalization,
+    /// chunking, or seam handling.
+    ///
+    /// # Errors
+    /// See [`SpeakError`].
+    pub async fn speak(
+        &self,
+        model: &SharedLoadedModel,
+        text: &str,
+        voice: Option<&str>,
+        language: Option<&str>,
+        speed: Option<f32>,
+        instructions: Option<&str>,
+    ) -> Result<Utterance, SpeakError> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(SpeakError::EmptyText);
+        }
+        if trimmed.chars().count() > MAX_TEXT_CHARS {
+            return Err(SpeakError::TextTooLong);
+        }
+        // Checked before claiming the utterance slot, so a request that cannot
+        // be served never interrupts what is already playing.
+        if model.read().await.is_none() {
+            return Err(SpeakError::NotLoaded);
+        }
+        if crate::text::normalize::normalize(trimmed).is_empty() {
+            // The input was entirely markup. Nothing to say is not a failure,
+            // but it is not an utterance either.
+            return Err(SpeakError::EmptyText);
+        }
+
         let options = SpeakOptions {
             voice,
             language,
             speed,
             instructions,
         };
-        let failure = Self::synthesize_chunks(model, &chunks, &mut sink, &flag, options).await;
+        let mut session = self.begin(model, options).await?;
+        session.push(text).await?;
+        session.end().await
+    }
+}
 
-        let marks = sink.marks;
-        // Closes the channel, which ends the pump once it has drained.
-        drop(sink);
-        let _ = pump.await;
+/// One streaming utterance.
+///
+/// Deltas go in with [`push`](Self::push); [`end`](Self::end) completes it.
+/// Sentences are synthesized as they complete, so speech starts while the
+/// producer is still writing — which is the entire point of the streaming path.
+///
+/// Dropping a session without calling `end` cancels it: the pump is stopped and
+/// the ring flushed, so an abandoned connection cannot leave audio playing.
+pub struct SpeakSession {
+    slot: CurrentSlot,
+    id: String,
+    model: SharedLoadedModel,
+    options: OwnedSpeakOptions,
+    normalizer: crate::text::normalize::Normalizer,
+    chunker: Chunker,
+    /// Taken in `end`/`cancel` to close the channel and stop the pump.
+    sink: Option<PlaybackSink>,
+    events: mpsc::UnboundedReceiver<SpeechEvent>,
+    pump: Option<tokio::task::JoinHandle<()>>,
+    playback: Arc<Playback>,
+    flag: Arc<AtomicBool>,
+    chars: usize,
+    marks: usize,
+    chunks: usize,
+    finished: bool,
+}
 
-        let cancelled = flag.load(Ordering::Relaxed);
-        // A cancel races the backend by design: the sink aborts the frame pump,
-        // which surfaces as an error the caller must not report as a failure.
-        if let Some(e) = failure.filter(|_| !cancelled) {
-            self.clear_if_current(&id);
-            playback.cancel();
-            return Err(e);
+impl std::fmt::Debug for SpeakSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpeakSession")
+            .field("id", &self.id)
+            .field("chunks", &self.chunks)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SpeakSession {
+    /// The utterance id, for correlating events and cancellation.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// How many synthesis chunks have been queued so far.
+    ///
+    /// Grows as sentences complete, which is what makes the streaming path
+    /// observable: it is non-zero before `end` is ever called.
+    #[must_use]
+    pub fn chunks(&self) -> usize {
+        self.chunks
+    }
+
+    /// Whether the session has been cancelled out from under it — by a later
+    /// utterance, or by an explicit stop.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+
+    /// Take the next pending event, if any. Non-blocking.
+    pub fn try_next_event(&mut self) -> Option<SpeechEvent> {
+        self.events.try_recv().ok()
+    }
+
+    /// Milliseconds spoken and still queued, for a progress report.
+    ///
+    /// Both are derived from the device format rather than wall-clock time, so
+    /// they describe a position in the utterance and stay correct while the
+    /// stream is idle.
+    #[must_use]
+    pub fn progress(&self) -> (u64, u64) {
+        let format = self.playback.format();
+        let per_ms = u64::from(format.sample_rate) * u64::from(format.channels.max(1)) / 1000;
+        if per_ms == 0 {
+            return (0, 0);
         }
-        if cancelled {
-            return Ok(Utterance {
-                id,
-                marks,
-                chunks: chunk_count,
-            });
+        let stats = self.playback.stats();
+        let queued = self.playback.buffered() as u64;
+        (stats.rendered_samples / per_ms, queued / per_ms)
+    }
+
+    /// Feed a delta.
+    ///
+    /// Synthesizes and queues every sentence the delta completed. Text that
+    /// does not yet form a whole sentence stays buffered.
+    ///
+    /// # Errors
+    /// See [`SpeakError`].
+    pub async fn push(&mut self, delta: &str) -> Result<(), SpeakError> {
+        if self.finished || self.is_cancelled() {
+            return Ok(());
+        }
+        self.chars = self.chars.saturating_add(delta.chars().count());
+        if self.chars > MAX_TEXT_CHARS {
+            return Err(SpeakError::TextTooLong);
+        }
+        let normalized = self.normalizer.push(delta);
+        let chunks = self.chunker.push(&normalized);
+        for chunk in chunks {
+            self.synthesize(&chunk).await?;
+        }
+        Ok(())
+    }
+
+    /// Complete the utterance: flush the tail through both stages, synthesize
+    /// it, and let the ring drain.
+    ///
+    /// # Errors
+    /// See [`SpeakError`].
+    pub async fn end(&mut self) -> Result<Utterance, SpeakError> {
+        if !self.finished && !self.is_cancelled() {
+            let tail = self.normalizer.finish();
+            let mut chunks = self.chunker.push(&tail);
+            chunks.extend(self.chunker.finish());
+            for chunk in chunks {
+                self.synthesize(&chunk).await?;
+            }
+        }
+        self.finished = true;
+
+        // Closing the channel ends the pump once it has drained, so every
+        // sample is queued before the ring is told the utterance is over.
+        self.sink = None;
+        if let Some(pump) = self.pump.take() {
+            let _ = pump.await;
         }
 
-        playback.finish().await;
-        info!(
-            "utterance {id}: {} chars in {chunk_count} chunk(s), {marks} marks",
-            spoken.chars().count()
-        );
-        self.clear_if_current(&id);
+        if !self.is_cancelled() {
+            self.playback.finish().await;
+            info!(
+                "utterance {}: {} chars in {} chunk(s), {} marks",
+                self.id, self.chars, self.chunks, self.marks
+            );
+        }
+        self.release_slot();
         Ok(Utterance {
-            id,
-            marks,
-            chunks: chunk_count,
+            id: self.id.clone(),
+            marks: self.marks,
+            chunks: self.chunks,
         })
     }
 
-    /// Synthesize every chunk in order, returning the first failure.
-    ///
-    /// One request per chunk, each its own prosodic unit, with
-    /// [`PlaybackSink::boundary`] between them so the seam is faded —
-    /// successive responses are discontinuous in a way successive frames of one
-    /// response are not.
-    async fn synthesize_chunks(
-        model: &SharedLoadedModel,
-        chunks: &[String],
-        sink: &mut PlaybackSink,
-        cancelled: &AtomicBool,
-        options: SpeakOptions<'_>,
-    ) -> Option<SpeakError> {
-        for (index, chunk) in chunks.iter().enumerate() {
-            let request = SynthesizeRequest {
-                text: chunk,
-                voice: options.voice,
-                language: options.language,
-                speed: options.speed,
-                instructions: options.instructions,
-            };
-            let result = {
-                let guard = model.read().await;
-                let Some(loaded) = guard.as_ref() else {
-                    return Some(SpeakError::NotLoaded);
-                };
-                loaded.instance.synthesize(&request, sink).await
-            };
-            if let Err(e) = result {
-                return (!cancelled.load(Ordering::Relaxed))
-                    .then(|| SpeakError::Synthesis(e.to_string()));
-            }
-            if cancelled.load(Ordering::Relaxed) {
-                return None;
-            }
-            // Only between chunks — `finish` closes the last one.
-            if index + 1 < chunks.len() {
-                sink.boundary();
-            }
+    /// Abandon the utterance: stop the pump and drop queued audio.
+    pub async fn cancel(&mut self) {
+        self.flag.store(true, Ordering::Relaxed);
+        self.finished = true;
+        self.sink = None;
+        if let Some(pump) = self.pump.take() {
+            let _ = pump.await;
         }
-        None
+        self.playback.cancel();
+        self.release_slot();
     }
 
-    /// Clear the current slot only if it still holds `id` — a later utterance
-    /// may already have claimed it.
-    fn clear_if_current(&self, id: &str) {
-        let mut guard = self.current.lock();
-        if guard.as_ref().is_some_and(|(cur, _)| cur == id) {
+    /// Release the engine's slot, but only if it still holds this utterance —
+    /// a later one may already have claimed it.
+    fn release_slot(&self) {
+        let mut guard = self.slot.lock();
+        if guard.as_ref().is_some_and(|(cur, _)| *cur == self.id) {
             *guard = None;
         }
+    }
+
+    /// Synthesize one chunk and queue its audio.
+    async fn synthesize(&mut self, chunk: &str) -> Result<(), SpeakError> {
+        if chunk.trim().is_empty() || self.is_cancelled() {
+            return Ok(());
+        }
+        let Some(sink) = self.sink.as_mut() else {
+            return Ok(());
+        };
+        // Between chunks only, never before the first: the boundary fades a
+        // seam, and there is nothing to fade against at the start.
+        if self.chunks > 0 {
+            sink.boundary();
+        }
+
+        let opts = self.options.as_ref();
+        let request = SynthesizeRequest {
+            text: chunk,
+            voice: opts.voice,
+            language: opts.language,
+            speed: opts.speed,
+            instructions: opts.instructions,
+        };
+        let result = {
+            let guard = self.model.read().await;
+            let Some(loaded) = guard.as_ref() else {
+                return Err(SpeakError::NotLoaded);
+            };
+            loaded.instance.synthesize(&request, sink).await
+        };
+        self.marks = sink.marks;
+
+        match result {
+            Ok(()) => {
+                self.chunks += 1;
+                Ok(())
+            }
+            // A cancel races the backend by design: the sink aborts the frame
+            // pump, which surfaces here as an error the caller must not report
+            // as a failure.
+            Err(_) if self.is_cancelled() => Ok(()),
+            Err(e) => {
+                self.playback.cancel();
+                Err(SpeakError::Synthesis(e.to_string()))
+            }
+        }
+    }
+}
+
+impl Drop for SpeakSession {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        // An abandoned session — a dropped WebSocket, a panicking handler —
+        // must not leave audio playing. The pump ends on its own once the sink
+        // is gone; the ring is flushed synchronously here because `Drop` has no
+        // await.
+        self.flag.store(true, Ordering::Relaxed);
+        self.sink = None;
+        if let Some(pump) = self.pump.take() {
+            pump.abort();
+        }
+        self.playback.cancel();
+        self.release_slot();
     }
 }
 

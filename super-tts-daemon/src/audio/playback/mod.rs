@@ -81,6 +81,11 @@ pub struct Stats {
     /// Times the callback could not take the state lock and rendered silence.
     /// Non-zero here is contention, which is a different bug from an underrun.
     pub lock_misses: u64,
+    /// Interleaved samples actually handed to the device since the last
+    /// [`Playback::cancel`]. Counts only real audio, not the silence rendered
+    /// while idle, so it is a position within the utterance rather than
+    /// wall-clock time.
+    pub rendered_samples: u64,
 }
 
 /// State shared between the producer task and the audio callback.
@@ -108,6 +113,7 @@ impl Shared {
         }
 
         let got = self.ring.read(out);
+        self.stats.rendered_samples += got as u64;
         if got < out.len() {
             out[got..].fill(0.0);
             if self.state == State::Playing {
@@ -382,6 +388,9 @@ impl Playback {
     pub fn cancel(&self) {
         *self.producer.lock() = Producer::default();
         let mut guard = self.shared.lock();
+        // The position counter is per-utterance, so a cancel resets it along
+        // with the audio it was counting.
+        guard.stats.rendered_samples = 0;
         guard.ring.clear();
         guard.state = State::Idle;
     }

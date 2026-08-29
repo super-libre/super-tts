@@ -404,3 +404,268 @@ async fn text_that_is_entirely_markup_is_refused_as_empty() {
         "nothing to say must not open the audio device"
     );
 }
+
+// -------------------------------------------------------------- streaming
+
+use super_tts_daemon::daemon::speech::SpeakOptions;
+
+/// Yield until `cond` holds, or give up.
+///
+/// Queuing is deliberately not awaited by `push`: the pump task pushes to the
+/// ring concurrently with synthesis, which is what lets audio start before the
+/// text is finished. So mid-stream assertions are about what happens *soon*,
+/// not what has already happened by the time `push` returns.
+async fn eventually(mut cond: impl FnMut() -> bool) -> bool {
+    for _ in 0..1000 {
+        if cond() {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    cond()
+}
+
+/// The streaming contract that matters: feeding text as deltas must produce
+/// the same audio as handing it over whole. If these diverged, an LLM-driven
+/// utterance would sound different from the same text pasted in.
+#[tokio::test]
+async fn streaming_deltas_produce_the_same_audio_as_one_shot() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let text = "First sentence here. Second sentence follows along. \
+                Third one arrives now. And a fourth to finish it.";
+
+    let one_shot = SpeechEngine::detached(DEVICE);
+    let whole = one_shot
+        .speak(&model, text, None, None, None, None)
+        .await
+        .expect("one-shot speak");
+    let whole_buffered = one_shot
+        .playback_handle()
+        .await
+        .expect("pipeline")
+        .buffered();
+
+    let streamed = SpeechEngine::detached(DEVICE);
+    let mut session = streamed
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    // Deltas that deliberately cut across sentence boundaries.
+    for delta in text.as_bytes().chunks(7) {
+        session
+            .push(std::str::from_utf8(delta).expect("ascii"))
+            .await
+            .expect("push");
+    }
+    let streamed_utterance = session.end().await.expect("end");
+    let streamed_buffered = streamed
+        .playback_handle()
+        .await
+        .expect("pipeline")
+        .buffered();
+
+    assert_eq!(
+        streamed_utterance.chunks, whole.chunks,
+        "the same text must split the same way however it arrives"
+    );
+    assert_eq!(
+        streamed_buffered, whole_buffered,
+        "and produce the same amount of audio"
+    );
+}
+
+/// The point of streaming: audio is produced while text is still arriving,
+/// not after. If this failed, the WebSocket would be a slower POST.
+#[tokio::test]
+async fn sentences_are_synthesized_before_the_stream_ends() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+
+    assert_eq!(
+        session.chunks(),
+        0,
+        "nothing is synthesized before any text"
+    );
+    session
+        .push("First sentence here. Second sentence follows along. And more text after.")
+        .await
+        .expect("push");
+    assert!(
+        session.chunks() > 0,
+        "a completed sentence must be synthesized before `end` is called"
+    );
+    let playback = engine.playback_handle().await.expect("pipeline");
+    assert!(
+        eventually(|| playback.buffered() > 0).await,
+        "and its audio must reach the ring without waiting for the stream to end"
+    );
+    session.end().await.expect("end");
+}
+
+/// A partial sentence is held rather than spoken: cutting mid-clause sounds
+/// wrong, and the rest is usually one token away.
+#[tokio::test]
+async fn an_incomplete_sentence_is_not_synthesized_early() {
+    let Some(model) = loaded_model_with_limit(4000) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push("This sentence has not").await.expect("push");
+    assert_eq!(session.chunks(), 0, "a fragment waits for its terminator");
+    let utterance = session.end().await.expect("end");
+    assert_eq!(utterance.chunks, 1, "and is flushed when the stream ends");
+}
+
+#[tokio::test]
+async fn cancelling_a_stream_drops_its_queued_audio() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    // Long enough to complete a chunk: below the model's limit nothing is
+    // synthesized until the stream ends, which is the chunker doing its job.
+    session
+        .push("First sentence here. Second sentence follows along. Third one arrives. More after that.")
+        .await
+        .expect("push");
+    let playback = engine.playback_handle().await.expect("pipeline");
+    assert!(eventually(|| playback.buffered() > 0).await);
+
+    session.cancel().await;
+    assert_eq!(playback.buffered(), 0, "cancel flushes the ring");
+    assert!(session.is_cancelled());
+    assert_eq!(engine.current(), None, "and releases the utterance slot");
+}
+
+/// An abandoned connection must not leave audio playing, so dropping a session
+/// has to cancel it — the WebSocket handler relies on this for the case where
+/// the task dies without running its cleanup.
+#[tokio::test]
+async fn dropping_a_session_cancels_it() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let playback = {
+        let mut session = engine
+            .begin(&model, SpeakOptions::default())
+            .await
+            .expect("begin");
+        session
+            .push("First sentence here. Second sentence follows along. Third one arrives. More after that.")
+            .await
+            .expect("push");
+        let playback = engine.playback_handle().await.expect("pipeline");
+        assert!(eventually(|| playback.buffered() > 0).await);
+        playback
+    };
+    assert_eq!(playback.buffered(), 0, "the drop flushed the ring");
+    assert_eq!(engine.current(), None, "and released the slot");
+}
+
+/// A later utterance supersedes a live stream, and the stream must be able to
+/// tell — otherwise a client keeps feeding a session whose audio is discarded.
+#[tokio::test]
+async fn a_new_utterance_supersedes_a_live_stream() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push("First sentence here.").await.expect("push");
+    assert!(!session.is_cancelled());
+
+    engine
+        .speak(&model, "Interrupting.", None, None, None, None)
+        .await
+        .expect("the interrupting utterance");
+    assert!(
+        session.is_cancelled(),
+        "the stream must observe that it was superseded"
+    );
+}
+
+/// Marks reach the streaming client, which is what powers highlight-as-it-
+/// speaks. The one-shot path counts them; only this path forwards them.
+#[tokio::test]
+async fn marks_are_forwarded_to_the_stream() {
+    use super_tts_daemon::daemon::speech::SpeechEvent;
+
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push("Hello there.").await.expect("push");
+    session.end().await.expect("end");
+
+    let mut marks = Vec::new();
+    while let Some(SpeechEvent::Mark(m)) = session.try_next_event() {
+        marks.push(m);
+    }
+    assert_eq!(marks.len(), 1, "the mock emits one mark per response");
+    assert_eq!(marks[0].start_char, Some(0));
+    assert_eq!(marks[0].end_char, Some(5));
+}
+
+#[tokio::test]
+async fn progress_reports_a_position_within_the_utterance() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push("Hello there.").await.expect("push");
+    session.end().await.expect("end");
+
+    let (spoken, queued) = session.progress();
+    assert_eq!(spoken, 0, "nothing has been rendered to a device yet");
+    assert!(queued > 0, "the utterance is queued, got {queued}ms");
+
+    // Render some, and the spoken position must advance while queued falls.
+    let playback = engine.playback_handle().await.expect("pipeline");
+    let mut buf = vec![0.0_f32; 4800]; // 100 ms at 48 kHz
+    playback.render(&mut buf);
+    let (spoken_after, queued_after) = session.progress();
+    assert!(
+        spoken_after > 0,
+        "spoken position must advance as the device consumes audio"
+    );
+    assert!(
+        queued_after < queued,
+        "and what remains queued must fall: {queued} then {queued_after}"
+    );
+}
