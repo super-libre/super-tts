@@ -90,6 +90,18 @@ pub(crate) async fn require_transcribe_scope(
     require_scope("transcribe", state, headers, request, next).await
 }
 
+/// The `speak` scope gates synthesis and playback control. Distinct from
+/// `transcribe` because it is a different capability being granted: one turns
+/// the user's voice into text, the other takes over the speakers.
+pub(crate) async fn require_speak_scope(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    require_scope("speak", state, headers, request, next).await
+}
+
 pub(crate) async fn require_status_scope(
     State(state): State<AppState>,
     headers: HeaderMap,

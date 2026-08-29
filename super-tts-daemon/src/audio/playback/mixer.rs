@@ -98,10 +98,16 @@ pub fn prepare(samples: &[f32], params: AudioParams, device: DeviceFormat) -> Re
 /// shortens the utterance by the fade length on every seam. Losing ~15 ms of
 /// speech per sentence is a real defect; a momentary dip is not.
 ///
-/// So each chunk is faded in at its head and out at its tail, in place, with no
-/// overlap. Total length is preserved exactly, every boundary — including the
-/// start and end of the utterance — passes through zero instead of stepping,
-/// and nothing has to be held back, so no latency is added.
+/// So each chunk is faded in at its head and out at its tail, with no overlap.
+/// Total length is preserved exactly, and every boundary — including the start
+/// and end of the utterance — passes through zero instead of stepping.
+///
+/// [`Playback`](super::Playback) decides *where* the boundaries are: it fades
+/// in once per synthesis chunk and holds back one fade's worth of tail so
+/// [`Playback::end_chunk`](super::Playback::end_chunk) can fade it out. That
+/// costs one fade of latency (8 ms) and is the price of being able to fade out
+/// at all — the samples have to still be in reach when the chunk turns out to
+/// be over.
 ///
 /// The gain curve is equal-power (`sin`/`cos`) rather than linear: it reaches
 /// its half-way point faster, which keeps the dip short.
@@ -142,25 +148,58 @@ impl SeamFade {
     /// rather than skipped, so even a very short chunk still meets zero at both
     /// ends and no sample is dropped.
     pub fn apply(self, chunk: &mut [f32]) {
-        if self.fade_frames == 0 || chunk.is_empty() {
+        self.fade_in(chunk);
+        self.fade_out(chunk);
+    }
+
+    /// Fade the head of `chunk` up from zero.
+    pub fn fade_in(self, chunk: &mut [f32]) {
+        let Some((n, ch)) = self.span(chunk) else {
             return;
+        };
+        for i in 0..n {
+            let gain = Self::gain(i, n);
+            let head = i * ch;
+            for c in 0..ch {
+                chunk[head + c] *= gain;
+            }
+        }
+    }
+
+    /// Fade the tail of `chunk` down to zero.
+    pub fn fade_out(self, chunk: &mut [f32]) {
+        let Some((n, ch)) = self.span(chunk) else {
+            return;
+        };
+        let frames = chunk.len() / ch;
+        for i in 0..n {
+            let gain = Self::gain(i, n);
+            let tail = (frames - 1 - i) * ch;
+            for c in 0..ch {
+                chunk[tail + c] *= gain;
+            }
+        }
+    }
+
+    /// `(fade frames, channels)` for `chunk`, or `None` when there is nothing
+    /// to do. The fade is capped at half the chunk so a head and a tail fade on
+    /// the same buffer never overlap.
+    fn span(self, chunk: &[f32]) -> Option<(usize, usize)> {
+        if self.fade_frames == 0 || chunk.is_empty() {
+            return None;
         }
         let ch = self.channels;
         let frames = chunk.len() / ch;
         if frames == 0 {
-            return;
+            return None;
         }
-        let n = self.fade_frames.min(frames / 2).max(1).min(frames);
-        for i in 0..n {
-            let t = (crate::num_cast::usize_to_f32(i) + 0.5) / crate::num_cast::usize_to_f32(n);
-            let (gain, _) = equal_power(t);
-            let head = i * ch;
-            let tail = (frames - 1 - i) * ch;
-            for c in 0..ch {
-                chunk[head + c] *= gain;
-                chunk[tail + c] *= gain;
-            }
-        }
+        Some((self.fade_frames.min(frames / 2).max(1).min(frames), ch))
+    }
+
+    /// Gain at step `i` of an `n`-frame fade.
+    fn gain(i: usize, n: usize) -> f32 {
+        let t = (crate::num_cast::usize_to_f32(i) + 0.5) / crate::num_cast::usize_to_f32(n);
+        equal_power(t).0
     }
 }
 

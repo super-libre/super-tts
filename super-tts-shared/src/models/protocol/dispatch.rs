@@ -15,6 +15,8 @@ impl TryFrom<DaemonRequest> for Command {
         }
         match request.command.as_str() {
             "transcribe" => cmd_transcribe(&request),
+            "speak" => cmd_speak(&request),
+            "stop_speaking" => Ok(Command::StopSpeaking),
             "ping" => Ok(Command::Ping {
                 client_id: request.client_id.clone(),
             }),
@@ -86,6 +88,43 @@ fn cmd_transcribe(request: &DaemonRequest) -> Result<Command, String> {
         client_id,
         language: request.language.clone(),
     })
+}
+
+/// Build a `speak` command. `text` is required; everything else refines how it
+/// is spoken and is optional, so a bare `{"text": "..."}` is a valid request.
+fn cmd_speak(request: &DaemonRequest) -> Result<Command, String> {
+    let data = request.data.as_ref();
+    let text = data
+        .and_then(|d| d.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Missing text for speak command")?
+        .to_string();
+    let field = |name: &str| {
+        data.and_then(|d| d.get(name))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let speed = data
+        .and_then(|d| d.get("speed"))
+        .and_then(serde_json::Value::as_f64)
+        .map(speed_to_f32);
+    Ok(Command::Speak {
+        text,
+        voice: field("voice"),
+        // The top-level `language` field is shared with the transcribe paths,
+        // so a client sets it the same way on either.
+        language: request.language.clone().or_else(|| field("language")),
+        speed,
+        instructions: field("instructions"),
+    })
+}
+
+/// `speed` is a small rate multiplier (roughly 0.5–2.0), so the narrowing is
+/// inconsequential; the cast is isolated here rather than allowed at the call
+/// site so the justification sits next to it.
+#[allow(clippy::cast_possible_truncation)]
+fn speed_to_f32(v: f64) -> f32 {
+    v as f32
 }
 
 fn cmd_record(request: &DaemonRequest) -> Result<Command, String> {

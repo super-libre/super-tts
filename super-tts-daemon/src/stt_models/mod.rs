@@ -17,7 +17,9 @@ pub use model_definition::ModelDefinition;
 #[cfg(feature = "subprocess-backends")]
 pub mod subprocess;
 pub mod transcribe;
-#[cfg(any(feature = "wasm-backends", feature = "subprocess-backends"))]
+// The `/v1` request/response *types* are backend-agnostic and are referenced
+// from `transcribe`'s trait signature, so the module is always compiled; the
+// body pump inside it is what carries the transport-dependent gate.
 pub mod v1;
 #[cfg(feature = "wasm-backends")]
 pub mod wasm;

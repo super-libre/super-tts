@@ -21,6 +21,17 @@ impl SuperTTSDaemon {
                 self.handle_transcribe(audio_data, sample_rate, client_id, language)
                     .await
             }
+            Command::Speak {
+                text,
+                voice,
+                language,
+                speed,
+                instructions,
+            } => {
+                self.handle_speak(text, voice, language, speed, instructions)
+                    .await
+            }
+            Command::StopSpeaking => self.handle_stop_speaking().await,
             Command::Ping { client_id } => self.handle_ping(client_id),
             Command::Status => self.handle_status().await,
             Command::Record {

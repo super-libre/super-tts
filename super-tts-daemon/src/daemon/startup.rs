@@ -112,6 +112,7 @@ impl SuperTTSDaemon {
                 crate::output::notification::Notifier::dbus(),
             )),
             self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
+            speech: Arc::new(crate::daemon::speech::SpeechEngine::new()),
         };
 
         daemon.post_init().await;

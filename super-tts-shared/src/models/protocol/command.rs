@@ -12,6 +12,22 @@ pub enum Command {
         /// falls back to the active model's configured language.
         language: Option<String>,
     },
+    /// Synthesize `text` with the active model and play it. Cancels whatever
+    /// is currently speaking — see `daemon::speech` for the one-at-a-time
+    /// policy and why the utterance id exists from the start.
+    Speak {
+        text: String,
+        /// A `voice` id the model declares, or `None` for its `default_voice`.
+        voice: Option<String>,
+        /// Optional per-request language override (BCP-47).
+        language: Option<String>,
+        /// Rate multiplier; backends that cannot vary rate ignore it.
+        speed: Option<f32>,
+        /// Free-text delivery guidance for models that accept it.
+        instructions: Option<String>,
+    },
+    /// Stop the current utterance and discard queued audio.
+    StopSpeaking,
     Ping {
         client_id: Option<String>,
     },

@@ -107,6 +107,9 @@ pub struct SuperTTSDaemon {
     // Self-update check state: last completed check + notify-once
     // persistence. See `crate::self_update`.
     pub self_update: Arc<crate::self_update::SelfUpdateChecker>,
+    // The speak path: owns the output device (opened lazily, on first
+    // utterance) and the in-flight utterance. See `crate::daemon::speech`.
+    pub speech: Arc<crate::daemon::speech::SpeechEngine>,
 }
 
 /// A daemon wired up with inert defaults: no model, no backends, nothing
@@ -150,6 +153,13 @@ pub(crate) async fn test_daemon() -> SuperTTSDaemon {
             crate::output::notification::Notifier::fake(true).0,
         )),
         self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
+        // Detached: the test daemon must never claim a real output device.
+        speech: Arc::new(crate::daemon::speech::SpeechEngine::detached(
+            crate::audio::playback::DeviceFormat {
+                sample_rate: 48000,
+                channels: 1,
+            },
+        )),
     }
 }
 

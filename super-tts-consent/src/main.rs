@@ -318,6 +318,7 @@ impl ConsentApp {
 fn permissions_for_scope(scope: &str) -> &'static [&'static str] {
     match scope {
         "transcribe" => constants::TRANSCRIBE_PERMISSIONS,
+        "speak" => constants::SPEAK_PERMISSIONS,
         "status" => constants::STATUS_PERMISSIONS,
         "settings" => constants::SETTINGS_PERMISSIONS,
         "recording_events" => constants::RECORDING_EVENTS_PERMISSIONS,

@@ -129,24 +129,51 @@ impl Shared {
     }
 }
 
-/// The playback pipeline: producer API plus the output stream.
+/// The playback pipeline's producer half: queue chunks, drain, cancel.
 ///
-/// The cpal stream is optional so the pipeline can be built and driven with no
-/// audio device — [`Playback::render`] is the same code the callback runs.
+/// Deliberately holds no `cpal::Stream`. cpal's stream is `!Send` on several
+/// backends because it is bound to the thread that created it, and the daemon
+/// needs to reach playback from async tasks on the tokio pool. Rather than
+/// asserting `Send` on a handle the platform says is not, the stream is kept
+/// where it was created — see [`Stream`] — and only the `Arc<Mutex<Shared>>`
+/// crosses threads, which is genuinely shared state.
+///
+/// It also means the pipeline can be built and driven with no audio device at
+/// all: [`Playback::render`] is the same code the callback runs.
+/// Every producer method takes `&self`: [`SeamFade`] is stateless and `Copy`,
+/// so all mutable state lives behind the `Arc<Mutex<Shared>>` the callback
+/// shares. That makes `Playback` `Sync`, so the speak path can hold one
+/// `Arc<Playback>` and push, finish, and cancel from different tasks without an
+/// outer lock — and, critically, without ever holding a lock across an `await`,
+/// which would stall the audio callback's `try_lock`.
 pub struct Playback {
     shared: Arc<Mutex<Shared>>,
     device: DeviceFormat,
     fade: SeamFade,
-    /// Held to keep the stream alive; dropping it stops playback.
-    stream: Option<cpal::Stream>,
+    /// Producer-side fade bookkeeping. Separate from `Shared` so the audio
+    /// callback never contends on it, and small enough that the lock is only
+    /// ever held for a splice — never across an `await`.
+    producer: Mutex<Producer>,
 }
 
-// cpal's `Stream` is `!Send` on some backends because it is tied to the thread
-// that created it. The daemon builds and drops a `Playback` on one task, and
-// the callback owns only the `Arc<Mutex<Shared>>`, so the handle never actually
-// moves across threads while a stream is live.
-#[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl Send for Playback {}
+/// Where the producer is within the current utterance.
+#[derive(Debug, Default)]
+struct Producer {
+    /// Whether the utterance's opening fade has been applied.
+    started: bool,
+    /// The last `fade` frames, held back so [`Playback::finish`] can fade them
+    /// out. Costs one fade of latency (8 ms) and is what makes the closing
+    /// fade possible at all — the samples must still be in reach when the
+    /// utterance turns out to be over.
+    tail: Vec<f32>,
+}
+
+/// A live output stream, kept alive by being held.
+///
+/// `!Send` by construction, exactly as cpal intends: whoever calls
+/// [`Playback::open`] owns this and must keep it on that thread until playback
+/// should stop. Dropping it closes the device.
+pub struct Stream(#[allow(dead_code)] cpal::Stream);
 
 impl Playback {
     /// Build a pipeline for a device format without opening a stream.
@@ -170,7 +197,7 @@ impl Playback {
             })),
             device,
             fade: SeamFade::new(DEFAULT_FADE_MS, device),
-            stream: None,
+            producer: Mutex::new(Producer::default()),
         }
     }
 
@@ -184,12 +211,15 @@ impl Playback {
     /// # Errors
     /// Returns an error if the device's format is unsupported or the stream
     /// cannot be built or started.
-    pub fn open(device: &cpal::Device, config: &cpal::SupportedStreamConfig) -> Result<Self> {
+    pub fn open(
+        device: &cpal::Device,
+        config: &cpal::SupportedStreamConfig,
+    ) -> Result<(Self, Stream)> {
         let format = DeviceFormat {
             sample_rate: config.sample_rate(),
             channels: config.channels(),
         };
-        let mut playback = Self::detached(format);
+        let playback = Self::detached(format);
         let shared = Arc::clone(&playback.shared);
 
         let err_fn = |e| warn!("playback stream error: {e}");
@@ -240,12 +270,11 @@ impl Playback {
             other => anyhow::bail!("unsupported output sample format: {other}"),
         };
         stream.play().context("starting playback stream")?;
-        playback.stream = Some(stream);
         debug!(
             "playback stream open at {} Hz, {} channels",
             format.sample_rate, format.channels
         );
-        Ok(playback)
+        Ok((playback, Stream(stream)))
     }
 
     /// The device format this pipeline renders to.
@@ -281,23 +310,62 @@ impl Playback {
     ///
     /// # Errors
     /// Returns an error if resampling fails.
-    pub async fn push(&mut self, samples: &[f32], params: AudioParams) -> Result<()> {
-        let mut prepared = mixer::prepare(samples, params, self.device)?;
+    pub async fn push(&self, samples: &[f32], params: AudioParams) -> Result<()> {
+        let prepared = mixer::prepare(samples, params, self.device)?;
         if prepared.is_empty() {
             return Ok(());
         }
-        self.fade.apply(&mut prepared);
-        self.write_all(&prepared).await;
+        // Fades belong to the *utterance*, not to whatever slice of it the
+        // backend happened to put in one frame. Fading every push would put a
+        // dip every few milliseconds of audio, which is audible as tremolo;
+        // the utterance's own two edges are the only discontinuities there are.
+        let ready = {
+            let mut prod = self.producer.lock();
+            let mut buf = std::mem::take(&mut prod.tail);
+            buf.extend_from_slice(&prepared);
+            if !prod.started {
+                self.fade.fade_in(&mut buf);
+                prod.started = true;
+            }
+            let hold = self.fade.samples().min(buf.len());
+            prod.tail = buf.split_off(buf.len() - hold);
+            buf
+        };
+        if !ready.is_empty() {
+            self.write_all(&ready).await;
+        }
         Ok(())
     }
 
-    /// Signal end of utterance: let the ring drain and idle afterwards. The
-    /// stream stays open, so the next utterance does not pay device wake-up
-    /// latency again.
+    /// Close the current synthesis chunk: fade out the held tail and write it,
+    /// so the next [`push`](Self::push) starts a fresh fade-in.
     ///
-    /// Nothing is held back to flush — [`SeamFade`] already faded the last
-    /// chunk's tail to zero, so the utterance ends on silence by construction.
-    pub fn finish(&mut self) {
+    /// A "chunk" is one `POST /v1/synthesize` response, not one call to `push`.
+    /// The distinction is the whole reason this method exists: a backend splits
+    /// its response into as many frames as it likes, and fading at every frame
+    /// would put a dip every few milliseconds — audible as tremolo. Separate
+    /// synthesis responses genuinely are discontinuous, because nothing makes
+    /// the last sample of one continuous with the first of the next, so those
+    /// are the boundaries that need fading. The caller knows which is which;
+    /// the pipeline cannot infer it.
+    pub async fn end_chunk(&self) {
+        let tail = {
+            let mut prod = self.producer.lock();
+            prod.started = false;
+            let mut tail = std::mem::take(&mut prod.tail);
+            self.fade.fade_out(&mut tail);
+            tail
+        };
+        if !tail.is_empty() {
+            self.write_all(&tail).await;
+        }
+    }
+
+    /// Signal end of utterance: close the final chunk, then let the ring drain
+    /// and idle. The stream stays open, so the next utterance does not pay
+    /// device wake-up latency again.
+    pub async fn finish(&self) {
+        self.end_chunk().await;
         let mut guard = self.shared.lock();
         if guard.state != State::Idle {
             // Promote out of prebuffering even if the utterance was shorter
@@ -311,7 +379,8 @@ impl Playback {
     /// This is the barge-in path, so it is measured in how fast it goes quiet —
     /// dropping the ring means the next callback renders silence, bounded by
     /// one device buffer rather than by whatever was queued.
-    pub fn cancel(&mut self) {
+    pub fn cancel(&self) {
+        *self.producer.lock() = Producer::default();
         let mut guard = self.shared.lock();
         guard.ring.clear();
         guard.state = State::Idle;

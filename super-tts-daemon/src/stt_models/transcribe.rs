@@ -117,6 +117,28 @@ pub trait Transcribe: ModelState {
         anyhow::bail!("this model does not support realtime streaming")
     }
 
+    /// Synthesize speech, feeding `sink` as frames decode.
+    ///
+    /// `sink` is `&mut dyn` rather than a generic so the trait stays
+    /// object-safe: the daemon holds the loaded model as
+    /// `Box<dyn Transcribe>`, and a generic method could not be called through
+    /// it.
+    ///
+    /// Default: unsupported, so a backend that only transcribes keeps
+    /// compiling. Both hosts override it.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot be reached, refuses the request,
+    /// or produces a malformed frame stream.
+    async fn synthesize(
+        &self,
+        request: &crate::stt_models::v1::SynthesizeRequest<'_>,
+        sink: &mut (dyn crate::stt_models::v1::SynthesisSink + Send),
+    ) -> Result<()> {
+        let _ = (request, sink);
+        anyhow::bail!("this model does not support synthesis")
+    }
+
     /// Release any external resources the backend holds. Default no-op.
     ///
     /// Subprocess backends override this to stop the `systemd-run --user`

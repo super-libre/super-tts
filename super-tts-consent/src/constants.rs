@@ -14,6 +14,17 @@ pub const TRANSCRIBE_PERMISSIONS: &[&str] = &[
     "Receive this app's own transcription text (preview and final)",
 ];
 
+/// Bullets for the `speak` scope.
+///
+/// Phrased around what the user gives up — control of the speakers — rather
+/// than what the app gains. Interrupting is called out because it is the part
+/// that surprises people: granting this lets the app cut off whatever else is
+/// being read aloud.
+pub const SPEAK_PERMISSIONS: &[&str] = &[
+    "Play synthesized speech through your speakers",
+    "Interrupt or stop speech this or another app started",
+];
+
 /// Bullets for the `status` scope.
 pub const STATUS_PERMISSIONS: &[&str] =
     &["Read which speech-to-text model and device are currently active"];

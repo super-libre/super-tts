@@ -11,6 +11,7 @@
 /// scope catalog in `docs/protocol/auth.md`.
 pub const KNOWN_SCOPES: &[&str] = &[
     "transcribe",
+    "speak",
     "settings",
     "secrets",
     "status",
@@ -39,6 +40,7 @@ mod tests {
             is_known_scope("secrets"),
             "secrets must be an accepted scope"
         );
+        assert!(is_known_scope("speak"), "speak must be an accepted scope");
     }
 
     #[test]

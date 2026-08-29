@@ -340,7 +340,7 @@ impl WasmBackend {
     pub async fn synthesize(
         &self,
         req: &crate::stt_models::v1::SynthesizeRequest<'_>,
-        sink: &mut impl crate::stt_models::v1::SynthesisSink,
+        sink: &mut (dyn crate::stt_models::v1::SynthesisSink + Send),
     ) -> Result<()> {
         let host = Host {
             table: ResourceTable::new(),
@@ -544,6 +544,15 @@ impl ModelState for WasmBackend {
 
 #[async_trait]
 impl Transcribe for WasmBackend {
+    /// Forward to the inherent streaming implementation.
+    async fn synthesize(
+        &self,
+        request: &crate::stt_models::v1::SynthesizeRequest<'_>,
+        sink: &mut (dyn crate::stt_models::v1::SynthesisSink + Send),
+    ) -> Result<()> {
+        Self::synthesize(self, request, sink).await
+    }
+
     async fn transcribe_audio(
         &mut self,
         audio: &[f32],

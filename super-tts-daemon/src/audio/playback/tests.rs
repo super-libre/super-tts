@@ -53,7 +53,7 @@ async fn silence_is_rendered_before_anything_is_queued() {
 
 #[tokio::test]
 async fn nothing_is_heard_until_the_prebuffer_fills() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     // 10 ms at 48 kHz — well under the 120 ms prebuffer.
     p.push(&vec![1.0_f32; 480], params(48000, 1)).await.unwrap();
     assert_eq!(p.state(), State::Prebuffering);
@@ -62,12 +62,19 @@ async fn nothing_is_heard_until_the_prebuffer_fills() {
         out.iter().all(|s| *s == 0.0),
         "prebuffering must not emit a partial start"
     );
-    assert_eq!(p.buffered(), 480, "and must not consume what it is holding");
+    // One fade's worth is held back for the closing fade-out, so the ring holds
+    // the rest.
+    let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples();
+    assert_eq!(
+        p.buffered(),
+        480 - fade,
+        "and must not consume what it is holding"
+    );
 }
 
 #[tokio::test]
 async fn playback_starts_once_the_prebuffer_threshold_is_met() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     // 200 ms > the 120 ms threshold.
     p.push(&vec![0.5_f32; 9600], params(48000, 1))
         .await
@@ -88,24 +95,26 @@ async fn playback_starts_once_the_prebuffer_threshold_is_met() {
 }
 
 /// The point of the whole module: two independently synthesized chunks must
-/// come out as one continuous waveform.
+/// come out as one continuous waveform. The boundary is explicit — only the
+/// caller knows where one synthesis response ended and the next began.
 #[tokio::test]
-async fn consecutive_chunks_join_without_a_step() {
-    let mut p = Playback::detached(DEVICE);
+async fn separately_synthesized_chunks_join_without_a_step() {
+    let p = Playback::detached(DEVICE);
     // Two DC blocks at opposite levels: butted together they step by 2.0.
     p.push(&vec![1.0_f32; 24000], params(48000, 1))
         .await
         .unwrap();
+    p.end_chunk().await;
     p.push(&vec![-1.0_f32; 24000], params(48000, 1))
         .await
         .unwrap();
-    p.finish();
+    p.finish().await;
 
     let out = drain(&p, 48000, 512);
     let step = max_step(&out);
     assert!(
         step < 0.2,
-        "the seam between chunks must be crossfaded; largest step was {step}"
+        "the seam between chunks must be faded; largest step was {step}"
     );
 }
 
@@ -113,15 +122,16 @@ async fn consecutive_chunks_join_without_a_step() {
 /// device is the ordinary case, not an edge one.
 #[tokio::test]
 async fn continuity_survives_resampling_from_the_backend_rate() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     let sine = |n: usize, phase: f32| -> Vec<f32> {
         (0..n)
             .map(|i| (i as f32 * 0.02 + phase).sin() * 0.5)
             .collect()
     };
     p.push(&sine(12000, 0.0), params(24000, 1)).await.unwrap();
+    p.end_chunk().await;
     p.push(&sine(12000, 1.0), params(24000, 1)).await.unwrap();
-    p.finish();
+    p.finish().await;
 
     let out = drain(&p, 40000, 512);
     let step = max_step(&out);
@@ -141,12 +151,12 @@ async fn a_mono_backend_is_spread_across_a_stereo_device() {
         sample_rate: 48000,
         channels: 2,
     };
-    let mut p = Playback::detached(stereo);
+    let p = Playback::detached(stereo);
     // 200 ms of mono, which must become 200 ms of stereo frames.
     p.push(&vec![0.25_f32; 9600], params(48000, 1))
         .await
         .unwrap();
-    p.finish();
+    p.finish().await;
 
     let out = drain(&p, 19200, 512);
     assert_eq!(out.len(), 19200, "200 ms of mono becomes 200 ms of stereo");
@@ -170,7 +180,7 @@ async fn a_mono_backend_is_spread_across_a_stereo_device() {
 
 #[tokio::test]
 async fn an_underrun_renders_silence_and_is_counted() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&vec![1.0_f32; 9600], params(48000, 1))
         .await
         .unwrap();
@@ -197,11 +207,11 @@ async fn an_underrun_renders_silence_and_is_counted() {
 /// it would make every normal utterance look like a glitch.
 #[tokio::test]
 async fn draining_past_the_end_is_not_counted_as_an_underrun() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&vec![1.0_f32; 9600], params(48000, 1))
         .await
         .unwrap();
-    p.finish();
+    p.finish().await;
     let _ = drain(&p, 19200, 4800);
     assert_eq!(p.stats().underrun_samples, 0);
     assert_eq!(p.state(), State::Idle, "the stream idles once drained");
@@ -210,12 +220,12 @@ async fn draining_past_the_end_is_not_counted_as_an_underrun() {
 /// A reply shorter than the prebuffer threshold must still be heard.
 #[tokio::test]
 async fn an_utterance_shorter_than_the_prebuffer_still_plays() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&vec![0.75_f32; 960], params(48000, 1))
         .await
         .unwrap(); // 20 ms
     assert_eq!(p.state(), State::Prebuffering);
-    p.finish();
+    p.finish().await;
     assert_eq!(p.state(), State::Draining);
 
     let out = drain(&p, 960, 240);
@@ -227,7 +237,7 @@ async fn an_utterance_shorter_than_the_prebuffer_still_plays() {
 
 #[tokio::test]
 async fn cancel_goes_silent_within_one_buffer() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&vec![1.0_f32; 48000], params(48000, 1))
         .await
         .unwrap();
@@ -246,7 +256,7 @@ async fn cancel_goes_silent_within_one_buffer() {
 
 #[tokio::test]
 async fn a_cancelled_stream_accepts_a_new_utterance() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&vec![1.0_f32; 48000], params(48000, 1))
         .await
         .unwrap();
@@ -255,7 +265,7 @@ async fn a_cancelled_stream_accepts_a_new_utterance() {
     p.push(&vec![-0.5_f32; 9600], params(48000, 1))
         .await
         .unwrap();
-    p.finish();
+    p.finish().await;
     let out = drain(&p, 9600, 480);
     assert!(
         out.iter().any(|s| (*s + 0.5).abs() < 1e-6),
@@ -269,7 +279,7 @@ async fn a_cancelled_stream_accepts_a_new_utterance() {
 
 #[tokio::test]
 async fn an_empty_chunk_is_a_no_op() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&[], params(48000, 1)).await.unwrap();
     assert_eq!(p.state(), State::Idle);
     assert_eq!(p.buffered(), 0);
@@ -279,7 +289,7 @@ async fn an_empty_chunk_is_a_no_op() {
 /// `push` blocks on a full ring instead of growing it.
 #[tokio::test]
 async fn a_full_ring_applies_backpressure_to_the_producer() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     let capacity = (DEVICE.sample_rate * RING_SECONDS) as usize;
 
     // Queue the ring full, then confirm a further push cannot complete while
@@ -287,7 +297,8 @@ async fn a_full_ring_applies_backpressure_to_the_producer() {
     p.push(&vec![0.1_f32; capacity], params(48000, 1))
         .await
         .unwrap();
-    assert_eq!(p.buffered(), capacity);
+    let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples();
+    assert_eq!(p.buffered(), capacity - fade, "less the held tail");
 
     let pending = tokio::time::timeout(
         Duration::from_millis(50),
@@ -306,11 +317,12 @@ async fn a_full_ring_applies_backpressure_to_the_producer() {
 
 #[tokio::test]
 async fn rendering_a_zero_length_buffer_is_harmless() {
-    let mut p = Playback::detached(DEVICE);
+    let p = Playback::detached(DEVICE);
     p.push(&vec![1.0_f32; 9600], params(48000, 1))
         .await
         .unwrap();
     let mut empty: [f32; 0] = [];
     p.render(&mut empty);
-    assert_eq!(p.buffered(), 9600, "nothing was consumed");
+    let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples();
+    assert_eq!(p.buffered(), 9600 - fade, "nothing was consumed");
 }

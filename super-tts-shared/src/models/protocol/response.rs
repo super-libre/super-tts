@@ -15,6 +15,10 @@ pub struct DaemonResponse {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcription: Option<String>,
+    /// Id of the utterance a `speak` request started, so a client can cancel it
+    /// or correlate playback events with it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utterance_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,6 +252,12 @@ impl DaemonResponse {
     #[must_use]
     pub fn with_transcription(mut self, transcription: String) -> Self {
         self.transcription = Some(transcription);
+        self
+    }
+
+    #[must_use]
+    pub fn with_utterance_id(mut self, id: String) -> Self {
+        self.utterance_id = Some(id);
         self
     }
 

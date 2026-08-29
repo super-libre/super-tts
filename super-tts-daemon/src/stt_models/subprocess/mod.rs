@@ -268,7 +268,7 @@ impl SubprocessBackend {
     pub async fn synthesize(
         &self,
         req: &crate::stt_models::v1::SynthesizeRequest<'_>,
-        sink: &mut impl crate::stt_models::v1::SynthesisSink,
+        sink: &mut (dyn crate::stt_models::v1::SynthesisSink + Send),
     ) -> Result<()> {
         let body = crate::stt_models::v1::build_synthesize_body(req)?;
 
@@ -361,6 +361,15 @@ impl ModelState for SubprocessBackend {
 
 #[async_trait]
 impl Transcribe for SubprocessBackend {
+    /// Forward to the inherent streaming implementation.
+    async fn synthesize(
+        &self,
+        request: &crate::stt_models::v1::SynthesizeRequest<'_>,
+        sink: &mut (dyn crate::stt_models::v1::SynthesisSink + Send),
+    ) -> Result<()> {
+        Self::synthesize(self, request, sink).await
+    }
+
     /// Stop the `systemd-run --user` transient unit asynchronously and
     /// remove the socket file. Called by the daemon before the
     /// [`LoadedModel`](crate::daemon::types::LoadedModel) is dropped — gives

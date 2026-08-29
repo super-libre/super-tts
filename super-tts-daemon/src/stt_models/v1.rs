@@ -6,9 +6,8 @@
 //! the response parsing were byte-identical in both — and had started to drift —
 //! so they live here. Feature-agnostic: compiled whenever either backend is on.
 
-use anyhow::{Result, anyhow, bail};
-use http_body_util::BodyExt;
-use super_tts_shared::audio::frames::{AudioParams, Frame, FrameDecoder, FrameKind};
+use anyhow::{Result, anyhow};
+use super_tts_shared::audio::frames::{AudioParams, Frame, FrameKind};
 
 /// A `POST /v1/synthesize` request.
 ///
@@ -130,15 +129,20 @@ impl CollectingSink {
 /// Returns an error when the headers do not describe usable audio, the frame
 /// stream is malformed or exceeds its caps, the body errors mid-read, or the
 /// backend sent an `error` frame.
+#[cfg(any(feature = "wasm-backends", feature = "subprocess-backends"))]
 pub async fn pump_synthesis<B>(
     headers: &hyper::http::HeaderMap,
     body: B,
-    sink: &mut impl SynthesisSink,
+    sink: &mut (dyn SynthesisSink + Send),
 ) -> Result<()>
 where
     B: http_body::Body<Data = bytes::Bytes>,
     B::Error: std::fmt::Display,
 {
+    use anyhow::bail;
+    use http_body_util::BodyExt;
+    use super_tts_shared::audio::frames::FrameDecoder;
+
     let params = AudioParams::from_headers(|name| headers.get(name).and_then(|v| v.to_str().ok()))?;
     sink.on_params(params)?;
 
@@ -169,6 +173,7 @@ where
 
 /// Pull the human-readable message out of an `error` frame payload, falling
 /// back to a fixed string when it is not the documented shape.
+#[cfg(any(feature = "wasm-backends", feature = "subprocess-backends"))]
 fn error_frame_message(payload: &[u8]) -> String {
     serde_json::from_slice::<serde_json::Value>(payload)
         .ok()
@@ -198,6 +203,7 @@ pub fn synthesize_error(status: u16, body: &[u8]) -> anyhow::Error {
 ///
 /// # Errors
 /// Returns an error if JSON serialization fails (not expected for this shape).
+#[cfg(any(feature = "wasm-backends", feature = "subprocess-backends"))]
 pub(crate) fn build_transcribe_body(
     audio: &[f32],
     sample_rate: u32,
@@ -220,7 +226,9 @@ pub(crate) fn build_transcribe_body(
 /// # Errors
 /// Returns an error if the body isn't JSON, a `200` is missing `transcription`,
 /// or a non-`200` carries a backend error message.
+#[cfg(any(feature = "wasm-backends", feature = "subprocess-backends"))]
 pub(crate) fn parse_transcribe_response(status: u16, resp: &[u8]) -> Result<String> {
+    use anyhow::bail;
     let json: serde_json::Value = serde_json::from_slice(resp)
         .map_err(|e| anyhow!("parsing backend transcribe response: {e}"))?;
     if status == 200 {
@@ -238,7 +246,7 @@ pub(crate) fn parse_transcribe_response(status: u16, resp: &[u8]) -> Result<Stri
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "wasm-backends", feature = "subprocess-backends")))]
 mod tests {
     use super::{build_transcribe_body, parse_transcribe_response};
 
