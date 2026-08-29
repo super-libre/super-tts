@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::{daemon::types::SuperTTSDaemon, output::keyboard::Simulator, output::typer::Typer};
+use crate::daemon::types::SuperTTSDaemon;
 use super_tts_shared::models::protocol::{Command, DaemonRequest, DaemonResponse};
 
 impl SuperTTSDaemon {
@@ -12,15 +12,6 @@ impl SuperTTSDaemon {
         };
 
         match command {
-            Command::Transcribe {
-                audio_data,
-                sample_rate,
-                client_id,
-                language,
-            } => {
-                self.handle_transcribe(audio_data, sample_rate, client_id, language)
-                    .await
-            }
             Command::Speak {
                 text,
                 voice,
@@ -34,16 +25,6 @@ impl SuperTTSDaemon {
             Command::StopSpeaking => self.handle_stop_speaking().await,
             Command::Ping { client_id } => self.handle_ping(client_id),
             Command::Status => self.handle_status().await,
-            Command::Record {
-                write_mode,
-                stop_mode,
-                preview,
-                language,
-                ..
-            } => {
-                self.handle_record_command(write_mode, stop_mode, preview, language)
-                    .await
-            }
             Command::SetAudioTheme { theme } => self.handle_set_audio_theme(theme),
             Command::GetAudioTheme => self.handle_get_audio_theme(),
             Command::TestAudioTheme => self.handle_test_audio_theme().await,
@@ -56,15 +37,6 @@ impl SuperTTSDaemon {
             Command::CancelDownload => self.handle_cancel_download(),
             Command::GetDownloadStatus => self.handle_get_download_status(),
             Command::ListAudioThemes => self.handle_list_audio_themes(),
-            Command::SetPreviewTyping { enabled } => self.handle_set_preview_typing(enabled).await,
-            Command::GetPreviewTyping => self.handle_get_preview_typing(),
-            Command::SetRecordingStopMode { mode } => {
-                self.handle_set_recording_stop_mode(mode).await
-            }
-            Command::GetRecordingStopMode => self.handle_get_recording_stop_mode().await,
-            Command::SetWriteMethod { method } => self.handle_set_write_method(method).await,
-            Command::GetWriteMethod => self.handle_get_write_method().await,
-            Command::TestWriteMethod => self.handle_test_write_method().await,
             Command::SetNotificationMethod { method } => {
                 self.handle_set_notification_method(method).await
             }
@@ -104,92 +76,6 @@ impl SuperTTSDaemon {
             Command::GetGpuInfo => Self::handle_get_gpu_info().await,
             Command::ClearActiveBackend => self.handle_clear_active_backend().await,
         }
-    }
-
-    /// Handle a record command — resolve mode, toggle stop, or start recording.
-    async fn handle_record_command(
-        &self,
-        write_mode: bool,
-        stop_mode: Option<super_tts_shared::models::recording_stop_mode::RecordingStopMode>,
-        preview: Option<bool>,
-        language: Option<String>,
-    ) -> DaemonResponse {
-        // Resolve effective mode: per-request override or daemon config default
-        let effective_mode = if let Some(mode) = stop_mode {
-            mode
-        } else {
-            let config = self.config.read().await;
-            config.transcription.recording_stop_mode
-        };
-
-        // Toggle behaviour: if already busy, stop it (if mode allows)
-        let busy = *self.busy.read().await;
-        if busy {
-            let guard = self.manual_stop_tx.read().await;
-            if guard.is_none() {
-                log::info!("Transcription in progress, please wait");
-                return DaemonResponse::success()
-                    .with_message("Transcription in progress, please wait".to_string());
-            }
-            if !effective_mode.manual_stop_enabled() {
-                log::info!("Second press ignored: recording in SilenceOnly mode");
-                return DaemonResponse::success()
-                    .with_message("Manual stop not enabled in current mode".to_string());
-            }
-            if let Some(tx) = guard.as_ref() {
-                let _ = tx.send(());
-                log::info!("🛑 Stop triggered via shortcut while recording");
-            }
-            return DaemonResponse::success()
-                .with_message(DaemonResponse::RECORDING_STOP_SIGNAL_MSG.to_string());
-        }
-        // Take the cached simulator, or create a new one.
-        let simulator = {
-            let mut guard = self.simulator.write().await;
-            guard.take()
-        };
-        let simulator = if let Some(s) = simulator {
-            s
-        } else {
-            let write_method = {
-                let config = self.config.read().await;
-                config.transcription.write_method
-            };
-            match Simulator::new(write_method).await {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("Failed to create keyboard simulator: {e}");
-                    return DaemonResponse::error(&format!("Keyboard simulator failed: {e}"));
-                }
-            }
-        };
-        // Temporarily override preview setting for this recording, restore after.
-        let original_preview = self
-            .preview_typing_enabled
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if let Some(override_val) = preview {
-            self.preview_typing_enabled
-                .store(override_val, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        let mut typer = Typer::new(simulator);
-        let response = self
-            .handle_record_internal(&mut typer, write_mode, effective_mode, language.as_deref())
-            .await;
-
-        // Restore original preview setting.
-        if preview.is_some() {
-            self.preview_typing_enabled
-                .store(original_preview, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Return the simulator to the cache for reuse, unless this backend
-        // goes stale while idle (see `Simulator::is_cacheable`) — in which
-        // case it is dropped here and the next recording builds a fresh one.
-        let simulator = typer.take_simulator();
-        if simulator.is_cacheable() {
-            *self.simulator.write().await = Some(simulator);
-        }
-        response
     }
 }
 

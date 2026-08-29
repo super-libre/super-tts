@@ -5,15 +5,14 @@ pub mod config;
 pub mod daemon;
 pub mod download_progress;
 pub mod download_stream;
-pub mod input;
 pub mod keyring;
 pub mod output;
 pub mod registry;
 pub mod resource_management;
 pub mod self_update;
 pub mod services;
-pub mod stt_models;
 pub mod text;
+pub mod tts_models;
 
 // Re-export the main run function
 pub use daemon_main::run;

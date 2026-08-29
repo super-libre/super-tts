@@ -10,8 +10,7 @@ slow-consumer behavior, revoked / shutdown frames — live in
 
 - **Required scope:** any valid token, then **per topic**. Each requested topic
   is gated by the scope that grants it (see the Topics tables below):
-  `recording_events`, `audio_visualization`, `global_transcriptions`, or
-  `daemon_status`.
+  `playback_events`, `audio_visualization`, or `daemon_status`.
 - `Authorization: Bearer <session_token>` is required.
 - Requesting a topic the token's scopes don't grant fails the **whole**
   subscription with `403 scope_denied` before the stream opens — partial
@@ -22,7 +21,7 @@ slow-consumer behavior, revoked / shutdown frames — live in
 **Request:**
 
 ```http
-GET /events?topics=recording_state,frequency_bands HTTP/1.1
+GET /events?topics=speaking_state,frequency_bands HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…64hex…
 Accept: text/event-stream
@@ -40,13 +39,13 @@ Content-Type: text/event-stream
 Cache-Control: no-store
 
 event: subscribed
-data: {"client_id":"sub_…","subscribed_to":["recording_state","frequency_bands"]}
+data: {"client_id":"sub_…","subscribed_to":["speaking_state","frequency_bands"]}
 
-event: recording_state
-data: {"is_recording":true}
+event: speaking_state
+data: {"is_speaking":true,"utterance_id":"utt_9f2c1e40"}
 
 event: frequency_bands
-data: {"bands_b64":"…","sample_rate":16000.0,"total_energy":0.0042}
+data: {"bands_b64":"…","sample_rate":24000.0,"total_energy":0.0042}
 
 …
 ```
@@ -68,35 +67,36 @@ Each topic lists the scope a token must hold to subscribe to it. A token
 requesting a topic outside its granted scopes gets `403 scope_denied` for the
 whole subscription.
 
-### Recording state
+### Playback state
 
-| Topic                  | Scope              | Payload                                                                                   |
-|------------------------|--------------------|-------------------------------------------------------------------------------------------|
-| `recording_started`    | `recording_events` | `{ client_id, timestamp, write_mode }`                                                    |
-| `recording_stopped`    | `recording_events` | `{ client_id, timestamp }` — emitted when mic capture ends, before transcription           |
-| `recording_state`      | `recording_events` | `{ is_recording: bool }` — `true` at capture start, `false` when the mic releases (mic-capture phase only; not the whole cycle) |
-| `transcribing_started` | `recording_events` | `{ client_id, timestamp }` — model decode of the captured audio has begun                 |
-| `transcribing_stopped` | `recording_events` | `{ client_id, timestamp, transcription_success, error? }` — decode + typing finished       |
+| Topic             | Scope             | Payload                                                                                          |
+|-------------------|-------------------|--------------------------------------------------------------------------------------------------|
+| `speaking_state`  | `playback_events` | `{ is_speaking: bool, utterance_id?: string }` — `utterance_id` is absent when speech has stopped |
+| `speech_progress` | `playback_events` | `{ utterance_id: string, spoken_ms: u64, queued_ms: u64 }`                                       |
 
-For one daemon-mic capture the lifecycle events fire in this order:
-`recording_started` → (`partial_stt` … — `global_transcriptions` scope only) → `recording_stopped` →
-`transcribing_started` → `final_stt` (global_transcriptions scope only) → `transcribing_stopped`.
-`recording_state{is_recording:true}` accompanies `recording_started` and
-`recording_state{is_recording:false}` accompanies `recording_stopped` — i.e.
-the visualization signal drops at mic-stop, independent of the transcription
-that follows.
+For one utterance the events fire in this order:
 
-**Lifecycle terminal and optional events:**
-- `transcribing_started` is emitted only when model decode actually begins
-  (Phase 4). It is skipped entirely when the cycle fails during audio capture,
-  and when the capture contained no speech — in the latter case the cycle still
-  completes successfully, with `final_stt` carrying empty text.
-- `final_stt` is emitted only on a successful transcription (including "no
-  speech detected", where `text` is empty). A failed cycle reports its error
-  via `transcribing_stopped.error`; no `final_stt` is emitted.
-- `transcribing_stopped` always closes the cycle — success or failure —
-  and is the unconditional signal clients use to return to idle, regardless
-  of whether they observed `transcribing_started` or `final_stt`.
+`speaking_state{is_speaking:true}` → `speech_progress` … (repeatedly, as audio
+is rendered) → `speaking_state{is_speaking:false}`.
+
+**What the timings mean.** `spoken_ms` and `queued_ms` are positions within the
+utterance derived from the output device's format, not wall-clock time, so they
+stay correct while the stream is idle. `spoken_ms > 0` is the first evidence
+that audio actually reached the device: an utterance is accepted before any
+audio exists for it, and with a remote backend that gap can be seconds long. A
+widget that wants to distinguish "synthesizing" from "speaking" uses exactly
+that transition.
+
+**Whose utterance.** The daemon speaks for whoever asked, so these events
+describe the *device*, not your requests — an utterance another app started
+raises them too. Match `utterance_id` against what
+[`POST /speak`](./speak.md) returned to tell your own apart.
+
+**One at a time, newest wins.** A `/speak` while something is playing interrupts
+it. The superseded utterance does not emit its own
+`speaking_state{is_speaking:false}` — the state belongs to the device, and
+announcing a stop for the old id while the new one is playing would show a
+subscriber "not speaking" during speech.
 
 ### Audio fan-out
 
@@ -105,21 +105,13 @@ that follows.
 | `frequency_bands` | `audio_visualization` | `{ "bands_b64", "sample_rate", "total_energy" }` — base64-encoded f32 visualization bands |
 
 Raw PCM is not exposed on the wire; the daemon computes the frequency bands and
-broadcasts only those.
+broadcasts only those. `sample_rate` is the *backend's* rate — the analysis runs
+on the audio as synthesized, before it is resampled for the output device.
 
-### Transcription
-
-| Topic         | Scope                   | Payload                                              |
-|---------------|-------------------------|------------------------------------------------------|
-| `partial_stt` | `global_transcriptions` | `{ "text", "confidence" }` — live preview text       |
-| `final_stt`   | `global_transcriptions` | `{ "text", "confidence" }` — final transcription     |
-
-These carry the transcription text of every app, not just the subscriber's own —
-hence the dedicated high-sensitivity scope. See
-[global_transcriptions.md](../../scopes/global_transcriptions.md).
-
-`confidence` is best-effort: backends that don't expose a confidence score
-report `1.0`.
+This topic carries no text and no utterance id: it says how loud the speakers
+are, not what is being said or which request produced it. Knowing *which*
+utterance is playing costs [`playback_events`](../../scopes/playback_events.md)
+as a separate grant.
 
 ### Daemon status
 

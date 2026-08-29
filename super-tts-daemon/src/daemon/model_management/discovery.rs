@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::daemon::types::SuperTTSDaemon;
-use crate::stt_models::backends;
+use crate::tts_models::backends;
 use log::info;
 use std::path::PathBuf;
 
@@ -9,7 +9,7 @@ impl SuperTTSDaemon {
     pub async fn refresh_backends(&self) {
         let configured = {
             let c = self.config.read().await;
-            c.transcription.backends_dir.clone()
+            c.synthesis.backends_dir.clone()
         };
         let dir = configured.map_or_else(backends::default_backends_dir, PathBuf::from);
         let (winners, losers) = backends::discover(&dir);
@@ -20,11 +20,11 @@ impl SuperTTSDaemon {
         );
 
         // Skipped while a session holds the switch guard: removing a
-        // directory under an in-flight recording would strand state it
+        // directory under an in-flight utterance would strand state it
         // still depends on, the same reason uninstall refuses. The
         // duplicate is harmless until the next refresh.
         if !losers.is_empty() {
-            if self.switch_guard().await.is_some() {
+            if self.switch_guard().is_some() {
                 log::warn!(
                     "{} duplicate backend director(ies) left for a later refresh: \
                      a backend is busy",
@@ -48,8 +48,8 @@ impl SuperTTSDaemon {
         let (pref_model, pref_source, allow_online) = {
             let c = self.config.read().await;
             (
-                c.transcription.preferred_model.clone(),
-                c.transcription.preferred_source.clone(),
+                c.synthesis.preferred_model.clone(),
+                c.synthesis.preferred_source.clone(),
                 c.online.allow_online_models,
             )
         };
@@ -131,7 +131,7 @@ mod tests {
     }
 
     /// Reconciliation must not touch the filesystem while a session holds the
-    /// switch guard: removing a directory under an in-flight recording would
+    /// switch guard: removing a directory under an in-flight utterance would
     /// strand state it still depends on. The duplicate stays in place — only
     /// the winner is served — until a later, idle refresh cleans it up.
     #[tokio::test]
@@ -143,8 +143,8 @@ mod tests {
         write_backend(&loser, "1.0.0");
 
         let daemon = test_daemon().await;
-        *daemon.busy.write().await = true;
-        daemon.config.write().await.transcription.backends_dir =
+        let _claim = daemon.speech.claim_for_test("u-reconcile");
+        daemon.config.write().await.synthesis.backends_dir =
             Some(root.path().to_string_lossy().into_owned());
 
         daemon.refresh_backends().await;
@@ -173,7 +173,7 @@ mod tests {
         write_backend(&loser, "1.0.0");
 
         let daemon = test_daemon().await;
-        daemon.config.write().await.transcription.backends_dir =
+        daemon.config.write().await.synthesis.backends_dir =
             Some(root.path().to_string_lossy().into_owned());
 
         daemon.refresh_backends().await;
@@ -204,8 +204,8 @@ mod tests {
         let daemon = test_daemon().await;
         {
             let mut cfg = daemon.config.write().await;
-            cfg.transcription.backends_dir = Some(root.path().to_string_lossy().into_owned());
-            cfg.transcription.active_backend = Some("super-tts-y".to_string());
+            cfg.synthesis.backends_dir = Some(root.path().to_string_lossy().into_owned());
+            cfg.synthesis.active_backend = Some("super-tts-y".to_string());
             cfg.update_preferred_model(
                 "m".to_string(),
                 "github.com/x/y".to_string(),
@@ -219,11 +219,11 @@ mod tests {
         assert!(!loser.exists());
         let cfg = daemon.config.read().await;
         assert_eq!(
-            cfg.transcription.active_backend.as_deref(),
+            cfg.synthesis.active_backend.as_deref(),
             Some("app.super-tts.y"),
             "the pointer must never be left naming a directory the refresh deleted"
         );
-        assert_eq!(cfg.transcription.preferred_model, "m");
+        assert_eq!(cfg.synthesis.preferred_model, "m");
         drop(cfg);
         assert_eq!(
             daemon.active_backend.read().await.as_deref(),

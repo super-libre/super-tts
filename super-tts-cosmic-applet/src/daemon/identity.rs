@@ -17,14 +17,14 @@ pub const APP_ID: AppId = AppId("super-tts-cosmic-applet");
 /// Human-facing name shown in the daemon's consent prompt.
 pub const APP_NAME: &str = "Super TTS COSMIC Applet";
 
-/// Scopes the applet requests: `recording_events` for the recording indicator,
+/// Scopes the applet requests: `playback_events` for the speaking indicator,
 /// `audio_visualization` for the frequency-band meter.
-pub const SCOPES: &[&str] = &["recording_events", "audio_visualization"];
+pub const SCOPES: &[&str] = &["playback_events", "audio_visualization"];
 
 /// `/events` SSE topics the applet subscribes to.
-pub const TOPICS: &[&str] = &[
-    "recording_state",
-    "frequency_bands",
-    "transcribing_started",
-    "transcribing_stopped",
-];
+///
+/// `speech_progress` is here for one transition: an utterance is accepted
+/// before any audio exists for it, and with a remote backend that gap is long
+/// enough to look like a hang. `spoken_ms > 0` is the daemon saying the first
+/// samples reached the device, which is what turns the working animation off.
+pub const TOPICS: &[&str] = &["speaking_state", "speech_progress", "frequency_bands"];

@@ -9,7 +9,7 @@ use super::SuperTtsApplet;
 use crate::app::Message;
 use crate::config::AppletConfig;
 use crate::daemon::{RetryStrategy, ping_daemon};
-use crate::models::state::{DaemonConnectionState, IsOpen, RecordingState};
+use crate::models::state::{DaemonConnectionState, IsOpen, SpeechState};
 use crate::models::theme::{IconAlignment, VisualizationSide};
 use crate::ui::components::sound_visualization::VisualizationComponent;
 use crate::ui::components::working_animation_component::WorkingAnimationComponent;
@@ -80,7 +80,7 @@ impl SuperTtsApplet {
 
         let applet = Self {
             core,
-            recording_state: RecordingState::Idle,
+            speech_state: SpeechState::Idle,
             daemon_state: DaemonConnectionState::Connecting,
             popup: None,
             socket_path: get_http_socket_path(),

@@ -13,8 +13,6 @@ pub struct DaemonResponse {
     pub error_code: Option<super::ErrorCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcription: Option<String>,
     /// Id of the utterance a `speak` request started, so a client can cancel it
     /// or correlate playback events with it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,31 +104,12 @@ pub struct DaemonResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection_active: Option<bool>,
 
-    // Whether the daemon is busy with a full capture+transcribe+type cycle.
-    // Surfaced on `GET /v1/status` so clients can decide whether to
-    // call `POST /v1/transcribe` (start) or `POST /v1/transcribe/stop`
-    // (toggle stop). Absent on responses where it's not meaningful.
+    /// Whether the daemon is currently speaking — synthesizing or playing out
+    /// an utterance. Surfaced on `GET /v1/status` so a client can decide
+    /// whether `POST /v1/speak` will interrupt something. Absent on responses
+    /// where it's not meaningful.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub busy: Option<bool>,
-
-    // Preview typing fields
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview_typing_enabled: Option<bool>,
-
-    // Recording stop mode
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recording_stop_mode: Option<String>,
-
-    // Input method
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub write_method: Option<String>,
-
-    /// The concrete backend a `POST /write_method/test` actually typed
-    /// through — never `auto`. Differs from `write_method` whenever the
-    /// configured value is `auto`, which is the only way a client can learn
-    /// which rung of the auto chain is in use.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_write_method: Option<String>,
 
     // Notification method
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,10 +121,6 @@ pub struct DaemonResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_beta_optin: Option<String>,
 
-    // Streaming preview text (intermediate transcription during recording)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview_text: Option<String>,
-
     // Online models
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_online_models: Option<bool>,
@@ -154,7 +129,7 @@ pub struct DaemonResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_models_dir: Option<Option<String>>,
 
-    // Transcription language: for GET /language a string|null; for
+    // Synthesis language: for GET /language a string|null; for
     // GET /backends/{source}/models/{model}/language the resolution block. See
     // docs/protocol/endpoints/v1/{language,backends/model-language}.md.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,9 +166,6 @@ pub struct NotificationEvent {
 }
 
 impl DaemonResponse {
-    /// Canonical message returned when a running recording is stopped via a second press.
-    pub const RECORDING_STOP_SIGNAL_MSG: &str = "Recording stop signal sent";
-
     #[must_use]
     pub fn success() -> Self {
         Self {
@@ -246,12 +218,6 @@ impl DaemonResponse {
     #[must_use]
     pub fn with_error_code(mut self, code: super::ErrorCode) -> Self {
         self.error_code = Some(code);
-        self
-    }
-
-    #[must_use]
-    pub fn with_transcription(mut self, transcription: String) -> Self {
-        self.transcription = Some(transcription);
         self
     }
 
@@ -410,30 +376,6 @@ impl DaemonResponse {
     }
 
     #[must_use]
-    pub fn with_preview_typing_enabled(mut self, enabled: bool) -> Self {
-        self.preview_typing_enabled = Some(enabled);
-        self
-    }
-
-    #[must_use]
-    pub fn with_recording_stop_mode(mut self, mode: String) -> Self {
-        self.recording_stop_mode = Some(mode);
-        self
-    }
-
-    #[must_use]
-    pub fn with_write_method(mut self, method: String) -> Self {
-        self.write_method = Some(method);
-        self
-    }
-
-    #[must_use]
-    pub fn with_resolved_write_method(mut self, method: String) -> Self {
-        self.resolved_write_method = Some(method);
-        self
-    }
-
-    #[must_use]
     pub fn with_notification_method(mut self, method: String) -> Self {
         self.notification_method = Some(method);
         self
@@ -448,12 +390,6 @@ impl DaemonResponse {
     #[must_use]
     pub fn with_update_beta_optin(mut self, value: String) -> Self {
         self.update_beta_optin = Some(value);
-        self
-    }
-
-    #[must_use]
-    pub fn with_preview_text(mut self, text: String) -> Self {
-        self.preview_text = Some(text);
         self
     }
 
@@ -532,25 +468,24 @@ pub struct VulkanHostInfo {
 mod tests {
     use super::DaemonResponse;
 
-    /// `resolved_write_method` stays off the wire until a write-method test
-    /// actually resolves a backend. Every other response would otherwise gain
-    /// the field, and clients that treat its presence as "a test ran" — which
-    /// is the only reason it exists — would misread every settings reply.
+    /// `utterance_id` stays off the wire until a request actually starts an
+    /// utterance. Every other response would otherwise gain the field, and a
+    /// client that treats its presence as "speech began" — which is the only
+    /// reason it exists — would misread every settings reply.
     #[test]
-    fn resolved_write_method_is_omitted_until_set() {
+    fn utterance_id_is_omitted_until_set() {
         let json = serde_json::to_string(&DaemonResponse::success()).expect("serialize");
         assert!(
-            !json.contains("resolved_write_method"),
+            !json.contains("utterance_id"),
             "absent field must not be serialized: {json}"
         );
 
-        let json = serde_json::to_string(
-            &DaemonResponse::success().with_resolved_write_method("wayland_protocol".to_string()),
-        )
-        .expect("serialize");
+        let json =
+            serde_json::to_string(&DaemonResponse::success().with_utterance_id("u-1".to_string()))
+                .expect("serialize");
         assert!(
-            json.contains(r#""resolved_write_method":"wayland_protocol""#),
-            "resolved backend must reach the wire verbatim: {json}"
+            json.contains(r#""utterance_id":"u-1""#),
+            "a started utterance must reach the wire verbatim: {json}"
         );
     }
 }

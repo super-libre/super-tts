@@ -102,7 +102,7 @@ Content-Type: application/json
 | 400  | `invalid_backend`        | No installed backend with that `source`, or its files are missing/invalid |
 | 401  | `invalid_session`        | Token unknown / expired / `exe_changed`                              |
 | 403  | `scope_denied`           | Token lacks the `settings` scope                                     |
-| 409  | `recording_in_progress`  | A recording or real-time session is active; stop it first            |
+| 409  | `speech_in_progress`  | An utterance or realtime session is active; stop it first            |
 
 ## `DELETE /active_backend`
 
@@ -134,4 +134,4 @@ Content-Type: application/json
 |------|--------------------------|-----------------------------------------------------------|
 | 401  | `invalid_session`        | Token unknown / expired / `exe_changed`                   |
 | 403  | `scope_denied`           | Token lacks the `settings` scope                          |
-| 409  | `recording_in_progress`  | A recording or real-time session is active; stop it first |
+| 409  | `speech_in_progress`  | An utterance or realtime session is active; stop it first |

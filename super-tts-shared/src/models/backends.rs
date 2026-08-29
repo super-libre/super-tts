@@ -98,11 +98,11 @@ pub struct BackendModel {
     /// warning when a CUDA load is staged against the detected GPU memory.
     #[serde(default)]
     pub estimated_vram_bytes: u64,
-    /// Whether this model supports multiple transcription languages (as
+    /// Whether this model supports multiple speech languages (as
     /// opposed to a mono-lingual model baked for a single language).
     #[serde(default)]
     pub multilingual: bool,
-    /// BCP-47 tags the model can transcribe, e.g. `["en", "es", "fr"]`.
+    /// BCP-47 tags the model can speak, e.g. `["en", "es", "fr"]`.
     /// Empty for mono-lingual models.
     #[serde(default)]
     pub supported_languages: Vec<String>,
@@ -110,7 +110,7 @@ pub struct BackendModel {
     #[serde(default)]
     pub primary_language: String,
     /// Whether the model is driven over the realtime WebSocket path rather than
-    /// batch `POST /v1/transcribe`.
+    /// batch `POST /v1/synthesize`.
     #[serde(default)]
     pub realtime: bool,
 }

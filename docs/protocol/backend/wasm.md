@@ -22,8 +22,8 @@ The backend is compiled to a `wasm32-wasip2` component that **exports
 handing it the request — there is no socket and no separate process. The
 component implements the [`/v1` routes](./contract.md#the-v1-contract) by
 dispatching on the request path and method, returning the same payloads a
-subprocess backend would serve, including the SSE form of
-`POST /v1/transcribe`.
+subprocess backend would serve, including the framed audio body of
+`POST /v1/synthesize`.
 
 Because invocation is a direct in-process call, the WASM transport has no IPC
 overhead and no socket lifecycle. "Spawning" a backend is instantiating the
@@ -75,7 +75,7 @@ every `/v1` request (see [request headers](./contract.md#request-headers)).
 The component reads them from the incoming request's headers; it never sees
 the keyring, and it needs no `wasi:config` import.
 
-For an OpenAI backend declaring `OPENAI_API_KEY`, each `/v1/transcribe`
+For an OpenAI backend declaring `OPENAI_API_KEY`, each `/v1/synthesize`
 arrives with `x-tts-model` and `x-tts-secret-OPENAI_API_KEY`; the component
 reads the key and sets `Authorization: Bearer <value>` on its outbound
 request to
@@ -100,7 +100,8 @@ arrive as request headers, not as imports.
 ## Realtime (WebSocket)
 
 A wasm backend that proxies an upstream realtime API (for example, a
-streaming WebSocket transcription service) opts into a second interface pair
+provider that streams synthesized audio over a WebSocket) opts into a second
+interface pair
 beyond `wasi:http`. The interface definitions are in
 `docs/protocol/wit/realtime.wit`; the canonical package name is
 `super-tts:realtime@0.1.0`.
@@ -187,8 +188,8 @@ also calling `recv`.
 - Declare `kind = "wasm"`, an `entrypoint`, the `allowed_hosts` the backend
   needs, and any `[[secrets]]` or `[[options]]` in [backend.toml](./config.md).
 - Implement the [`/v1` routes](./contract.md#the-v1-contract) by dispatching
-  on method and path; stream `event: preview` / `event: done` for
-  `POST /v1/transcribe` when `options.stream_realtime` is set.
+  on method and path; emit `audio` frames from `POST /v1/synthesize` as they
+  are produced rather than buffering the whole utterance.
 - Make all outbound calls through `wasi:http/outgoing-handler`; do not rely
   on raw sockets.
 - Read secrets and options from the injected `x-tts-secret-*` and

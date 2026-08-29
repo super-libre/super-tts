@@ -5,16 +5,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use super_tts_shared::models::notification_method::NotificationMethod;
-use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
 use super_tts_shared::models::update_beta_optin::UpdateBetaOptIn;
-use super_tts_shared::models::write_method::WriteMethod;
 use super_tts_shared::theme::AudioTheme;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
     pub device: DeviceConfig,
     pub audio: AudioConfig,
-    pub transcription: TranscriptionConfig,
+    pub synthesis: SynthesisConfig,
     #[serde(default)]
     pub online: OnlineConfig,
     #[serde(default)]
@@ -104,7 +102,7 @@ pub struct OnlineConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TranscriptionConfig {
+pub struct SynthesisConfig {
     #[serde(default)]
     pub preferred_model: String,
     /// Compatibility shim; the daemon resolves its startup model by
@@ -122,21 +120,7 @@ pub struct TranscriptionConfig {
     pub preferred_provider: String,
     #[serde(default)]
     pub preferred_source: String,
-    #[serde(default)]
-    pub write_mode: bool, // Auto-type transcriptions
-    #[serde(default)] // For backwards compatibility with existing configs
-    pub preview_typing_enabled: bool, // Beta feature: show preview while typing
-    #[serde(
-        default,
-        deserialize_with = "super_tts_shared::utils::serde_helpers::deserialize_or_default"
-    )]
-    pub recording_stop_mode: RecordingStopMode,
-    #[serde(
-        default,
-        deserialize_with = "super_tts_shared::utils::serde_helpers::deserialize_or_default"
-    )]
-    pub write_method: WriteMethod,
-    /// How a recording failure is surfaced to the user. An unparseable stored
+    /// How a synthesis failure is surfaced to the user. An unparseable stored
     /// value degrades to the default rather than failing the whole config load.
     #[serde(
         default,
@@ -157,7 +141,7 @@ pub struct TranscriptionConfig {
     /// `preferred_model` means "backend selected, no model loaded".
     #[serde(default)]
     pub active_backend: Option<String>,
-    /// Global default transcription language: a BCP-47 tag, the reserved
+    /// Global default synthesis language: a BCP-47 tag, the reserved
     /// `"auto"`, or `None` (no preference; models use their `primary_language`).
     #[serde(default)]
     pub primary_language: Option<String>,
@@ -173,17 +157,13 @@ impl Default for DaemonConfig {
                 theme: AudioTheme::default(),
                 volume: default_volume(),
             },
-            transcription: TranscriptionConfig {
+            synthesis: SynthesisConfig {
                 // Empty preference: the daemon stays idle until a model is
                 // selected — it never auto-picks one, since loading a model can
                 // pull gigabytes.
                 preferred_model: String::new(),
                 preferred_provider: String::new(),
                 preferred_source: String::new(),
-                write_mode: false,             // Default to not auto-typing
-                preview_typing_enabled: false, // Default to disabled (beta feature)
-                recording_stop_mode: RecordingStopMode::default(),
-                write_method: WriteMethod::default(),
                 notification_method: NotificationMethod::default(),
                 custom_models_dir: None,
                 backends_dir: None,
@@ -337,7 +317,7 @@ impl DaemonConfig {
     }
 
     /// Update preferred model + source, and the legacy `preferred_provider`
-    /// the model declares (see [`TranscriptionConfig::preferred_provider`] for
+    /// the model declares (see [`SynthesisConfig::preferred_provider`] for
     /// why a stale value is as bad as a missing one).
     pub fn update_preferred_model(
         &mut self,
@@ -345,26 +325,26 @@ impl DaemonConfig {
         source: String,
         provider: Option<String>,
     ) {
-        self.transcription.preferred_model = model;
-        self.transcription.preferred_source = source;
-        self.transcription.preferred_provider = provider.unwrap_or_default();
+        self.synthesis.preferred_model = model;
+        self.synthesis.preferred_source = source;
+        self.synthesis.preferred_provider = provider.unwrap_or_default();
     }
 
     /// Clear the loaded-model preference (model + source) while keeping the
     /// active backend selected. Used by the unload path so a daemon restart
     /// stays idle instead of reloading the unloaded model.
     pub fn clear_preferred_model(&mut self) {
-        self.transcription.preferred_model = String::new();
-        self.transcription.preferred_source = String::new();
-        self.transcription.preferred_provider = String::new();
+        self.synthesis.preferred_model = String::new();
+        self.synthesis.preferred_source = String::new();
+        self.synthesis.preferred_provider = String::new();
     }
 
     /// Set the active backend (its relative install dir) and drop the loaded
     /// model preference — selecting a backend does not load a model.
     pub fn update_active_backend(&mut self, dir: String) {
-        self.transcription.active_backend = Some(dir);
-        self.transcription.preferred_model = String::new();
-        self.transcription.preferred_provider = String::new();
+        self.synthesis.active_backend = Some(dir);
+        self.synthesis.preferred_model = String::new();
+        self.synthesis.preferred_provider = String::new();
     }
 
     /// Repoint the active backend to `new_dir` without touching the loaded
@@ -379,15 +359,15 @@ impl DaemonConfig {
     /// `update_active_backend` here would silently wipe the user's model
     /// choice as a side effect of an update. Do not merge the two.
     pub fn rename_active_backend(&mut self, new_dir: String) {
-        self.transcription.active_backend = Some(new_dir);
+        self.synthesis.active_backend = Some(new_dir);
     }
 
     /// Clear the active backend and the loaded-model preference (→ idle).
     pub fn clear_active_backend(&mut self) {
-        self.transcription.active_backend = None;
-        self.transcription.preferred_model = String::new();
-        self.transcription.preferred_source = String::new();
-        self.transcription.preferred_provider = String::new();
+        self.synthesis.active_backend = None;
+        self.synthesis.preferred_model = String::new();
+        self.synthesis.preferred_source = String::new();
+        self.synthesis.preferred_provider = String::new();
     }
 
     /// Update master volume.
@@ -425,12 +405,12 @@ impl DaemonConfig {
     }
 
     pub fn update_primary_language(&mut self, language: Option<String>) {
-        self.transcription.primary_language = language;
+        self.synthesis.primary_language = language;
     }
 
     #[must_use]
     pub fn primary_language(&self) -> Option<&str> {
-        self.transcription.primary_language.as_deref()
+        self.synthesis.primary_language.as_deref()
     }
 
     /// Set (`Some`) or clear (`None`) a per-model language override.

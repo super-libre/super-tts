@@ -7,11 +7,10 @@ pub(crate) mod registry;
 pub(crate) mod settings;
 pub(crate) mod speak;
 pub(crate) mod speak_stream;
-pub(crate) mod transcribe;
 
 use crate::daemon::http::internal::auth::middleware::{
     require_any_authenticated, require_rate_limit, require_secrets_scope, require_settings_scope,
-    require_speak_scope, require_status_scope, require_transcribe_scope,
+    require_speak_scope, require_status_scope,
 };
 use crate::daemon::http::state::AppState;
 use axum::Router;
@@ -25,7 +24,6 @@ use axum::routing::{get, post};
 /// - any-authenticated: `/ping`, `/auth/status`, and `GET /events` (the
 ///   per-topic scope is enforced inside the events handler).
 /// - `status` scope: `GET /status`.
-/// - `transcribe` scope: the transcription routes.
 /// - `speak` scope: synthesis and playback control.
 /// - `settings` scope: the configuration + registry surface.
 ///
@@ -53,16 +51,6 @@ pub(crate) fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_status_scope,
-        ));
-
-    let transcribe_scope = transcribe::routes()
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_rate_limit,
-        ))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_transcribe_scope,
         ));
 
     let speak_scope = speak::routes()
@@ -99,7 +87,6 @@ pub(crate) fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .merge(any_scope)
         .merge(status_scope)
-        .merge(transcribe_scope)
         .merge(speak_scope)
         .merge(settings_scope)
         .merge(secrets_scope)

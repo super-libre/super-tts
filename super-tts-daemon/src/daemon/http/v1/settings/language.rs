@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `/language` (global) transcription-language settings routes.
+//! `/language` (global) speech-language settings routes.
 //!
 //! The per-model override moved to
 //! `/backends/{source}/models/{model}/language` (see

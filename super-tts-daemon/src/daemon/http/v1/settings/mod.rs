@@ -77,13 +77,10 @@ pub(crate) mod backends;
 pub(crate) mod custom_models_dir;
 pub(crate) mod language;
 pub(crate) mod notification_method;
-pub(crate) mod preview_typing;
-pub(crate) mod recording_stop_mode;
 pub(crate) mod self_update;
 pub(crate) mod update_beta_optin;
 pub(crate) mod update_check_enabled;
 pub(crate) mod volume;
-pub(crate) mod write_method;
 
 use crate::daemon::http::state::AppState;
 use axum::Router;
@@ -120,23 +117,9 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/audio_themes", get(audio_theme::list_audio_themes))
         .route("/volume", get(volume::get_volume).post(volume::set_volume))
         .route(
-            "/recording_stop_mode",
-            get(recording_stop_mode::get_recording_stop_mode)
-                .post(recording_stop_mode::set_recording_stop_mode),
-        )
-        .route(
-            "/write_method",
-            get(write_method::get_write_method).post(write_method::set_write_method),
-        )
-        .route("/write_method/test", post(write_method::test_write_method))
-        .route(
             "/notification_method",
             get(notification_method::get_notification_method)
                 .post(notification_method::set_notification_method),
-        )
-        .route(
-            "/preview_typing",
-            get(preview_typing::get_preview_typing).post(preview_typing::set_preview_typing),
         )
         .route(
             "/allow_online_models",

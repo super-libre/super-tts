@@ -2,21 +2,12 @@
 
 use crate::config::DaemonConfig;
 use crate::daemon::types::SuperTTSDaemon;
-use crate::output::keyboard::Simulator;
 use log::{info, warn};
 use super_tts_shared::models::notification_method::NotificationMethod;
 use super_tts_shared::models::protocol::{DaemonResponse, ErrorCode};
-use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
 use super_tts_shared::models::update_beta_optin::UpdateBetaOptIn;
-use super_tts_shared::models::write_method::WriteMethod;
 
 impl SuperTTSDaemon {
-    /// What `POST /write_method/test` types. Fixed and documented in
-    /// `docs/protocol/endpoints/v1/write_method/test.md`, so a client can tell
-    /// the user what to expect; kept ASCII so a pass means the common case
-    /// works rather than exercising high-keysym paths a backend may not map.
-    const WRITE_METHOD_TEST_TEXT: &str = "Super TTS input test 123";
-
     /// Mutate the config under the write lock, then persist it. Centralizes the
     /// lock → mutate → persist sequence so a settings handler can't hand-roll it
     /// and forget the persist (see Tier 1 #3). Returns the persist outcome so the
@@ -50,136 +41,6 @@ impl SuperTTSDaemon {
             }
         }
     }
-    /// Handle set preview typing command - enable or disable preview typing
-    #[must_use]
-    pub async fn handle_set_preview_typing(&self, enabled: bool) -> DaemonResponse {
-        // Update the in-memory setting.
-        self.preview_typing_enabled
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
-
-        let persist = self
-            .set_config_field(|c| c.transcription.preview_typing_enabled = enabled)
-            .await;
-
-        let state = if enabled { "enabled" } else { "disabled" };
-        info!("Preview typing {state}");
-        Self::settings_saved(
-            DaemonResponse::success().with_preview_typing_enabled(enabled),
-            format!("Preview typing {state}"),
-            persist,
-        )
-    }
-
-    /// Handle get preview typing command - return current preview typing setting
-    #[must_use]
-    pub fn handle_get_preview_typing(&self) -> DaemonResponse {
-        let enabled = self
-            .preview_typing_enabled
-            .load(std::sync::atomic::Ordering::Relaxed);
-
-        DaemonResponse::success()
-            .with_preview_typing_enabled(enabled)
-            .with_message("Preview typing setting retrieved successfully".to_string())
-    }
-
-    /// Handle set recording stop mode command
-    pub async fn handle_set_recording_stop_mode(&self, mode: RecordingStopMode) -> DaemonResponse {
-        let persist = self
-            .set_config_field(|c| c.transcription.recording_stop_mode = mode)
-            .await;
-
-        info!("Recording stop mode set to {mode}");
-        Self::settings_saved(
-            DaemonResponse::success().with_recording_stop_mode(mode.to_string()),
-            format!("Recording stop mode set to {mode}"),
-            persist,
-        )
-    }
-
-    /// Handle get recording stop mode command
-    pub async fn handle_get_recording_stop_mode(&self) -> DaemonResponse {
-        let config = self.config.read().await;
-        let mode = config.transcription.recording_stop_mode;
-        DaemonResponse::success().with_recording_stop_mode(mode.to_string())
-    }
-
-    /// Handle set write method command
-    pub async fn handle_set_write_method(&self, method: WriteMethod) -> DaemonResponse {
-        let persist = self
-            .set_config_field(|c| c.transcription.write_method = method)
-            .await;
-        // Invalidate the cached simulator so the next recording creates a fresh one.
-        *self.simulator.write().await = None;
-
-        info!("Write method set to {method}");
-        Self::settings_saved(
-            DaemonResponse::success().with_write_method(method.to_string()),
-            format!("Write method set to {method}"),
-            persist,
-        )
-    }
-
-    /// Handle test write method command: type a fixed string with the
-    /// configured method so the user can see whether it reaches their focused
-    /// window. Contract: `docs/protocol/endpoints/v1/write_method/test.md`.
-    pub async fn handle_test_write_method(&self) -> DaemonResponse {
-        if *self.busy.read().await {
-            return DaemonResponse::error_with_code(
-                ErrorCode::RecordingInProgress,
-                "recording_in_progress",
-            );
-        }
-
-        let method = self.config.read().await.transcription.write_method;
-
-        // Borrow the cached simulator rather than building a second one: a
-        // fresh portal session costs three D-Bus round-trips and may re-prompt
-        // for authorization, and the test would leave that session behind.
-        let cached = self.simulator.write().await.take();
-        let mut simulator = match cached {
-            Some(s) => s,
-            None => match Simulator::new(method).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("Write-method test could not build a simulator: {e}");
-                    return DaemonResponse::error_with_code(
-                        ErrorCode::Internal,
-                        "write_method_unavailable",
-                    );
-                }
-            },
-        };
-
-        let resolved = simulator.resolved_method();
-        let result = simulator.type_text(Self::WRITE_METHOD_TEST_TEXT).await;
-
-        // Same cache discipline as a recording (see `Simulator::is_cacheable`).
-        if simulator.is_cacheable() {
-            *self.simulator.write().await = Some(simulator);
-        }
-
-        match result {
-            Ok(()) => {
-                info!("Write-method test typed via {resolved}");
-                DaemonResponse::success()
-                    .with_message(format!("Typed test text via {}", resolved.pretty_name()))
-                    .with_write_method(method.to_string())
-                    .with_resolved_write_method(resolved.to_string())
-            }
-            Err(e) => {
-                warn!("Write-method test failed to type via {resolved}: {e}");
-                DaemonResponse::error_with_code(ErrorCode::Internal, "typing_failed")
-            }
-        }
-    }
-
-    /// Handle get write method command
-    pub async fn handle_get_write_method(&self) -> DaemonResponse {
-        let config = self.config.read().await;
-        let method = config.transcription.write_method;
-        DaemonResponse::success().with_write_method(method.to_string())
-    }
-
     /// Handle set notification method command. An unknown method name is
     /// rejected with `invalid_notification_method` (HTTP 400) per
     /// `docs/protocol/endpoints/v1/notification_method.md`, rather than
@@ -193,7 +54,7 @@ impl SuperTTSDaemon {
         };
 
         let persist = self
-            .set_config_field(|c| c.transcription.notification_method = method)
+            .set_config_field(|c| c.synthesis.notification_method = method)
             .await;
 
         info!("Notification method set to {method}");
@@ -207,7 +68,7 @@ impl SuperTTSDaemon {
     /// Handle get notification method command
     pub async fn handle_get_notification_method(&self) -> DaemonResponse {
         let config = self.config.read().await;
-        let method = config.transcription.notification_method;
+        let method = config.synthesis.notification_method;
         DaemonResponse::success().with_notification_method(method.to_string())
     }
 
@@ -273,7 +134,7 @@ impl SuperTTSDaemon {
 
         // If disabling online models and the current model is online, revert to a
         // local one. Track why the revert didn't leave a usable local model so the
-        // response doesn't falsely claim "all transcription is local".
+        // response doesn't falsely claim "all synthesis is local".
         let mut revert_warning: Option<String> = None;
         if !enabled {
             let current_is_online = {
@@ -315,7 +176,7 @@ impl SuperTTSDaemon {
                 } else {
                     match &revert_warning {
                         Some(w) => format!("Online models disabled, but {w}"),
-                        None => "Online models disabled — all transcription is local".to_string(),
+                        None => "Online models disabled — all synthesis is local".to_string(),
                     }
                 };
                 DaemonResponse::success()
@@ -349,13 +210,7 @@ impl SuperTTSDaemon {
 
     /// Handle get custom models directory command
     pub async fn handle_get_custom_models_dir(&self) -> DaemonResponse {
-        let path = self
-            .config
-            .read()
-            .await
-            .transcription
-            .custom_models_dir
-            .clone();
+        let path = self.config.read().await.synthesis.custom_models_dir.clone();
         DaemonResponse::success().with_custom_models_dir(path)
     }
 
@@ -364,7 +219,7 @@ impl SuperTTSDaemon {
         let path_display = path.as_deref().unwrap_or("none").to_string();
 
         let persist = self
-            .set_config_field(|c| c.transcription.custom_models_dir = path)
+            .set_config_field(|c| c.synthesis.custom_models_dir = path)
             .await;
 
         info!("Custom models directory set to {path_display}");

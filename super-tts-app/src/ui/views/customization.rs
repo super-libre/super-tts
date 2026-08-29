@@ -5,7 +5,7 @@ use cosmic::{Apply, Element};
 use super_tts_shared::theme::AudioTheme;
 
 use super::common::{error_banner, page_layout};
-use crate::ui::messages::{LanguageMessage, Message, RecordingMessage};
+use crate::ui::messages::{LanguageMessage, Message, SpeechMessage};
 
 /// Customization page: audio feedback toggle, theme selection, volume, and language.
 pub fn page<'a>(
@@ -32,10 +32,10 @@ pub fn page<'a>(
 
     let mut section = settings::section().title("Audio").add(
         settings::item::builder("Audio Feedback")
-            .description("Play sounds when recording starts and stops")
+            .description("Play sounds when speech starts and stops")
             .control(
                 cosmic::widget::toggler(audio_enabled)
-                    .on_toggle(|b| Message::Recording(RecordingMessage::AudioFeedbackToggled(b))),
+                    .on_toggle(|b| Message::Speech(SpeechMessage::AudioFeedbackToggled(b))),
             ),
     );
 
@@ -47,9 +47,9 @@ pub fn page<'a>(
         } else {
             widget::dropdown(theme_names, selected_index, move |index| {
                 if let Some(&theme) = non_silent_clone.get(index) {
-                    Message::Recording(RecordingMessage::AudioThemeSelected(theme))
+                    Message::Speech(SpeechMessage::AudioThemeSelected(theme))
                 } else {
-                    Message::Recording(RecordingMessage::AudioThemeSelected(AudioTheme::Classic))
+                    Message::Speech(SpeechMessage::AudioThemeSelected(AudioTheme::Classic))
                 }
             })
             .into()
@@ -59,9 +59,9 @@ pub fn page<'a>(
         // release (Tier 1 #19), so a single drag isn't hundreds of set_volume
         // requests.
         let slider = widget::slider(0..=100, volume, |v| {
-            Message::Recording(RecordingMessage::VolumeChanged(v))
+            Message::Speech(SpeechMessage::VolumeChanged(v))
         })
-        .on_release(Message::Recording(RecordingMessage::VolumeCommit))
+        .on_release(Message::Speech(SpeechMessage::VolumeCommit))
         .width(Length::Fill)
         .apply(widget::container)
         .max_width(250.);
@@ -79,7 +79,7 @@ pub fn page<'a>(
         section = section
             .add(
                 settings::item::builder("Theme")
-                    .description("Sound theme for recording feedback")
+                    .description("Sound theme for speech feedback")
                     .control(theme_control),
             )
             .add(
@@ -95,7 +95,7 @@ pub fn page<'a>(
     );
     let language_section = settings::section().title("Language").add(
         settings::item::builder("Primary Language")
-            .description("Default transcription language for models that support it")
+            .description("Default speech language for models that support it")
             .control(
                 widget::button::standard(lang_label).on_press(Message::Language(
                     LanguageMessage::OpenLanguagePicker { model: None },

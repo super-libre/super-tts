@@ -40,8 +40,8 @@ impl SuperTTSDaemon {
             if let Some(tag) = status.latest_version.clone()
                 && self.self_update.should_notify(&tag).await
             {
-                let method = self.config.read().await.transcription.notification_method;
-                if matches!(method, NotificationMethod::Dbus | NotificationMethod::Auto) {
+                let method = self.config.read().await.synthesis.notification_method;
+                if matches!(method, NotificationMethod::Auto) {
                     let mut notifier = self.notifier.lock().await;
                     if notifier
                         .send(

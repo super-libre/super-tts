@@ -2,7 +2,7 @@
 //! The speak path: text in, audio out of the speakers.
 //!
 //! Sits between the `/speak` endpoint and the two halves already built — the
-//! backend's `POST /v1/synthesize` ([`crate::stt_models::v1`]) and the playback
+//! backend's `POST /v1/synthesize` ([`crate::tts_models::v1`]) and the playback
 //! pipeline ([`crate::audio::playback`]) — and owns the small amount of state
 //! that belongs to neither: which utterance is current, and how to stop it.
 //!
@@ -36,8 +36,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::audio::playback::{DeviceFormat, Playback};
 use crate::daemon::types::SharedLoadedModel;
-use crate::stt_models::v1::{SynthesisSink, SynthesizeRequest};
 use crate::text::chunk::{ChunkPolicy, Chunker};
+use crate::tts_models::v1::{SynthesisSink, SynthesizeRequest};
 
 /// Longest `text` accepted when the model declares no `max_input_chars`.
 ///
@@ -261,6 +261,20 @@ impl Default for SpeechEngine {
     }
 }
 
+/// Releases a [`SpeechEngine::claim_for_test`] claim on drop, so a test cannot
+/// leave the engine looking busy for whatever runs next in the same process.
+#[cfg(test)]
+pub(crate) struct ClaimGuard<'a> {
+    engine: &'a SpeechEngine,
+}
+
+#[cfg(test)]
+impl Drop for ClaimGuard<'_> {
+    fn drop(&mut self) {
+        *self.engine.current.lock() = None;
+    }
+}
+
 impl SpeechEngine {
     /// An engine that opens the default output device on first use.
     #[must_use]
@@ -302,6 +316,22 @@ impl SpeechEngine {
     #[must_use]
     pub fn current(&self) -> Option<String> {
         self.current.lock().as_ref().map(|(id, _)| id.clone())
+    }
+
+    /// Claim the in-flight slot without synthesizing anything, so a test can
+    /// put the daemon into the "model is occupied" state that gates model
+    /// mutations. Returns a guard that releases the slot when dropped.
+    ///
+    /// Exists because [`SuperTTSDaemon::is_busy`] reads this slot rather than a
+    /// mirrored flag: with no way to claim it, every busy-gated test would have
+    /// to drive a real synthesis to assert a guard that has nothing to do with
+    /// audio.
+    ///
+    /// [`SuperTTSDaemon::is_busy`]: crate::daemon::types::SuperTTSDaemon::is_busy
+    #[cfg(test)]
+    pub(crate) fn claim_for_test(&self, id: &str) -> ClaimGuard<'_> {
+        *self.current.lock() = Some((id.to_string(), Arc::new(AtomicBool::new(false))));
+        ClaimGuard { engine: self }
     }
 
     /// The playback handle, for tests that inspect what was rendered.
@@ -831,7 +861,7 @@ impl crate::daemon::types::SuperTTSDaemon {
     ///
     /// Returns as soon as the backend has finished producing and every sample
     /// is queued; the device plays out the tail afterwards. Errors are mapped
-    /// to the same coded shape the transcribe paths use, so a client switches
+    /// to the same coded shape every other endpoint uses, so a client switches
     /// on `error_code` rather than parsing prose.
     pub async fn handle_speak(
         &self,
@@ -841,6 +871,7 @@ impl crate::daemon::types::SuperTTSDaemon {
         speed: Option<f32>,
         instructions: Option<String>,
     ) -> super_tts_shared::models::protocol::DaemonResponse {
+        use crate::output::notice::{Failure, Origin};
         use super_tts_shared::models::protocol::{DaemonResponse, ErrorCode};
 
         let result = self
@@ -855,15 +886,37 @@ impl crate::daemon::types::SuperTTSDaemon {
             )
             .await;
 
-        match result {
-            Ok(utterance) => DaemonResponse::success().with_utterance_id(utterance.id),
-            Err(e @ (SpeakError::EmptyText | SpeakError::TextTooLong)) => {
+        let err = match result {
+            Ok(utterance) => return DaemonResponse::success().with_utterance_id(utterance.id),
+            Err(e) => e,
+        };
+
+        // A `speak` is as likely to come from a keyboard shortcut as from an
+        // app, and a shortcut has no UI to show the coded error to. So every
+        // failure the caller did not cause also gets a desktop notice; the two
+        // input-validation errors do not, because whoever sent bad text is by
+        // definition looking at the response.
+        if let Some(failure) = match &err {
+            SpeakError::EmptyText | SpeakError::TextTooLong => None,
+            SpeakError::NotLoaded => Some(Failure::no_model_loaded()),
+            SpeakError::Device(detail) => Some(Failure::could_not_open_output(detail)),
+            SpeakError::Synthesis(detail) => {
+                Some(Failure::synthesis_failed(Origin::Backend, detail))
+            }
+        } {
+            let method = self.config.read().await.synthesis.notification_method;
+            let mut notifier = self.notifier.lock().await;
+            crate::output::notification::deliver(method, &mut notifier, &failure).await;
+        }
+
+        match err {
+            e @ (SpeakError::EmptyText | SpeakError::TextTooLong) => {
                 DaemonResponse::error_with_code(ErrorCode::InvalidValue, &e.to_string())
             }
-            Err(SpeakError::NotLoaded) => {
+            SpeakError::NotLoaded => {
                 DaemonResponse::error_with_code(ErrorCode::ModelNotLoaded, "model_not_loaded")
             }
-            Err(e) => DaemonResponse::error(&e.to_string()),
+            e => DaemonResponse::error(&e.to_string()),
         }
     }
 

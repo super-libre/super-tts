@@ -2,14 +2,11 @@
 //! Generic mock WASM backend: a `wasi:http` proxy component that serves canned
 //! `/v1` responses and makes no outbound calls. The daemon's `tests/wasm_mock.rs`
 //! loads it through the real `WasmBackend` host to exercise the load → ping →
-//! status → transcribe → teardown orchestration with no real backend, model, or
-//! network — the WASM analog of `src/bin/mock_backend.rs`.
+//! status → synthesize → teardown orchestration with no real backend, model,
+//! or network — the WASM analog of `src/bin/mock_backend.rs`.
 
 use wasi::exports::http::incoming_handler::Guest;
 use wasi::http::types::{Fields, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam};
-
-/// The fixed transcription the mock returns; assertions in `wasm_mock.rs` pin it.
-pub const MOCK_TRANSCRIPTION: &str = "mock transcription";
 
 /// Sample rate the mock declares on `/v1/synthesize`.
 pub const MOCK_SAMPLE_RATE: u32 = 24000;
@@ -120,9 +117,6 @@ fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
         ),
         (Method::Post, "/v1/cancel") => ok(&serde_json::json!({
             "status": "success", "message": "Cancelled"
-        })),
-        (Method::Post, "/v1/transcribe") => ok(&serde_json::json!({
-            "status": "success", "transcription": MOCK_TRANSCRIPTION
         })),
         _ => (
             404,

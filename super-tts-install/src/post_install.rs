@@ -14,8 +14,6 @@
 //! tree's test coverage — see `plan`'s unit tests below — without ever
 //! needing a command-runner trait or a mocked OS.
 
-use std::path::Path;
-
 use crate::errors::InstallError;
 use crate::stage::Components;
 
@@ -58,37 +56,37 @@ pub enum Step {
     NudgeLaunchers,
     /// Remove pre-`/usr/local` per-user leftovers (bins/desktop files/icons).
     CleanupLegacy,
-    /// Rewrite a legacy `~/.local/bin/tts` shortcut reference, if present.
-    MigrateShortcut,
-    /// Interactively offer to add the `Super+Space` shortcut.
-    PromptShortcut,
+    //
+    // The STT build also offered to bind `Super+Space` to
+    // `tts record --write`, and migrated an older shortcut's path. Both are
+    // gone with the `record` subcommand: this daemon's equivalent gesture is
+    // "speak what I have selected", and until text acquisition exists there is
+    // no command worth binding. Installing a broken shortcut, or migrating one,
+    // is worse than installing none.
 }
 
 /// Decide which [`Step`]s to run, and in what order, from facts already known
 /// before any post-install I/O: `components` (what was just installed or
 /// updated), `applet_was_installed` (captured *before* the root phase ran —
-/// the script's `is_update` check), `interactive`, and three environment
-/// probes the caller (`run`) is expected to have already made:
-/// `systemctl_available`/`cosmic_available` (`$PATH` lookups) and
-/// `panel_running` (a `pgrep` check). `panel_running` only matters when
-/// `components.applet && applet_was_installed` — a caller may cheaply pass
-/// `true` unconditionally for any other combination and it's simply ignored.
+/// the script's `is_update` check), and two environment probes the caller
+/// (`run`) is expected to have already made: `systemctl_available` (a `$PATH`
+/// lookup) and `panel_running` (a `pgrep` check). `panel_running` only matters
+/// when `components.applet && applet_was_installed` — a caller may cheaply
+/// pass `true` unconditionally for any other combination and it's simply
+/// ignored.
 ///
 /// Order: systemd install/enable/restart, then the applet's panel restart,
-/// then the launcher-cache nudge, then legacy cleanup, then the COSMIC
-/// shortcut. Every file is already placed by the time this runs — that all
-/// happens earlier, in the root phase — so [`Step::CleanupLegacy`] is a
-/// single unconditional sweep rather than one pass per component; removing
-/// files that were never there is a no-op, so the sweep is idempotent
-/// whatever the selection.
+/// then the launcher-cache nudge, then legacy cleanup. Every file is already
+/// placed by the time this runs — that all happens earlier, in the root phase
+/// — so [`Step::CleanupLegacy`] is a single unconditional sweep rather than
+/// one pass per component; removing files that were never there is a no-op, so
+/// the sweep is idempotent whatever the selection.
 #[must_use]
-#[allow(clippy::fn_params_excessive_bools)] // interface fixed by the design doc: the five booleans are the planner's whole point
+#[allow(clippy::fn_params_excessive_bools)] // interface fixed by the design doc: the booleans are the planner's whole point
 pub fn plan(
     components: Components,
     applet_was_installed: bool,
-    interactive: bool,
     systemctl_available: bool,
-    cosmic_available: bool,
     panel_running: bool,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
@@ -113,13 +111,6 @@ pub fn plan(
     }
 
     steps.push(Step::CleanupLegacy);
-
-    if components.daemon && cosmic_available {
-        steps.push(Step::MigrateShortcut);
-        if interactive {
-            steps.push(Step::PromptShortcut);
-        }
-    }
 
     steps
 }
@@ -235,119 +226,6 @@ fn cleanup_legacy() {
     let _ = std::fs::remove_file(home.join(".local/share/metainfo/super-tts-app.metainfo.xml"));
 }
 
-/// Rewrite a legacy `<home>/.local/bin/tts ` shortcut command to
-/// `<prefix>/bin/tts `, since the wrapper no longer lives in the removed
-/// per-user layout. Returns `None` when `content` doesn't reference the
-/// legacy path (nothing to migrate).
-#[must_use]
-pub fn migrate_shortcut_content(content: &str, home: &str, prefix: &str) -> Option<String> {
-    let legacy = format!("{home}/.local/bin/tts ");
-    if !content.contains(&legacy) {
-        return None;
-    }
-    let replacement = format!("{prefix}/bin/tts ");
-    Some(content.replace(&legacy, &replacement))
-}
-
-/// Build the `Spawn(...)` shortcut entry block for `stt_command`, RON-shaped
-/// like the rest of the COSMIC shortcuts file.
-fn shortcut_entry(stt_command: &str) -> String {
-    format!(
-        "    (\n        modifiers: [\n            Super,\n        ],\n        key: \"space\",\n        description: Some(\"Super TTS\"),\n    ): Spawn(\"{stt_command}\"),\n"
-    )
-}
-
-/// Add a `Super+Space` → `stt_command` shortcut entry to `content` (the
-/// COSMIC custom-shortcuts file's current text), subject to two coarse
-/// checks: skip (return `None`) if a "Super TTS" entry already exists, or if
-/// `key: "space"` is already bound to a `Super`-modified shortcut
-/// (approximated as both substrings appearing anywhere in `content`). Empty or
-/// `{}`-only content gets the full-file template; otherwise the entry is
-/// inserted before the final closing brace.
-#[must_use]
-pub fn shortcut_with_super_tts(content: &str, stt_command: &str) -> Option<String> {
-    if content.contains("Super TTS") {
-        return None;
-    }
-    if content.contains("key: \"space\"") && content.contains("Super") {
-        return None;
-    }
-
-    let entry = shortcut_entry(stt_command);
-    let trimmed = content.trim();
-    if trimmed.is_empty() || trimmed == "{}" {
-        return Some(format!("{{\n{entry}}}\n"));
-    }
-
-    // File has content: drop everything from (and including) the final `}`
-    // and append our entry plus a fresh close — mirrors the script's
-    // `head -n -1` + heredoc.
-    let last_brace = content.rfind('}')?;
-    let head = &content[..last_brace];
-    Some(format!("{head}{entry}}}\n"))
-}
-
-/// Read `/dev/tty` for a `[Y/n]`-style answer to `prompt` (echoed to
-/// stderr first). Defaults to yes on anything but an exact `n`/`N` — same
-/// as the script's `[[ "$add_shortcut" =~ ^[Nn]$ ]]` check. A `/dev/tty`
-/// open/read failure also defaults to "no" (never silently proceeds without
-/// having actually asked).
-fn prompt_yes_no(prompt: &str) -> bool {
-    use std::io::{BufRead, Write};
-    eprint!("{prompt}");
-    let _ = std::io::stderr().flush();
-    let Ok(tty) = std::fs::File::open("/dev/tty") else {
-        return false;
-    };
-    let mut line = String::new();
-    if std::io::BufReader::new(tty).read_line(&mut line).is_err() {
-        return false;
-    }
-    !line.trim().eq_ignore_ascii_case("n")
-}
-
-/// Rewrite a legacy `~/.local/bin/tts` shortcut reference in the COSMIC
-/// custom-shortcuts file, if present.
-fn migrate_shortcut(prefix: &Path) {
-    let Some(home) = dirs::home_dir() else {
-        return;
-    };
-    let shortcuts_file =
-        home.join(".config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom");
-    if let Ok(content) = std::fs::read_to_string(&shortcuts_file)
-        && let Some(migrated) =
-            migrate_shortcut_content(&content, &home.to_string_lossy(), &prefix.to_string_lossy())
-        && let Err(e) = std::fs::write(&shortcuts_file, migrated)
-    {
-        log::warn!("failed to migrate COSMIC shortcut: {e}");
-    }
-}
-
-/// Interactively offer to add the `Super+Space` shortcut.
-fn prompt_shortcut(prefix: &Path) {
-    let Some(home) = dirs::home_dir() else {
-        return;
-    };
-    let shortcuts_dir = home.join(".config/cosmic/com.system76.CosmicSettings.Shortcuts/v1");
-    let shortcuts_file = shortcuts_dir.join("custom");
-
-    if !prompt_yes_no("Add COSMIC keyboard shortcut (Super+Space)? [Y/n]: ") {
-        return;
-    }
-
-    if let Err(e) = std::fs::create_dir_all(&shortcuts_dir) {
-        log::warn!("failed to create COSMIC shortcuts dir: {e}");
-        return;
-    }
-    let stt_command = format!("{}/bin/tts record --write", prefix.display());
-    let existing = std::fs::read_to_string(&shortcuts_file).unwrap_or_default();
-    if let Some(updated) = shortcut_with_super_tts(&existing, &stt_command)
-        && let Err(e) = std::fs::write(&shortcuts_file, updated)
-    {
-        log::warn!("failed to write COSMIC shortcut: {e}");
-    }
-}
-
 /// Everything that happens back in the user process after the root phase has
 /// placed files. Computes the environment probes [`plan`] needs, gets back
 /// an ordered [`Step`] list, and executes it through a thin per-step
@@ -364,17 +242,11 @@ fn prompt_shortcut(prefix: &Path) {
 /// [`InstallError::PostInstallFailed`] only when the daemon restart/start
 /// itself fails ([`Step::RestartOrStart`]) — every other step is best-effort
 /// and only logs a warning.
-pub async fn run(
-    components: &Components,
-    applet_was_installed: bool,
-    interactive: bool,
-    prefix: &Path,
-) -> Result<(), InstallError> {
+pub async fn run(components: &Components, applet_was_installed: bool) -> Result<(), InstallError> {
     let systemctl_available = on_path("systemctl");
     if components.daemon && !systemctl_available {
         log::warn!("systemctl not found on PATH; skipping daemon service setup");
     }
-    let cosmic_available = on_path("cosmic-panel");
     // Only worth the `pgrep` shell-out when it could actually matter —
     // `plan` re-checks the same `components.applet && applet_was_installed`
     // guard itself, so passing `false` when it doesn't apply is equivalent.
@@ -384,9 +256,7 @@ pub async fn run(
     for step in plan(
         *components,
         applet_was_installed,
-        interactive,
         systemctl_available,
-        cosmic_available,
         panel_running,
     ) {
         match step {
@@ -406,8 +276,6 @@ pub async fn run(
             Step::RestartPanel => step_restart_panel().await,
             Step::NudgeLaunchers => step_nudge_launchers().await,
             Step::CleanupLegacy => cleanup_legacy(),
-            Step::MigrateShortcut => migrate_shortcut(prefix),
-            Step::PromptShortcut => prompt_shortcut(prefix),
         }
     }
 
@@ -418,12 +286,26 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    const STT_CMD: &str = "/usr/local/bin/tts record --write";
+    fn all_three() -> Components {
+        Components {
+            daemon: true,
+            app: true,
+            applet: true,
+        }
+    }
+
+    fn daemon_only() -> Components {
+        Components {
+            daemon: true,
+            app: false,
+            applet: false,
+        }
+    }
 
     /// C8: pins that `Step::RestartOrStart` is the ONLY hard-error arm in
     /// `run`'s per-step executor match. `run` itself can't be driven
     /// directly without shelling out to real systemd/COSMIC commands — and
-    /// several steps (`cleanup_legacy`, `migrate_shortcut`, ...) touch the
+    /// several steps (`cleanup_legacy`, ...) touch the
     /// real `$HOME`, so calling them for real from a test would risk
     /// mutating the test-runner's actual machine, not a real seam to test
     /// through. Absent an executable seam, this pins the invariant
@@ -475,75 +357,11 @@ mod tests {
     }
 
     #[test]
-    fn migrate_rewrites_legacy_path_only_when_present() {
-        let c = r#"{ (key: "space"): Spawn("/home/u/.local/bin/tts record --write"), }"#;
-        let out = migrate_shortcut_content(c, "/home/u", "/usr/local").unwrap();
-        assert!(out.contains("/usr/local/bin/tts record --write"));
-        assert!(!out.contains(".local/bin/tts "));
-        assert!(migrate_shortcut_content("{}", "/home/u", "/usr/local").is_none());
-    }
-
-    #[test]
-    fn add_skips_when_super_tts_or_super_space_exists() {
-        assert!(
-            shortcut_with_super_tts(r#"{ description: Some("Super TTS") }"#, STT_CMD).is_none()
-        );
-        let taken = "{\n    (\n        modifiers: [\n            Super,\n        ],\n        key: \"space\",\n        description: Some(\"Other\"),\n    ): Spawn(\"x\"),\n}";
-        assert!(shortcut_with_super_tts(taken, STT_CMD).is_none());
-    }
-
-    #[test]
-    fn add_writes_full_file_when_empty_and_inserts_before_close_otherwise() {
-        let fresh = shortcut_with_super_tts("", STT_CMD).unwrap();
-        assert!(fresh.starts_with("{"));
-        assert!(fresh.contains("Super TTS"));
-        assert!(fresh.trim_end().ends_with("}"));
-
-        // The literal `{}`-only case (not just a truly empty file) also
-        // gets the full-file template, per the doc comment's "Empty or
-        // `{}`-only content" — not just whitespace-empty.
-        let fresh_braces = shortcut_with_super_tts("{}", STT_CMD).unwrap();
-        assert!(fresh_braces.contains("Super TTS"));
-        assert_eq!(
-            fresh_braces.matches('}').count(),
-            fresh_braces.matches('{').count()
-        );
-
-        let existing = "{\n    (\n        modifiers: [\n            Ctrl,\n        ],\n        key: \"t\",\n        description: Some(\"Terminal\"),\n    ): Spawn(\"term\"),\n}";
-        let merged = shortcut_with_super_tts(existing, STT_CMD).unwrap();
-        assert!(merged.contains("Terminal"));
-        assert!(merged.contains("Super TTS"));
-        assert_eq!(merged.matches('}').count(), merged.matches('{').count());
-        // Super TTS entry comes after the existing one, before the final close.
-        assert!(merged.rfind("Super TTS").unwrap() > merged.find("Terminal").unwrap());
-    }
-
-    // --- plan(): the post-install decision tree, tested exhaustively so the
-    // real shell-outs in `run`'s executor never need to be invoked to prove
-    // the WHAT-to-do logic is right. ---
-
-    fn all_three() -> Components {
-        Components {
-            daemon: true,
-            app: true,
-            applet: true,
-        }
-    }
-
-    fn daemon_only() -> Components {
-        Components {
-            daemon: true,
-            app: false,
-            applet: false,
-        }
-    }
-
-    #[test]
     fn plan_daemon_only_skips_launcher_nudge_and_applet_restart() {
         // Even with every environment probe favorable (systemctl+cosmic
         // available, applet "already installed", panel "running") — none of
         // that matters when the applet isn't part of THIS run's components.
-        let steps = plan(daemon_only(), true, false, true, true, true);
+        let steps = plan(daemon_only(), true, true, true);
         assert!(!steps.contains(&Step::NudgeLaunchers));
         assert!(!steps.contains(&Step::RestartPanel));
     }
@@ -555,57 +373,21 @@ mod tests {
             app: false,
             applet: true,
         };
-        assert!(plan(applet_only, true, false, false, false, true).contains(&Step::RestartPanel));
+        assert!(plan(applet_only, true, false, true).contains(&Step::RestartPanel));
         // Not previously installed (a fresh applet install, not an update):
         // no restart even if the panel happens to be running.
-        assert!(!plan(applet_only, false, false, false, false, true).contains(&Step::RestartPanel));
+        assert!(!plan(applet_only, false, false, true).contains(&Step::RestartPanel));
         // Previously installed, but the panel isn't currently running:
         // nothing to restart.
-        assert!(!plan(applet_only, true, false, false, false, false).contains(&Step::RestartPanel));
+        assert!(!plan(applet_only, true, false, false).contains(&Step::RestartPanel));
         // Applet not selected THIS run (e.g. a daemon-only update), even
         // though it was installed before and the panel is running.
-        assert!(
-            !plan(daemon_only(), true, false, false, false, true).contains(&Step::RestartPanel)
-        );
-    }
-
-    #[test]
-    fn plan_shortcut_steps_require_daemon_component_and_cosmic_available() {
-        let daemon = daemon_only();
-
-        // No cosmic-panel on PATH: no shortcut steps at all, interactive or not.
-        let steps = plan(daemon, false, true, true, false, false);
-        assert!(!steps.contains(&Step::MigrateShortcut));
-        assert!(!steps.contains(&Step::PromptShortcut));
-
-        // Cosmic available, non-interactive: migrate only (the prompt is
-        // interactive-only, but migration isn't gated on it at all).
-        let steps = plan(daemon, false, false, true, true, false);
-        assert!(steps.contains(&Step::MigrateShortcut));
-        assert!(!steps.contains(&Step::PromptShortcut));
-
-        // Cosmic available AND interactive: both steps, prompt after migrate.
-        let steps = plan(daemon, false, true, true, true, false);
-        let migrate_at = steps.iter().position(|s| *s == Step::MigrateShortcut);
-        let prompt_at = steps.iter().position(|s| *s == Step::PromptShortcut);
-        assert!(migrate_at.is_some() && prompt_at.is_some());
-        assert!(migrate_at < prompt_at);
-
-        // App-only (no daemon component at all): no shortcut steps even with
-        // cosmic available and an interactive session.
-        let app_only = Components {
-            daemon: false,
-            app: true,
-            applet: false,
-        };
-        let steps = plan(app_only, false, true, true, true, false);
-        assert!(!steps.contains(&Step::MigrateShortcut));
-        assert!(!steps.contains(&Step::PromptShortcut));
+        assert!(!plan(daemon_only(), true, false, true).contains(&Step::RestartPanel));
     }
 
     #[test]
     fn plan_no_systemctl_means_no_systemd_steps() {
-        let steps = plan(all_three(), true, false, false, true, true);
+        let steps = plan(all_three(), true, false, true);
         assert!(!steps.contains(&Step::DaemonReload));
         assert!(!steps.contains(&Step::RemoveLegacyUnit));
         assert!(!steps.contains(&Step::Enable));
@@ -619,7 +401,7 @@ mod tests {
             app: true,
             applet: false,
         };
-        let steps = plan(app_only, false, false, true, false, false);
+        let steps = plan(app_only, false, true, false);
         assert!(!steps.iter().any(|s| matches!(
             s,
             Step::DaemonReload | Step::RemoveLegacyUnit | Step::Enable | Step::RestartOrStart
@@ -628,11 +410,8 @@ mod tests {
 
     #[test]
     fn plan_cleanup_legacy_always_runs_regardless_of_every_other_gate() {
-        assert!(
-            plan(Components::default(), false, false, false, false, false)
-                .contains(&Step::CleanupLegacy)
-        );
-        assert!(plan(all_three(), true, true, true, true, true).contains(&Step::CleanupLegacy));
+        assert!(plan(Components::default(), false, false, false).contains(&Step::CleanupLegacy));
+        assert!(plan(all_three(), true, true, true).contains(&Step::CleanupLegacy));
     }
 
     #[test]
@@ -642,15 +421,13 @@ mod tests {
             app: true,
             applet: false,
         };
-        let steps = plan(app_only, false, false, true, true, false);
+        let steps = plan(app_only, false, true, false);
         assert!(steps.contains(&Step::NudgeLaunchers));
-        assert!(!steps.iter().any(|s| matches!(
-            s,
-            Step::DaemonReload
-                | Step::RestartOrStart
-                | Step::MigrateShortcut
-                | Step::PromptShortcut
-        )));
+        assert!(
+            !steps
+                .iter()
+                .any(|s| matches!(s, Step::DaemonReload | Step::RestartOrStart))
+        );
     }
 
     #[test]
@@ -660,8 +437,8 @@ mod tests {
         // running, systemctl and cosmic-panel both available, interactive
         // session. The documented order for the "all" case: systemd
         // install/enable/(re)start, applet panel restart, launcher nudge,
-        // legacy cleanup, COSMIC shortcut migrate-then-prompt.
-        let steps = plan(all_three(), true, true, true, true, true);
+        // legacy cleanup.
+        let steps = plan(all_three(), true, true, true);
         assert_eq!(
             steps,
             vec![
@@ -672,8 +449,6 @@ mod tests {
                 Step::RestartPanel,
                 Step::NudgeLaunchers,
                 Step::CleanupLegacy,
-                Step::MigrateShortcut,
-                Step::PromptShortcut,
             ]
         );
     }

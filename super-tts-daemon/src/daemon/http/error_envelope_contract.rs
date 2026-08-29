@@ -19,14 +19,11 @@
 //! Adding an error envelope? Add it here too.
 
 use super::internal::helpers::dispatch::json_response;
-use super::internal::helpers::responses::{
-    invalid_session, model_not_loaded_response, rate_limited, reason,
-    recording_in_progress_response, scope_denied,
-};
+use super::internal::helpers::responses::{invalid_session, rate_limited, reason, scope_denied};
 use super::v1::backends::{json_error, json_error_msg};
 use super::v1::registry::{registry_error, registry_error_msg};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use super_tts_shared::daemon::http_client::transport::error_for_status;
 use super_tts_shared::models::protocol::{DaemonResponse, ErrorCode};
 
@@ -82,13 +79,21 @@ async fn every_error_envelope_reaches_the_client_naming_its_failure() {
         ("scope_denied", scope_denied(), "scope_denied"),
         ("rate_limited", rate_limited(), "rate_limited"),
         (
-            "recording_in_progress",
-            recording_in_progress_response(),
-            "recording_in_progress",
+            "speech_in_progress",
+            json_response(&DaemonResponse::error_with_code(
+                ErrorCode::SpeechInProgress,
+                "speech_in_progress",
+            ))
+            .into_response(),
+            "speech_in_progress",
         ),
         (
             "model_not_loaded",
-            model_not_loaded_response(),
+            json_response(&DaemonResponse::error_with_code(
+                ErrorCode::ModelNotLoaded,
+                "model_not_loaded",
+            ))
+            .into_response(),
             "model_not_loaded",
         ),
     ];
@@ -125,24 +130,6 @@ async fn dispatch_error_reaches_the_client_with_code_and_message() {
         seen.contains("No installed backend serves that model"),
         "the human message must survive: {seen:?}"
     );
-}
-
-/// `model_not_loaded_response` (the mic-path `409` fired before the
-/// `202`/SSE envelope commits) must carry `error_code` — not just `message`
-/// — so it agrees with the pre-captured `audio_data` path's `409` for the
-/// same condition (`DaemonResponse::error_with_code(ErrorCode::ModelNotLoaded,
-/// ..)`, see `transcription.rs`). `error_for_status` collapsing both fields
-/// to the same string (asserted above) isn't enough to prove `error_code` is
-/// actually present, since `message` alone already spells the identifier —
-/// so this test reads the raw JSON body directly.
-#[tokio::test]
-async fn model_not_loaded_response_carries_error_code() {
-    let (status, body) = parts_of(model_not_loaded_response()).await;
-    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
-
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(parsed["error_code"], "model_not_loaded");
-    assert_eq!(parsed["message"], "model_not_loaded");
 }
 
 /// A `401` is the one status the client must be able to route back to

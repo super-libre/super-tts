@@ -5,9 +5,9 @@ use clap::{Command, arg, command};
 #[must_use]
 pub fn build() -> Command {
     command!()
-    .about("🎙️ Super TTS Daemon - Advanced Speech-to-text for Linux")
+    .about("🔊 Super TTS Daemon - Advanced text-to-speech for Linux")
     .long_about(
-        "A high-performance speech-to-text daemon that loads a STT model once and keeps it in memory, serving transcription requests over the HTTP protocol at $XDG_RUNTIME_DIR/tts/super-tts-http.sock. Use `super-tts-cli` (or the `tts` wrapper) to drive recordings."
+        "A high-performance text-to-speech daemon that loads a voice model once and keeps it in memory, serving synthesis requests over the HTTP protocol at $XDG_RUNTIME_DIR/tts/super-tts-http.sock. Use `super-tts-cli` (or the `tts` wrapper) to speak text."
     )
     .subcommand_required(false)
     .arg_required_else_help(false)

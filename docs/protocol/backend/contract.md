@@ -1,6 +1,6 @@
 # Backend Protocol
 
-A **backend** is an out-of-tree speech-to-text implementation that the
+A **backend** is an out-of-tree text-to-speech implementation that the
 daemon loads at runtime instead of compiling in. This document defines the
 daemon↔backend contract that every backend implements, regardless of how it
 is packaged.
@@ -30,11 +30,11 @@ pair external clients use on
 
 | Field      | Type   | Notes                                                                       |
 |------------|--------|-----------------------------------------------------------------------------|
-| `name`     | string | Wire model name, e.g. `whisper-tiny`, `voxtral-mini`, `nova-3`.             |
+| `name`     | string | Wire model name, e.g. `kokoro-82m`, `xtts-v2`, `nova-3`.             |
 | `source`   | string | The **backend repository** that provides the model — a canonical repo id declared in the backend's configuration. |
 
 `source` names *which backend* a model comes from. Two backends may both
-implement `whisper-tiny`; they coexist and are
+implement `kokoro-82m`; they coexist and are
 disambiguated by `source`. The daemon derives a model's `source` from the
 `[backend].source` field of the configuration that declares it — see
 [config.md](./config.md).
@@ -73,8 +73,8 @@ a top-level `status` field of `"success"` or `"error"`.
 | POST   | `/v1/load`       | Load a model variant; drives readiness to `ready`. |
 | GET    | `/v1/status`     | Readiness state and load progress.                 |
 | GET    | `/v1/ping`       | Liveness.                                          |
-| POST   | `/v1/transcribe` | Transcribe audio; one-shot or streaming.           |
-| POST   | `/v1/cancel`     | Cancel an in-flight transcription.                 |
+| POST   | `/v1/synthesize` | Synthesize speech; streams framed audio.           |
+| POST   | `/v1/cancel`     | Cancel an in-flight synthesis.                     |
 
 ### Request headers
 
@@ -84,11 +84,11 @@ headers — external clients cannot set them.
 
 | Header                | Carries                                                  |
 |-----------------------|----------------------------------------------------------|
-| `x-tts-model`         | The active model name, e.g. `whisper-1`.                 |
+| `x-tts-model`         | The active model name, e.g. `kokoro-82m`.                |
 | `x-tts-secret-<name>` | One declared secret, e.g. `x-tts-secret-OPENAI_API_KEY`. |
 | `x-tts-option-<name>` | One declared option, e.g. `x-tts-option-base_url`.       |
 
-- `x-tts-model` names the model to transcribe with. The daemon also calls
+- `x-tts-model` names the model to synthesize with. The daemon also calls
   [`POST /v1/load`](#post-v1load) with the model before routing, but a
   stateless backend (re-instantiated per request — see [wasm.md](./wasm.md))
   reads `x-tts-model` on each request instead of remembering the load; a
@@ -124,7 +124,7 @@ A backend serves exactly one model at a time. Switching models is a fresh
 **Every backend must implement `/v1/load`.** A backend with nothing to load —
 e.g. a cloud backend that holds no local weights — treats it as a no-op: it
 acknowledges with `202` and reports `ready` from `GET /v1/status` immediately.
-The daemon always calls `load` before routing transcription, so the route
+The daemon always calls `load` before routing synthesis, so the route
 must exist even when it does no work.
 
 **Request:**
@@ -135,7 +135,7 @@ Host: backend.local
 Content-Type: application/json
 
 {
-  "name":     "whisper-tiny",
+  "name":     "kokoro-82m",
   "device":   "cuda"
 }
 ```
@@ -192,7 +192,7 @@ Host: backend.local
   "state":    "loading",   // readiness: "starting" | "loading" | "ready" | "error"
   "progress": 0.42,        // present only while state == "loading"; 0.0–1.0
   "model": {               // present once a load has been requested
-    "name": "whisper-tiny"
+    "name": "kokoro-82m"
   },
   "device":   "cuda",      // actual device in use: "cpu" | "cuda" | "rocm" | "metal" | "vulkan"
   "reason":   null         // machine-readable cause; set when state == "error"
@@ -219,7 +219,7 @@ stateDiagram-v2
     error --> loading: POST /v1/load (retry)
 ```
 
-The daemon routes transcription to a backend only while `state` is `ready`.
+The daemon routes synthesis to a backend only while `state` is `ready`.
 
 ### `GET /v1/ping`
 
@@ -236,78 +236,100 @@ Content-Type: application/json
 { "status": "success", "message": "pong" }
 ```
 
-### `POST /v1/transcribe`
+### `POST /v1/synthesize`
 
-Transcribe audio the daemon has already captured. Backends never touch a
-microphone; the daemon owns capture and always passes samples in
-`audio_data`. The route returns a one-shot JSON result, or — when
-`options.stream_realtime` is `true` — a Server-Sent Events stream of
-`preview` frames followed by a final `done`, mirroring
-[transcribe.md](../endpoints/v1/transcribe.md).
+Turn text into audio. This is the only route that produces sound, and the only
+one whose response is not JSON.
+
+The daemon has already done the text work by the time this arrives: markup is
+normalized away, `auto` is resolved to a concrete language, and long input is
+split on sentence boundaries to the model's `max_input_chars`. A backend
+receives **one prosodic unit** it can synthesize as written.
 
 **Request:**
 
 ```jsonc
 {
-  "audio_data":  [0.012, -0.034, …],  // f32 PCM samples, required
-  "sample_rate": 16000,               // Hz
-  "language":    "en",                // optional; must be in supported_languages
-  "options": {
-    // Emit incremental `event: preview` frames before the final
-    // `event: done`. Default: false.
-    "stream_realtime": true
-  }
+  "text":         "The kettle is boiling.",  // required, non-empty
+  "voice":        "af_heart",                // optional; a voice this model declares
+  "language":     "en",                      // optional; never the string "auto"
+  "speed":        1.0,                       // optional rate multiplier
+  "instructions": "Read this calmly."        // optional delivery guidance
 }
 ```
 
-| Field         | Type    | Required | Notes                                                  |
-|---------------|---------|----------|--------------------------------------------------------|
-| `audio_data`  | array   | yes      | f32 PCM samples.                                        |
-| `sample_rate` | number  | no       | Default `16000`.                                        |
-| `language`    | string  | no       | BCP-47 transcription language tag (e.g. `en`, `es-MX`, `es-419`) **or** the reserved `auto` (auto-detect). Permitted only for multilingual models; a non-`auto` tag must be one of the model's `supported_languages`. When omitted, the model's `primary_language` is used. |
-| `options`     | object  | no       | Per-request options; currently `stream_realtime`.       |
+| Field          | Type   | Required | Notes                                                                                  |
+|----------------|--------|----------|----------------------------------------------------------------------------------------|
+| `text`         | string | yes      | One prosodic unit, already normalized.                                                 |
+| `voice`        | string | no       | A voice id from the model's manifest. Omitted → use `default_voice`.                   |
+| `language`     | string | no       | Resolved BCP-47 tag. **Never `auto`** — the daemon owns detection, because it owns the text. |
+| `speed`        | number | no       | Rate multiplier, roughly 0.5–2.0. A backend that cannot vary rate **ignores it**; do not resample to fake it, the daemon does not either. |
+| `instructions` | string | no       | Free-text delivery guidance for models that accept it. Ignore it otherwise.            |
 
-The reserved value `language: "auto"` requests auto-detection: the backend maps
-it to its native mechanism (e.g. Deepgram `multi`, Whisper detect-from-audio)
-and falls back to the model's `primary_language` if it cannot. Backends MUST
-accept `auto` without error; it is never rejected with `unsupported_language`.
+Optional fields are **omitted**, not sent as `null`, so a backend can
+distinguish "unset" without special-casing.
 
-**Response — one-shot (200):**
+**Response (200):** a stream of length-prefixed binary frames.
 
 ```http
 HTTP/1.1 200 OK
-Content-Type: application/json
-
-{ "status": "success", "transcription": "hello world" }
+Content-Type: application/vnd.super-tts.frames
+x-tts-sample-rate: 24000
+x-tts-channels: 1
+x-tts-format: s16le
 ```
 
-**Response — streaming (200):** a `text/event-stream` carrying zero or more
-`preview` frames then one `done`:
+The three `x-tts-*` headers describe every audio frame in the body and are
+required. `x-tts-format` is `s16le` or `f32le`; `x-tts-channels` is `1` or `2`;
+`x-tts-sample-rate` is in Hz. The daemon resamples and channel-maps to whatever
+the output device wants, so emit whatever your model produces natively.
 
-| `event:`  | `data:` payload                      | When                                              |
-|-----------|--------------------------------------|---------------------------------------------------|
-| `preview` | `{ "text": "hello wor…" }`           | Incremental result while decoding continues.      |
-| `done`    | `{ "transcription": "hello world" }` | Final transcription; the stream closes after it.  |
-| `error`   | `{ "message": "..." }`               | Fatal error before `done`; the stream then closes. |
+Each frame is:
+
+```
+[u8 kind][u32 length, little-endian][payload…]
+```
+
+| `kind` | Name    | Payload                                                                 |
+|--------|---------|-------------------------------------------------------------------------|
+| `0x01` | `audio` | PCM samples in the declared format. Any length; frames need not align to sample boundaries. |
+| `0x02` | `mark`  | JSON: `{ "start_ms"?, "end_ms"?, "start_char"?, "end_char"? }` — aligns a span of audio to a span of the request text. All fields optional. |
+| `0x03` | `done`  | Empty. **Terminates the stream**; required.                             |
+| `0x04` | `error` | JSON: `{ "message": "…" }`. Terminates the stream.                      |
+
+Emit `audio` frames as they are produced rather than buffering the whole
+utterance — the daemon starts playing as soon as it has enough to cover the
+device's prebuffer, so streaming is what makes speech start quickly.
+
+A stream **must** end with `done` or `error`. A body that ends without one is
+rejected as truncated, because there is no other way to distinguish "the
+backend finished" from "the connection dropped mid-utterance".
+
+**Limits.** A single frame is capped at **1 MiB** and the cumulative audio of
+one response at **32 MiB**. Exceeding either aborts the response. These bound
+what a backend can make the daemon hold; they are not a quality limit — 32 MiB
+is over five minutes of 24 kHz mono `s16le`, and the daemon chunks long text
+into several requests anyway.
 
 **Errors:**
 
-| HTTP | `message`               | Meaning                                                       |
-|------|-------------------------|---------------------------------------------------------------|
-| 400  | `invalid_audio`         | `audio_data` is missing or empty.                             |
-| 400  | `unsupported_language`  | `language` is not in the model's `supported_languages`.       |
-| 409  | `not_ready`             | No model is loaded; check `GET /v1/status`.                   |
-| 500  | `inference_failed`      | The backend failed during inference.                          |
+| HTTP | `message`              | Meaning                                                 |
+|------|------------------------|---------------------------------------------------------|
+| 400  | `invalid_text`         | `text` is missing or empty.                             |
+| 400  | `unsupported_language` | `language` is not in the model's `supported_languages`.  |
+| 400  | `unknown_voice`        | `voice` is not a voice this model declares.             |
+| 409  | `not_ready`            | No model is loaded; check `GET /v1/status`.             |
+| 500  | `inference_failed`     | The backend failed during inference.                    |
 
-Once a streaming response has started, late errors arrive as an in-stream
-`event: error` frame followed by the connection closing.
+Errors before the first frame use the JSON envelope with these codes. Once the
+framed response has started, a late failure is an in-band `error` frame instead
+— the status line has already been sent.
 
 ### `POST /v1/cancel`
 
-Cancel the in-flight transcription, if any. The corresponding
-`/v1/transcribe` response terminates (a streaming one with an `event: error`
-or by closing). Returns `409 nothing_in_progress` when no transcription is
-running.
+Cancel the in-flight synthesis, if any. The corresponding `/v1/synthesize`
+response terminates — with an `error` frame if the body has already started, or
+by closing. Returns `409 nothing_in_progress` when no synthesis is running.
 
 **Response (200):**
 
@@ -318,51 +340,32 @@ Content-Type: application/json
 { "status": "success", "message": "Cancelled" }
 ```
 
-## Realtime transcription
+## Realtime sessions (reserved)
 
-Realtime models use a WebSocket endpoint rather than batch `POST /v1/transcribe`.
 A model is realtime when `[[models]] realtime = true` is set in its backend
-configuration (see [config.md](./config.md#models)). The batch route is for
-non-realtime models only.
+configuration (see [config.md](./config.md#models)). Such a model is served over
+the realtime WIT's `ws.connect` / `ws-server.handle` halves rather than the
+batch `POST /v1/synthesize` route.
 
-### Consumer-facing endpoint
+**The transport is implemented; the payload contract is not yet defined.** The
+daemon can load a realtime component, link it, and pump WebSocket frames
+between a consumer and the guest — it is a pure relay and never inspects the
+payload. What it does not yet have is a consumer-facing endpoint for synthesis
+sessions, or a specification of what such a session says over the wire.
 
-```
-GET /v1/transcribe/realtime
-```
+This is deliberate. The realtime halves are kept because online providers exist
+that stream synthesized audio over a WebSocket, and re-adding a transport is
+harder than keeping one. But writing down a frame protocol before there is a
+provider to match it would fix a contract on guesswork, and a backend author
+would then implement against something no daemon actually speaks.
 
-The daemon serves this endpoint. It is **not** part of the backend-facing `/v1`
-contract above — the daemon bridges consumer WebSocket frames directly into the
-backend's `ws-server.handle` export (see
-[wasm.md — Realtime](./wasm.md#realtime-websocket)). The JSON control protocol
-below is interpreted by the backend guest, not by the daemon.
+Until it is specified:
 
-**Auth:** same scope and bearer token as `POST /v1/transcribe` (`client` scope
-required; `settings` tokens also satisfy it). The token must appear in the HTTP
-upgrade request's `Authorization: Bearer <token>` header.
-
-### Frame protocol
-
-The daemon is a pure relay: it shuttles WebSocket frames between the consumer
-and the backend guest without inspecting or rewriting the payload.
-
-| Direction | Frame type | Payload |
-|-----------|-----------|---------|
-| Client → server | text | `{"type":"start","sample_rate":16000,"language":"en"}` — first frame; `language` is optional. |
-| Client → server | binary | Raw little-endian 16-bit PCM mono audio at the declared `sample_rate`. |
-| Client → server | text | `{"type":"stop"}` — optional explicit end; a WebSocket Close also ends the session. |
-| Server → client | text | `{"type":"preview","text":"…"}` — incremental partial transcript. |
-| Server → client | text | `{"type":"done","transcription":"…"}` — final transcript; the backend then closes. |
-| Server → client | text | `{"type":"error","message":"…"}` — fatal error; the backend then closes. |
-
-### Session lifecycle
-
-- The daemon holds the active model for the session's entire duration; a
-  model switch initiated while a session is open waits until the session ends.
-- A consumer disconnect ends the session promptly — the daemon detects the
-  close on the next relay write.
-- An idle session (no consumer frame arriving for 60 seconds) is aborted by
-  the daemon, releasing the model hold.
+- `realtime = true` models are loadable but not reachable by a client.
+- Use `POST /v1/synthesize` for everything.
+- Clients that want to stream *text in* as it is generated already have
+  [`GET /speak/stream`](../endpoints/v1/speak/stream.md) — that is a
+  daemon-side WebSocket and does not involve this backend-side one.
 
 ## Lifecycle
 
@@ -382,7 +385,7 @@ When a model is selected the daemon:
 3. Spawns (subprocess) or instantiates (WASM) the selected backend.
 4. Calls `POST /v1/load` and polls `GET /v1/status` until `state` is
    `ready`.
-5. Routes transcription only after `ready`. A `/v1/transcribe` arriving
+5. Routes synthesis only after `ready`. A `/v1/synthesize` arriving
    before then is gated with `409 not_ready`.
 
 ```mermaid
@@ -404,7 +407,7 @@ sequenceDiagram
         B-->>D: { state: "loading", progress }
     end
     B-->>D: { state: "ready" }
-    Note over D,B: transcription is routed only after ready
+    Note over D,B: synthesis is routed only after ready
 ```
 
 ## Security model

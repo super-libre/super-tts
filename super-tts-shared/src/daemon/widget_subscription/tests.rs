@@ -163,8 +163,8 @@ fn config_defaults_are_sane() {
     let cfg = WidgetSubscriptionConfig::new(
         AppId("test-app"),
         "Test App",
-        &["recording_events"],
-        &["recording_state"],
+        &["playback_events"],
+        &["speaking_state"],
     );
     // Idle timeout must be ≥ 2× the daemon's keepalive interval (30 s).
     assert!(cfg.idle_timeout >= Duration::from_mins(1));

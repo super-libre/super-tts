@@ -2,11 +2,11 @@
 
 > Scope: **status** (read the daemon's current operational state — loaded model
 > and device — through [`GET /status`](../endpoints/v1/status.md); no
-> configuration access and no recording control).
+> configuration access and no ability to make it speak).
 
 The `status` scope is the smallest read grant. It exposes a single endpoint and
 leaks nothing about other apps' activity. It pairs naturally with
-[`transcribe`](./transcribe.md): a client that drives recordings reads
+[`speak`](./speak.md): a client that drives speech reads
 `busy` here to implement toggle behavior.
 
 For the richer operator views — in-flight model switches, GPU memory, device

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Resolve the effective transcription language for the active model.
+//! Resolve the effective speech language for the active model.
 
 /// Where the resolved language came from — surfaced to clients so the UI can
 /// label it.
@@ -21,7 +21,7 @@ impl LanguageSource {
     }
 }
 
-/// The outcome of resolving a language for one transcription.
+/// The outcome of resolving a language for one utterance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedLanguage {
     /// Value to send in the backend `language` field, or `None` to omit it

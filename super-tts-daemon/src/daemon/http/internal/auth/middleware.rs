@@ -81,18 +81,10 @@ async fn require_scope(
     }
 }
 
-pub(crate) async fn require_transcribe_scope(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    request: Request<Body>,
-    next: Next,
-) -> Response {
-    require_scope("transcribe", state, headers, request, next).await
-}
-
-/// The `speak` scope gates synthesis and playback control. Distinct from
-/// `transcribe` because it is a different capability being granted: one turns
-/// the user's voice into text, the other takes over the speakers.
+/// The `speak` scope gates synthesis and playback control — taking over the
+/// user's speakers, including interrupting speech another app started. Kept
+/// separate from `settings` so configuring the daemon does not imply the
+/// ability to make it talk.
 pub(crate) async fn require_speak_scope(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -190,7 +182,7 @@ mod tests {
         let cache = DenyCache::default();
         let key: ConsentKey = (
             PathBuf::from("/usr/bin/evil"),
-            vec!["settings".to_string(), "transcribe".to_string()],
+            vec!["settings".to_string(), "speak".to_string()],
         );
         assert!(!cache.contains(&key), "a fresh cache denies nothing");
         cache.insert(key.clone());

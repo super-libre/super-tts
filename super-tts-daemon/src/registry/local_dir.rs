@@ -14,7 +14,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::registry::index_schema::{IndexAssets, IndexBackend, id_from_source};
-use crate::stt_models::backends::manifest::Manifest;
+use crate::tts_models::backends::manifest::Manifest;
 
 #[derive(Debug, Error)]
 pub enum ResolveError {
@@ -60,7 +60,7 @@ pub fn resolve(local_path: &Path) -> Result<IndexBackend, ResolveError> {
         return Err(ResolveError::NoManifest(local_path.display().to_string()));
     }
     let m = Manifest::load(local_path).map_err(anyhow::Error::from)?;
-    crate::stt_models::backends::manifest::validate_runtime(&m)?;
+    crate::tts_models::backends::manifest::validate_runtime(&m)?;
 
     // A registry release ships the entrypoint built and named; an import is
     // staged by hand, so nothing else establishes that it is there. Checked

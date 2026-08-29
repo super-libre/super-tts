@@ -11,5 +11,5 @@ pub mod update;
 // Re-export commonly used types
 pub use models::{
     ActionError, AudioTheme, ContextPage, DaemonStatus, ErrorScope, LanguageResolution, MenuAction,
-    ModelsTab, Page, RecordingStatus,
+    ModelsTab, Page, SpeakingStatus,
 };

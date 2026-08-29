@@ -6,13 +6,13 @@
 //! the selection when a user picks a model, while the startup path resolves
 //! its model from the legacy `preferred_model`/`preferred_provider`/
 //! `preferred_source` config, which carries no `active_backend` at all. When
-//! the startup path forgets to record it the daemon still transcribes, so
+//! the startup path forgets to record it the daemon still speaks, so
 //! nothing fails and no log line complains; the only symptom is that the
 //! settings app renders its "no backend loaded" empty state and the model
 //! picker comes back empty.
 
 use crate::daemon::types::test_daemon;
-use crate::stt_models::backends::DiscoveredBackend;
+use crate::tts_models::backends::DiscoveredBackend;
 use std::path::PathBuf;
 
 const WHISPER_SOURCE: &str = "github.com/jorge-menjivar/super-tts-whisper";
@@ -62,7 +62,7 @@ async fn a_startup_load_adopts_the_backend_serving_the_model() {
             .config
             .read()
             .await
-            .transcription
+            .synthesis
             .active_backend
             .as_deref(),
         Some("whisper"),

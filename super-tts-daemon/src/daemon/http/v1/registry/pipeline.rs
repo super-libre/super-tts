@@ -154,7 +154,7 @@ async fn retire_and_repoint(
         .to_string();
 
     let mut cfg = daemon.config.write().await;
-    if cfg.transcription.active_backend.as_deref() != Some(old_name.as_str()) {
+    if cfg.synthesis.active_backend.as_deref() != Some(old_name.as_str()) {
         return;
     }
     cfg.rename_active_backend(dir_name.to_string());
@@ -192,8 +192,8 @@ pub(super) fn spawn_install_pipeline(
         );
         let backends_dir = {
             let c = daemon.config.read().await;
-            c.transcription.backends_dir.clone().map_or_else(
-                crate::stt_models::backends::default_backends_dir,
+            c.synthesis.backends_dir.clone().map_or_else(
+                crate::tts_models::backends::default_backends_dir,
                 PathBuf::from,
             )
         };
@@ -306,7 +306,7 @@ description = "Test backend."
         migrated_layout(root.path(), "super-tts-voxtral", "app.super-tts.voxtral");
 
         let daemon = test_daemon().await;
-        daemon.config.write().await.transcription.active_backend =
+        daemon.config.write().await.synthesis.active_backend =
             Some("super-tts-voxtral".to_string());
         daemon.config.write().await.update_preferred_model(
             "voxtral-mini".to_string(),
@@ -325,15 +325,15 @@ description = "Test backend."
         assert!(!root.path().join("super-tts-voxtral").exists());
         let cfg = daemon.config.read().await;
         assert_eq!(
-            cfg.transcription.active_backend.as_deref(),
+            cfg.synthesis.active_backend.as_deref(),
             Some("app.super-tts.voxtral"),
             "the pointer must follow the migration"
         );
         assert_eq!(
-            cfg.transcription.preferred_model, "voxtral-mini",
+            cfg.synthesis.preferred_model, "voxtral-mini",
             "the model preference must survive the rename"
         );
-        assert_eq!(cfg.transcription.preferred_provider, "local_voxtral");
+        assert_eq!(cfg.synthesis.preferred_provider, "local_voxtral");
         drop(cfg);
         assert_eq!(
             daemon.active_backend.read().await.as_deref(),
@@ -348,7 +348,7 @@ description = "Test backend."
         migrated_layout(root.path(), "super-tts-voxtral", "app.super-tts.voxtral");
 
         let daemon = test_daemon().await;
-        daemon.config.write().await.transcription.active_backend =
+        daemon.config.write().await.synthesis.active_backend =
             Some("some-other-backend".to_string());
         daemon.config.write().await.update_preferred_model(
             "other-model".to_string(),
@@ -373,12 +373,12 @@ description = "Test backend."
         );
         let cfg = daemon.config.read().await;
         assert_eq!(
-            cfg.transcription.active_backend.as_deref(),
+            cfg.synthesis.active_backend.as_deref(),
             Some("some-other-backend"),
             "an unrelated active backend must not be repointed"
         );
-        assert_eq!(cfg.transcription.preferred_model, "other-model");
-        assert_eq!(cfg.transcription.preferred_provider, "local_other");
+        assert_eq!(cfg.synthesis.preferred_model, "other-model");
+        assert_eq!(cfg.synthesis.preferred_provider, "local_other");
         drop(cfg);
         assert_eq!(daemon.active_backend.read().await.as_deref(), None);
     }

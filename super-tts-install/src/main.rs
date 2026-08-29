@@ -283,8 +283,7 @@ async fn run(cli: &cli::Cli, reporter: Reporter) -> Result<(), InstallError> {
         phase: Phase::PostInstall,
         message: "finishing installation",
     });
-    let interactive = !cli.non_interactive && std::io::stderr().is_terminal();
-    post_install::run(&components, applet_was_installed, interactive, prefix).await?;
+    post_install::run(&components, applet_was_installed).await?;
 
     reporter.emit(&Event::Complete {
         installed_version: &target.release.tag,

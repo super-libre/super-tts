@@ -258,6 +258,22 @@ fn wait_for_completion(
     drop(stream);
 }
 
+/// Set to `1` to make every cue a no-op.
+///
+/// The integration suite spawns a real daemon and exercises
+/// `POST /audio_theme/test`, whose entire job is to make noise — so without
+/// this, running `cargo test` plays beeps out of the speakers of whoever ran
+/// it. The endpoint's contract is that it accepts the request and reports
+/// success, which is what the test asserts; the audio is not observable from a
+/// test either way. Mirrors `SUPER_TTS_AUTO_APPROVE` as a "tests must not
+/// reach into the user's session" switch.
+pub const MUTE_CUES_ENV: &str = "SUPER_TTS_MUTE_CUES";
+
+/// Whether cues are muted for this process.
+fn cues_muted() -> bool {
+    std::env::var(MUTE_CUES_ENV).is_ok_and(|v| v == "1")
+}
+
 /// Play a sequence of beeps on a freshly initialized output device.
 ///
 /// # Errors
@@ -272,6 +288,10 @@ pub fn play_beep_sequence(
     volume: f32,
 ) -> Result<()> {
     if frequencies.is_empty() {
+        return Ok(());
+    }
+    if cues_muted() {
+        log::debug!("{MUTE_CUES_ENV}=1 — skipping cue {frequencies:?}");
         return Ok(());
     }
 

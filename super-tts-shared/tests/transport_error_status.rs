@@ -125,12 +125,12 @@ async fn unauthorized_still_maps_to_invalid_session() {
     let _ = std::fs::remove_file(&socket);
 }
 
-/// The streaming endpoints answer a rejected request with the same JSON
-/// envelope rather than an event stream. Both used to derive their own error
-/// text; they now share the one mapping, and this pins the wiring so neither
-/// can quietly drift back.
+/// A rejected request answers with the JSON envelope whatever the endpoint's
+/// success shape would have been — an SSE stream for `/events`, a plain body
+/// for `/speak`. Each used to derive its own error text; they now share the one
+/// mapping, and this pins the wiring so neither can quietly drift back.
 #[tokio::test]
-async fn streaming_endpoints_share_the_same_mapping() {
+async fn rejections_share_the_same_mapping_across_response_shapes() {
     let socket = socket_path("events-rejected");
     serve_once(
         &socket,
@@ -144,21 +144,22 @@ async fn streaming_endpoints_share_the_same_mapping() {
     assert_eq!(err.to_string(), "rate_limited (HTTP 429)");
     let _ = std::fs::remove_file(&socket);
 
-    let socket = socket_path("transcribe-rejected");
+    let socket = socket_path("speak-rejected");
     serve_once(
         &socket,
         "409 Conflict",
-        r#"{"status":"error","message":"recording_in_progress"}"#,
+        r#"{"status":"error","message":"model_not_loaded"}"#,
     );
-    let err = super_tts_shared::daemon::http_client::transcribe_stream(
+    let err = super_tts_shared::daemon::http_client::speak(
         socket.clone(),
         "token",
-        super_tts_shared::daemon::http_client::TranscribeOptions::default(),
+        "hello",
+        super_tts_shared::daemon::http_client::SpeakOptions::default(),
     )
     .await
     .err()
-    .expect("a 409 is not a recording");
-    assert_eq!(err.to_string(), "recording_in_progress (HTTP 409)");
+    .expect("a 409 is not an utterance");
+    assert_eq!(err.to_string(), "model_not_loaded (HTTP 409)");
     let _ = std::fs::remove_file(&socket);
 }
 

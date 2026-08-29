@@ -32,8 +32,8 @@ const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 /// on the developer's keyring.
 const TEST_APP_ID: AppId = AppId("widget-smoke-test");
 const TEST_APP_NAME: &str = "widget-smoke-test";
-const TEST_SCOPES: &[&str] = &["recording_events", "audio_visualization"];
-const TEST_TOPICS: &[&str] = &["recording_state", "frequency_bands"];
+const TEST_SCOPES: &[&str] = &["playback_events", "audio_visualization"];
+const TEST_TOPICS: &[&str] = &["speaking_state", "frequency_bands"];
 
 struct DaemonGuard {
     child: Child,
@@ -96,6 +96,7 @@ fn spawn_daemon(_legacy_socket: &Path, http_socket: &Path) -> Child {
     Command::new(DAEMON_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .env("SUPER_TTS_HTTP_SOCKET", http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .stdout(Stdio::null())

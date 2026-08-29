@@ -14,7 +14,7 @@ use crate::app::Message;
 use crate::models::theme::{VisualizationColorConfig, VisualizationSide, WorkingAnimationTheme};
 use crate::ui::components::working_animations::{self, WorkingDrawContext};
 
-/// Time-driven "working" animation canvas, shown during the transcribing
+/// Time-driven "working" animation canvas, shown during the synthesizing
 /// (`Processing`) phase. Analogous to `VisualizationComponent` but driven by
 /// elapsed time instead of audio data.
 #[derive(Debug, Clone)]

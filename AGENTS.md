@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - Workspace root (`Cargo.toml`) with members:
-  - `super-tts`: speech-to-text daemon (ML, audio, D-Bus, model mgmt).
+  - `super-tts`: text-to-speech daemon (ML, audio, D-Bus, model mgmt).
   - `super-tts-app`: desktop UI (COSMIC/iced).
   - `super-tts-cosmic-applet`: panel/applets and COSMIC extension.
   - `super-tts-shared`: shared models, protocol, utils.

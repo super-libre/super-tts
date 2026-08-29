@@ -28,13 +28,12 @@ backend. Representative layout:
 ```text
 <backend-dir>/
 ├── backend.toml            # this configuration
-├── whisper-backend         # entrypoint (subprocess binary) …
-│                           # … or whisper.wasm (WASM component)
+├── kokoro-backend          # entrypoint (subprocess binary) …
+│                           # … or kokoro.wasm (WASM component)
 └── models/                 # populated by the daemon at load time
-    └── whisper-tiny/
+    └── kokoro-82m/
         ├── config.json
-        ├── tokenizer.json
-        └── model.safetensors
+        └── kokoro-v1_0.pth
 ```
 
 The daemon never writes outside a backend's own directory, and a backend
@@ -48,19 +47,19 @@ Backend identity and packaging.
 
 ```toml
 [backend]
-source      = "github.com/super-tts/whisper"
-name        = "Whisper (local)"
+source      = "github.com/super-tts/kokoro"
+name        = "Kokoro (local)"
 version     = "0.1.0"
 kind        = "subprocess"
-entrypoint  = "whisper-backend"
+entrypoint  = "kokoro-backend"
 contract    = "v1"
 license     = "Apache-2.0"
-description = "Local Whisper speech-to-text."
+description = "Local Kokoro text-to-speech."
 ```
 
 | Field        | Type   | Required        | Notes                                                                 |
 |--------------|--------|-----------------|-----------------------------------------------------------------------|
-| `id`         | string | for publication | Globally unique reverse-DNS identifier for the backend, e.g. `app.super-tts.voxtral`. Names the directory the backend is installed into. Required for a backend to be listed in the registry. |
+| `id`         | string | for publication | Globally unique reverse-DNS identifier for the backend, e.g. `app.super-tts.kokoro`. Names the directory the backend is installed into. Required for a backend to be listed in the registry. |
 | `source`     | string | yes             | Canonical repository id for this backend. Becomes the `source` of every model it provides (see [identity](./contract.md#model-identity)). Must be unique across installed backends. |
 | `name`       | string | yes             | Human-readable display name.                                          |
 | `version`    | string | yes             | Backend version (semver).                                            |
@@ -88,7 +87,7 @@ conscious declaration, not an omission.
 
 The reverse-DNS form namespaces a backend under a domain its author
 controls, so two unrelated authors may both publish a backend named
-`voxtral`: `app.super-tts.voxtral` and `com.example.voxtral` coexist.
+`kokoro`: `app.super-tts.kokoro` and `com.example.kokoro` coexist.
 
 `id` names the install directory. It is not part of model identity, which is
 the `(name, source)` pair described in [contract.md](./contract.md).
@@ -301,19 +300,19 @@ the `.tar.gz` exceeds the 2 GiB release-asset limit (see [Multi-part assets](#mu
 
 ```toml
 [[assets.subprocess]]
-file   = "voxtral-x86_64-unknown-linux-gnu-cpu.tar.gz"
+file   = "kokoro-x86_64-unknown-linux-gnu-cpu.tar.gz"
 target = "x86_64-unknown-linux-gnu"
 accel  = "cpu"
 
 [[assets.subprocess]]
-file       = "voxtral-x86_64-unknown-linux-gnu-cuda12-sm75.tar.gz"
+file       = "kokoro-x86_64-unknown-linux-gnu-cuda12-sm75.tar.gz"
 target     = "x86_64-unknown-linux-gnu"
 accel      = "cuda"
 cuda_major = 12
 cuda_sm    = 75
 
 [[assets.subprocess]]
-file       = "voxtral-x86_64-unknown-linux-gnu-cuda12-cudnn-sm75.tar.gz"
+file       = "kokoro-x86_64-unknown-linux-gnu-cuda12-cudnn-sm75.tar.gz"
 target     = "x86_64-unknown-linux-gnu"
 accel      = "cuda"
 cuda_major = 12
@@ -321,13 +320,13 @@ cuda_sm    = 75
 cudnn      = true
 
 [[assets.subprocess]]
-file   = "voxtral-x86_64-unknown-linux-gnu-rocm.tar.gz"
+file   = "kokoro-x86_64-unknown-linux-gnu-rocm.tar.gz"
 target = "x86_64-unknown-linux-gnu"
 accel  = "rocm"
 gfx    = ["gfx1030", "gfx1100", "gfx1101"]
 
 [[assets.subprocess]]
-file       = "voxtral-x86_64-unknown-linux-gnu-vulkan.tar.gz"
+file       = "kokoro-x86_64-unknown-linux-gnu-vulkan.tar.gz"
 target     = "x86_64-unknown-linux-gnu"
 accel      = "vulkan"
 vulkan_api = "1.3"
@@ -335,7 +334,7 @@ vulkan_api = "1.3"
 # A build carrying more than one runtime — `accel` as an array — matches
 # either. Host matching then considers every accelerator listed.
 [[assets.subprocess]]
-file       = "voxtral-x86_64-unknown-linux-gnu-cuda-rocm.tar.gz"
+file       = "kokoro-x86_64-unknown-linux-gnu-cuda-rocm.tar.gz"
 target     = "x86_64-unknown-linux-gnu"
 accel      = ["cuda", "rocm"]
 cuda_major = 12
@@ -415,25 +414,38 @@ above.
 
 ```toml
 [[models]]
-name                   = "whisper-tiny"
-multilingual           = true
-primary_language       = "en"
-supported_languages    = ["en", "es", "fr", "de", "zh"]  # abbreviated
-supported_devices      = ["cpu", "gpu"]
-estimated_vram_bytes   = 262144000
-processing_interval_ms = 1000
+name                 = "kokoro-82m"
+multilingual         = true
+primary_language     = "en"
+supported_languages  = ["en", "es", "fr", "it", "pt"]  # abbreviated
+supported_devices    = ["cpu", "gpu"]
+estimated_vram_bytes = 419430400
+max_input_chars      = 500
+output_sample_rate   = 24000
+default_voice        = "af_heart"
+
+[[models.voices]]
+id       = "af_heart"
+label    = "Heart"
+language = "en"
 ```
 
 | Field                    | Type            | Required | Notes                                                            |
 |--------------------------|-----------------|----------|------------------------------------------------------------------|
 | `name`                   | string          | yes      | Wire model name.                                                 |
-| `multilingual`           | bool            | no       | Whether the model accepts more than one language. Default `true`. When `true`, `POST /v1/transcribe` accepts a `language` from `supported_languages`. |
+| `multilingual`           | bool            | no       | Whether the model accepts more than one language. Default `true`. When `true`, `POST /v1/synthesize` accepts a `language` from `supported_languages`. |
 | `primary_language`       | string          | yes      | Default language code (e.g. `en`); used when `language` is omitted. |
 | `supported_languages`    | array of string | yes      | Language codes the model accepts; must include `primary_language`. When `multilingual` is `false`, it is exactly `[primary_language]`. |
 | `supported_devices`      | array of string | yes      | Whether the model can use an accelerator at all — which accelerator an installed build actually targets is a property of the [asset](#assets), not the model. Non-empty, drawn from `["cpu", "gpu", "none"]`. `"cuda"` and `"metal"` are accepted input spellings for `"gpu"`; the daemon normalizes them and never emits them. `"none"` is the sentinel for remote/online models and must be the only entry when present. |
 | `estimated_vram_bytes`   | integer         | no       | Conservative GPU memory estimate. Default `0`; use `0` for cloud models. |
 | `processing_interval_ms` | integer         | no       | Suggested minimum interval between streaming passes, in ms.      |
-| `realtime`               | bool            | no       | When `true`, the model is driven over the consumer-facing WebSocket endpoint (`GET /v1/transcribe/realtime`) rather than batch `POST /v1/transcribe`. Requires `[capabilities] websocket = true`. Default `false`. |
+| `realtime`               | bool            | no       | When `true`, the model is driven over the realtime WebSocket transport rather than batch `POST /v1/synthesize`. Requires `[capabilities] websocket = true`. Default `false`. **Reserved**: the transport works but no session payload contract is defined yet, so such a model is not reachable by a client — see [contract.md](./contract.md#realtime-sessions-reserved). |
+| `max_input_chars`        | integer         | no       | Longest `text` the model accepts in one `POST /v1/synthesize`. Absent means unbounded: the daemon sends whole utterances and never splits for length. When set, the daemon chunks on sentence boundaries to stay under it. Must be non-zero. |
+| `output_sample_rate`      | integer         | no       | Native output rate in Hz, e.g. `24000`. **Advisory** — the authoritative rate is the `x-tts-sample-rate` response header on each synthesis, since a manifest cannot know what a cloud provider will actually return. It lets the settings UI show a rate and the daemon pre-size buffers before the first response. Must be 8000–192000. |
+| `default_voice`          | string          | no       | Voice used when a request omits `voice`. **Required** when `voices` is non-empty, and must name one of them. |
+| `voice_kinds`            | array of string | no       | Which `voice` id shapes this model accepts, from `["preset", "cloned", "described"]`. Default `["preset"]`. Non-empty. The daemon refuses a shape the model did not opt into, so a backend never sees an id it cannot resolve. |
+| `clone_ref_seconds`      | number          | no       | Longest reference audio accepted for a cloned voice, in seconds. **Required** when `voice_kinds` contains `cloned`, forbidden otherwise. Must be positive. |
+| `voices`                 | array of table  | no       | Preset voices the model provides — see [`[[models.voices]]`](#voices). Empty for models whose voices are entirely cloned or described. |
 | `provider`               | string          | no       | Compatibility field. Not part of model identity and read by nothing in the daemon; it is echoed back verbatim as `provider` in [`POST /v1/load`](./contract.md#post-v1load) so a backend that still validates it keeps loading. |
 
 > **Compatibility.** `provider` was part of model identity before it became
@@ -443,11 +455,46 @@ processing_interval_ms = 1000
 > has it forwarded on load. New backends should omit it, and should not
 > validate it if they accept it.
 
+<a id="voices"></a>
+### `[[models.voices]]`
+
+The preset voices a model provides, one table per voice. The settings UI renders
+these as the voice picker; the daemon validates a request's `voice` against
+them.
+
+```toml
+[[models.voices]]
+id       = "af_heart"
+label    = "Heart"
+language = "en"
+tags     = ["warm", "female"]
+```
+
+| Field      | Type            | Required | Notes                                                                          |
+|------------|-----------------|----------|--------------------------------------------------------------------------------|
+| `id`       | string          | yes      | The `voice` sent on `POST /v1/synthesize`. Unique within the model.            |
+| `label`    | string          | no       | Display name for the picker. Falls back to `id`.                               |
+| `language` | string          | no       | Primary language of this voice. Must be one of the model's `supported_languages`. |
+| `tags`     | array of string | no       | Free-form, for filtering in the picker. Not interpreted by the daemon.         |
+
+**Voice id shapes.** `voice_kinds` declares which of three shapes the model can
+resolve:
+
+| Kind        | Id shape       | Meaning                                                                 |
+|-------------|----------------|-------------------------------------------------------------------------|
+| `preset`    | a bare id      | One of the `[[models.voices]]` entries.                                  |
+| `cloned`    | `voice:<uuid>` | A user-cloned voice; the daemon pushes the reference audio on the request. Requires `clone_ref_seconds`. |
+| `described` | `desc:<text>`  | A free-text voice description, for models that synthesize a voice from one. |
+
+A model that declares only `preset` (the default) never receives a `voice:` or
+`desc:` id — the daemon rejects those before they reach the backend, so a
+backend need not defend against a shape it did not opt into.
+
 `multilingual`, `primary_language`, and `supported_languages` together
 describe language capability. When `multilingual` is `true`,
-`POST /v1/transcribe` may carry a `language`, which must be one of
+`POST /v1/synthesize` may carry a `language`, which must be one of
 `supported_languages`; when omitted, `primary_language` is used. When
-`multilingual` is `false`, the model transcribes only `primary_language`.
+`multilingual` is `false`, the model speaks only `primary_language`.
 
 `supported_devices` declares whether the model can use an accelerator at all.
 It says nothing about *which* accelerator — CUDA, ROCm, Vulkan — since one
@@ -472,10 +519,10 @@ Written compactly as an inline-table array on the model:
 
 ```toml
 files = [
-    { url = "https://huggingface.co/openai/whisper-tiny/resolve/main/config.json",
-      destination = "models/whisper-tiny/config.json" },
-    { url = "https://huggingface.co/openai/whisper-tiny/resolve/main/model.safetensors",
-      destination = "models/whisper-tiny/model.safetensors", sha256 = "9f86d0…" },
+    { url = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json",
+      destination = "models/kokoro-82m/config.json" },
+    { url = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth",
+      destination = "models/kokoro-82m/kokoro-v1_0.pth", sha256 = "9f86d0…" },
 ]
 ```
 
@@ -483,8 +530,8 @@ The block form is identical TOML and may be used instead:
 
 ```toml
 [[models.files]]
-url         = "https://huggingface.co/openai/whisper-tiny/resolve/main/config.json"
-destination = "models/whisper-tiny/config.json"
+url         = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json"
+destination = "models/kokoro-82m/config.json"
 ```
 
 | Field         | Type   | Required | Notes                                                                |
@@ -498,62 +545,80 @@ absolute paths, `..` traversal, and backslashes are rejected.
 
 ## Example: local backend (subprocess)
 
-A Whisper backend providing two models, loaded from Hugging Face. Whisper
-models ship `config.json`, `tokenizer.json`, and a single
-`model.safetensors`.
+A Kokoro backend providing two models, loaded from Hugging Face. Kokoro ships
+its weights as a single `.pth` plus a voice pack per speaker.
 
 ```toml
 [backend]
-source      = "github.com/super-tts/whisper"
-name        = "Whisper (local)"
+source      = "github.com/super-tts/kokoro"
+name        = "Kokoro (local)"
 version     = "0.1.0"
 kind        = "subprocess"
-entrypoint  = "whisper-backend"
+entrypoint  = "kokoro-backend"
 contract    = "v1"
 license     = "Apache-2.0"
-description = "Local Whisper speech-to-text."
+description = "Local Kokoro text-to-speech."
 
 [network]
 allowed_hosts = []
 
 [[models]]
-name                   = "whisper-tiny"
-multilingual           = true
-primary_language       = "en"
-supported_languages    = ["en", "es", "fr", "de", "zh"]  # abbreviated
-supported_devices      = ["cpu", "gpu"]
-estimated_vram_bytes   = 262144000
-processing_interval_ms = 1000
+name                 = "kokoro-82m"
+multilingual         = true
+primary_language     = "en"
+supported_languages  = ["en", "es", "fr", "it", "pt"]  # abbreviated
+supported_devices    = ["cpu", "gpu"]
+estimated_vram_bytes = 419430400
+max_input_chars      = 500
+output_sample_rate   = 24000
+default_voice        = "af_heart"
 files = [
-    { url = "https://huggingface.co/openai/whisper-tiny/resolve/main/config.json",
-      destination = "models/whisper-tiny/config.json" },
-    { url = "https://huggingface.co/openai/whisper-tiny/resolve/main/tokenizer.json",
-      destination = "models/whisper-tiny/tokenizer.json" },
-    { url = "https://huggingface.co/openai/whisper-tiny/resolve/main/model.safetensors",
-      destination = "models/whisper-tiny/model.safetensors" },
+    { url = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth",
+      destination = "models/kokoro-82m/kokoro-v1_0.pth" },
+    { url = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json",
+      destination = "models/kokoro-82m/config.json" },
 ]
+
+[[models.voices]]
+id       = "af_heart"
+label    = "Heart"
+language = "en"
+tags     = ["warm", "female"]
+
+[[models.voices]]
+id       = "am_puck"
+label    = "Puck"
+language = "en"
+tags     = ["bright", "male"]
 
 [[models]]
-name                   = "voxtral-mini"
-multilingual           = true
-primary_language       = "en"
-supported_languages    = ["en", "es", "fr", "de", "zh"]  # abbreviated
-supported_devices      = ["gpu"]
-estimated_vram_bytes   = 8589934592
-processing_interval_ms = 2000
+name                 = "xtts-v2"
+multilingual         = true
+primary_language     = "en"
+supported_languages  = ["en", "es", "fr", "de", "zh"]  # abbreviated
+supported_devices    = ["gpu"]
+estimated_vram_bytes = 4294967296
+output_sample_rate   = 24000
 
-# Voxtral ships tekken.json instead of tokenizer.json, and multi-shard
-# weights.
+# This one clones as well as presetting, so it declares both kinds and the
+# reference-audio budget that `cloned` requires.
+voice_kinds       = ["preset", "cloned"]
+clone_ref_seconds = 30.0
+default_voice     = "en_sample"
+
 files = [
-    { url = "https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/resolve/main/config.json",
-      destination = "models/voxtral-mini/config.json" },
-    { url = "https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/resolve/main/tekken.json",
-      destination = "models/voxtral-mini/tekken.json" },
-    { url = "https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/resolve/main/model-00001-of-00002.safetensors",
-      destination = "models/voxtral-mini/model-00001-of-00002.safetensors" },
-    { url = "https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/resolve/main/model-00002-of-00002.safetensors",
-      destination = "models/voxtral-mini/model-00002-of-00002.safetensors" },
+    { url = "https://huggingface.co/coqui/XTTS-v2/resolve/main/model.pth",
+      destination = "models/xtts-v2/model.pth" },
+    { url = "https://huggingface.co/coqui/XTTS-v2/resolve/main/config.json",
+      destination = "models/xtts-v2/config.json" },
+    { url = "https://huggingface.co/coqui/XTTS-v2/resolve/main/vocab.json",
+      destination = "models/xtts-v2/vocab.json" },
 ]
+
+[[models.voices]]
+id       = "en_sample"
+label    = "English (built-in)"
+language = "en"
 ```
 
 ## Example: cloud backend (WASM)
@@ -569,7 +634,7 @@ kind        = "wasm"
 entrypoint  = "openai.wasm"
 contract    = "v1"
 license     = "Apache-2.0"
-description = "OpenAI cloud transcription API."
+description = "OpenAI cloud text-to-speech API."
 
 [network]
 allowed_hosts = ["api.openai.com"]
@@ -588,18 +653,38 @@ description = "Override the API base URL, e.g. for a gateway."
 type        = "string"
 
 [[models]]
-name                = "whisper-1"
+name                = "gpt-4o-mini-tts"
 multilingual        = true
 primary_language    = "en"
 supported_languages = ["en", "es", "fr", "de", "zh"]  # abbreviated
 supported_devices   = ["none"]
+output_sample_rate  = 24000
+default_voice       = "alloy"
+
+# This model takes free-text delivery guidance as well as a named voice, so
+# it declares `described` alongside `preset`.
+voice_kinds = ["preset", "described"]
+
+[[models.voices]]
+id       = "alloy"
+language = "en"
+
+[[models.voices]]
+id       = "shimmer"
+language = "en"
 
 [[models]]
-name                = "gpt-4o-transcribe"
+name                = "tts-1-hd"
 multilingual        = true
 primary_language    = "en"
 supported_languages = ["en", "es", "fr", "de", "zh"]  # abbreviated
 supported_devices   = ["none"]
+output_sample_rate  = 24000
+default_voice       = "alloy"
+
+[[models.voices]]
+id       = "alloy"
+language = "en"
 ```
 
 ## Validation

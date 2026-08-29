@@ -23,8 +23,8 @@
 //!   This validates:
 //!     - `cosmic::app::run` boots without panicking against the real
 //!       compositor;
-//!     - the env-var contract (`STT_AUTH_APP_NAME` / `STT_AUTH_SCOPES` /
-//!       `STT_AUTH_EXE_PATH`) is wired up;
+//!     - the env-var contract (`SUPER_TTS_AUTH_APP_NAME` / `SUPER_TTS_AUTH_SCOPES` /
+//!       `SUPER_TTS_AUTH_EXE_PATH`) is wired up;
 //!     - all three decision paths (Allow / Deny / dismissed) write a
 //!       recognizable line to stdout.
 //!
@@ -67,9 +67,9 @@ fn renders_and_decides() {
     }
 
     let mut child = Command::new(HELPER_BIN)
-        .env("STT_AUTH_APP_NAME", "Smoke Test App")
-        .env("STT_AUTH_SCOPES", "transcribe status")
-        .env("STT_AUTH_EXE_PATH", "/usr/bin/smoke-test")
+        .env("SUPER_TTS_AUTH_APP_NAME", "Smoke Test App")
+        .env("SUPER_TTS_AUTH_SCOPES", "speak status")
+        .env("SUPER_TTS_AUTH_EXE_PATH", "/usr/bin/smoke-test")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -177,9 +177,9 @@ fn surface_survives_compositor_handshake() {
     let log = File::create(&log_path).expect("create stderr capture file");
 
     let mut child = Command::new(HELPER_BIN)
-        .env("STT_AUTH_APP_NAME", "Handshake Test App")
-        .env("STT_AUTH_SCOPES", "transcribe status")
-        .env("STT_AUTH_EXE_PATH", "/usr/bin/smoke-test")
+        .env("SUPER_TTS_AUTH_APP_NAME", "Handshake Test App")
+        .env("SUPER_TTS_AUTH_SCOPES", "speak status")
+        .env("SUPER_TTS_AUTH_EXE_PATH", "/usr/bin/smoke-test")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log))

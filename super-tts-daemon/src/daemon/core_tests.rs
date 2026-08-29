@@ -2,14 +2,10 @@
 use super::*;
 use crate::daemon::types::test_daemon;
 use super_tts_shared::models::protocol::ErrorCode;
-use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
-use tokio::time::{Duration, timeout};
 
 fn make_request(command: &str) -> DaemonRequest {
     DaemonRequest {
         command: command.to_string(),
-        audio_data: None,
-        sample_rate: None,
         client_id: None,
         event_types: None,
         client_info: None,
@@ -22,208 +18,26 @@ fn make_request(command: &str) -> DaemonRequest {
     }
 }
 
-fn make_record_request(data: Option<serde_json::Value>) -> DaemonRequest {
-    DaemonRequest {
-        command: "record".to_string(),
-        audio_data: None,
-        sample_rate: None,
-        client_id: None,
-        event_types: None,
-        client_info: None,
-        since_timestamp: None,
-        limit: None,
-        event_type: None,
-        data,
-        language: None,
-        enabled: None,
-    }
-}
-
 #[tokio::test]
-async fn stop_signal_sent_on_second_press_with_default_mode() {
-    // Default config mode is SilenceAndManual, which allows manual stop
-    let daemon = test_daemon().await;
-    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
-
-    *daemon.busy.write().await = true;
-    *daemon.manual_stop_tx.write().await = Some(tx);
-
-    let request = make_record_request(Some(serde_json::json!({
-        "write_mode": false,
-    })));
-
-    let response = daemon.handle_command(request).await;
-    assert_eq!(response.status, "success");
-    assert_eq!(
-        response.message.as_deref(),
-        Some(DaemonResponse::RECORDING_STOP_SIGNAL_MSG)
-    );
-
-    let recv = timeout(Duration::from_millis(200), rx.recv()).await;
-    assert!(recv.is_ok(), "expected stop signal to be sent");
-}
-
-#[tokio::test]
-async fn guard_model_mutation_flags_recording_in_progress() {
+async fn guard_model_mutation_flags_speech_in_progress() {
     use super_tts_shared::models::protocol::ErrorCode;
     let daemon = test_daemon().await;
     // Idle: the mutation is allowed.
-    assert!(daemon.guard_model_mutation("switch models").await.is_none());
-    // Recording: the unified guard rejects with the machine-readable
-    // RecordingInProgress code, independent of the human `action` wording.
-    *daemon.busy.write().await = true;
+    assert!(daemon.guard_model_mutation("switch models").is_none());
+    // Speaking: the unified guard rejects with the machine-readable
+    // SpeechInProgress code, independent of the human `action` wording.
+    let _claim = daemon.speech.claim_for_test("u-guard");
     let resp = daemon
         .guard_model_mutation("switch models")
-        .await
-        .expect("mutation must be rejected while recording");
+        .expect("mutation must be rejected while speaking");
     assert_eq!(resp.status, "error");
-    assert_eq!(resp.error_code, Some(ErrorCode::RecordingInProgress));
+    assert_eq!(resp.error_code, Some(ErrorCode::SpeechInProgress));
 }
 
-#[tokio::test]
-async fn second_press_ignored_in_silence_only_mode() {
-    let daemon = test_daemon().await;
-    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
-
-    // Set daemon config to SilenceOnly
-    {
-        use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
-        let mut config = daemon.config.write().await;
-        config.transcription.recording_stop_mode = RecordingStopMode::SilenceOnly;
-    }
-
-    *daemon.busy.write().await = true;
-    *daemon.manual_stop_tx.write().await = Some(tx);
-
-    // No stop_mode in request → uses daemon config (SilenceOnly)
-    let request = make_record_request(Some(serde_json::json!({
-        "write_mode": false,
-    })));
-
-    let response = daemon.handle_command(request).await;
-    assert_eq!(response.status, "success");
-    assert_eq!(
-        response.message.as_deref(),
-        Some("Manual stop not enabled in current mode")
-    );
-
-    // Stop signal should NOT have been sent
-    let recv = timeout(Duration::from_millis(100), rx.recv()).await;
-    assert!(
-        recv.is_err(),
-        "stop signal should not be sent in SilenceOnly mode"
-    );
-}
-
-#[tokio::test]
-async fn per_request_stop_mode_overrides_config() {
-    let daemon = test_daemon().await;
-    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
-
-    // Daemon config is SilenceOnly (no manual stop)
-    {
-        use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
-        let mut config = daemon.config.write().await;
-        config.transcription.recording_stop_mode = RecordingStopMode::SilenceOnly;
-    }
-
-    *daemon.busy.write().await = true;
-    *daemon.manual_stop_tx.write().await = Some(tx);
-
-    // But the request explicitly asks for manual_only mode
-    let request = make_record_request(Some(serde_json::json!({
-        "write_mode": false,
-        "stop_mode": "manual_only",
-    })));
-
-    let response = daemon.handle_command(request).await;
-    assert_eq!(response.status, "success");
-    assert_eq!(
-        response.message.as_deref(),
-        Some(DaemonResponse::RECORDING_STOP_SIGNAL_MSG)
-    );
-
-    let recv = timeout(Duration::from_millis(200), rx.recv()).await;
-    assert!(
-        recv.is_ok(),
-        "per-request override should allow manual stop"
-    );
-}
-
-#[tokio::test]
-async fn second_press_during_transcription_returns_wait_message() {
-    let daemon = test_daemon().await;
-
-    // Transcribing state: busy=true, manual_stop_tx=None
-    *daemon.busy.write().await = true;
-    // manual_stop_tx is already None by default
-
-    let request = make_record_request(Some(serde_json::json!({
-        "write_mode": false,
-    })));
-
-    let response = daemon.handle_command(request).await;
-    assert_eq!(response.status, "success");
-    assert_eq!(
-        response.message.as_deref(),
-        Some("Transcription in progress, please wait")
-    );
-}
-
-#[tokio::test]
-async fn per_request_silence_only_overrides_manual_config() {
-    let daemon = test_daemon().await;
-    let (tx, mut rx) = tokio::sync::broadcast::channel(1);
-
-    // Config allows manual stop (default SilenceAndManual)
-    *daemon.busy.write().await = true;
-    *daemon.manual_stop_tx.write().await = Some(tx);
-
-    // But request forces SilenceOnly
-    let request = make_record_request(Some(serde_json::json!({
-        "write_mode": false,
-        "stop_mode": "silence_only",
-    })));
-
-    let response = daemon.handle_command(request).await;
-    assert_eq!(response.status, "success");
-    assert_eq!(
-        response.message.as_deref(),
-        Some("Manual stop not enabled in current mode")
-    );
-
-    let recv = timeout(Duration::from_millis(100), rx.recv()).await;
-    assert!(
-        recv.is_err(),
-        "stop signal should not be sent in SilenceOnly mode"
-    );
-}
-
-#[tokio::test]
-async fn stop_signal_succeeds_even_with_no_receivers() {
-    let daemon = test_daemon().await;
-    let (tx, _rx) = tokio::sync::broadcast::channel::<()>(1);
-    // Drop _rx so there are no receivers
-
-    *daemon.busy.write().await = true;
-    *daemon.manual_stop_tx.write().await = Some(tx);
-
-    let request = make_record_request(Some(serde_json::json!({
-        "write_mode": false,
-    })));
-
-    let response = daemon.handle_command(request).await;
-    assert_eq!(response.status, "success");
-    assert_eq!(
-        response.message.as_deref(),
-        Some(DaemonResponse::RECORDING_STOP_SIGNAL_MSG)
-    );
-}
-
-/// Verify that `handle_status` reports `busy` correctly.
-/// The CLI's record subcommand uses this to decide between
-/// starting a fresh recording (`POST /v1/transcribe`) and stopping
-/// an in-flight one (`POST /v1/transcribe/stop`).
+/// `handle_status` reports `busy` from the speech engine's in-flight slot, so a
+/// client can tell whether a `speak` would interrupt something. The slot is the
+/// only record of that fact — this pins that `/status` actually reads it rather
+/// than a flag that could go stale.
 #[tokio::test]
 async fn handle_status_reports_busy_correctly() {
     let daemon = test_daemon().await;
@@ -237,53 +51,20 @@ async fn handle_status_reports_busy_correctly() {
         "fresh daemon must report busy=false; got {response:?}"
     );
 
-    // Force busy state and confirm the handler tracks it.
-    *daemon.busy.write().await = true;
-    let response = daemon.handle_status().await;
-    assert_eq!(
-        response.busy,
-        Some(true),
-        "busy=true must be surfaced by handle_status"
-    );
-
-    // Recovery: clearing the flag flips the response field back.
-    *daemon.busy.write().await = false;
-    let response = daemon.handle_status().await;
-    assert_eq!(response.busy, Some(false));
-}
-
-#[tokio::test]
-async fn busy_reset_after_error_cleanup() {
-    // Verify that the error cleanup pattern in handle_record_internal
-    // correctly resets busy. We can't trigger the full recording
-    // pipeline in CI (requires audio hardware + display server for Typer),
-    // so we simulate the state and verify cleanup.
-    let daemon = test_daemon().await;
-
-    // Simulate: setup_recording_session ran and set busy = true,
-    // then record_and_transcribe failed.
-    *daemon.busy.write().await = true;
-    assert!(*daemon.busy.read().await);
-
-    // The error path in handle_record_internal does:
-    //   *self.busy.write().await = false;
-    // (on a setup failure, no recording_started event went out, so no state change to undo)
-    // Verify the daemon can recover from this state.
+    // An utterance in flight is what busy means now.
     {
-        let mut guard = daemon.busy.write().await;
-        *guard = false;
+        let _claim = daemon.speech.claim_for_test("u-status");
+        let response = daemon.handle_status().await;
+        assert_eq!(
+            response.busy,
+            Some(true),
+            "busy=true must be surfaced by handle_status"
+        );
     }
 
-    assert!(
-        !*daemon.busy.read().await,
-        "busy must be false after error cleanup"
-    );
-
-    // And a new recording request should NOT hit the toggle path
-    // (it should try to start, not return "transcription in progress")
-    // We can't fully test starting a recording here, but we verify the
-    // state allows it by checking the guard is clear.
-    assert!(daemon.manual_stop_tx.read().await.is_none());
+    // Recovery: releasing the slot flips the response field back.
+    let response = daemon.handle_status().await;
+    assert_eq!(response.busy, Some(false));
 }
 
 #[tokio::test]
@@ -292,8 +73,6 @@ async fn set_allow_online_models_updates_config() {
 
     let request = DaemonRequest {
         command: "set_allow_online_models".to_string(),
-        audio_data: None,
-        sample_rate: None,
         client_id: None,
         event_types: None,
         client_info: None,
@@ -337,7 +116,7 @@ async fn set_audio_theme_rejects_unknown_theme() {
 #[tokio::test]
 async fn set_notification_method_rejects_unknown_method() {
     let daemon = test_daemon().await;
-    let before = daemon.config.read().await.transcription.notification_method;
+    let before = daemon.config.read().await.synthesis.notification_method;
 
     let resp = daemon
         .handle_set_notification_method("definitely-not-a-method".to_string())
@@ -349,7 +128,7 @@ async fn set_notification_method_rejects_unknown_method() {
     assert_eq!(resp.error_code.map(ErrorCode::http_status), Some(400));
     // The rejected value must not have changed the persisted setting.
     assert_eq!(
-        daemon.config.read().await.transcription.notification_method,
+        daemon.config.read().await.synthesis.notification_method,
         before
     );
 }
@@ -361,15 +140,15 @@ async fn set_notification_method_round_trips_through_set_and_get() {
     let daemon = test_daemon().await;
 
     let mut set_request = make_request("set_notification_method");
-    set_request.data = Some(serde_json::json!({ "method": "dbus" }));
+    set_request.data = Some(serde_json::json!({ "method": "off" }));
     let set_response = daemon.handle_command(set_request).await;
     assert_eq!(set_response.status, "success");
-    assert_eq!(set_response.notification_method.as_deref(), Some("dbus"));
+    assert_eq!(set_response.notification_method.as_deref(), Some("off"));
 
     let get_response = daemon
         .handle_command(make_request("get_notification_method"))
         .await;
-    assert_eq!(get_response.notification_method.as_deref(), Some("dbus"));
+    assert_eq!(get_response.notification_method.as_deref(), Some("off"));
 }
 
 /// `get_update_check_enabled` reflects the config default before any write.
@@ -463,8 +242,6 @@ async fn get_allow_online_models_returns_config_value() {
 
     let request = DaemonRequest {
         command: "get_allow_online_models".to_string(),
-        audio_data: None,
-        sample_rate: None,
         client_id: None,
         event_types: None,
         client_info: None,
@@ -507,8 +284,6 @@ async fn set_model_online_rejected_when_disabled() {
 
     let request = DaemonRequest {
         command: "set_model".to_string(),
-        audio_data: None,
-        sample_rate: None,
         client_id: None,
         event_types: None,
         client_info: None,
@@ -621,7 +396,7 @@ async fn set_model_mistral_rejected_when_disabled() {
     assert_online_model_rejected(
         "github.com/super-tts/mistral",
         "mistral",
-        "voxtral-mini-transcribe-v2",
+        "eleven-multilingual-v2",
     )
     .await;
 }
@@ -723,7 +498,7 @@ async fn set_model_local_works_without_online_toggle() {
 #[tokio::test]
 async fn list_backends_catalog_and_option_override() {
     use crate::daemon::test_fixtures::openai_backend;
-    use crate::stt_models::ModelDefinition;
+    use crate::tts_models::ModelDefinition;
     use std::time::Duration;
 
     let daemon = test_daemon().await;
@@ -847,7 +622,7 @@ fn fixture_backend(
     source: &str,
     name: &str,
     model_name: &str,
-) -> crate::stt_models::backends::DiscoveredBackend {
+) -> crate::tts_models::backends::DiscoveredBackend {
     fixture_backend_devices(
         dir_name,
         source,
@@ -864,7 +639,7 @@ fn fixture_backend_local(
     source: &str,
     name: &str,
     model_name: &str,
-) -> crate::stt_models::backends::DiscoveredBackend {
+) -> crate::tts_models::backends::DiscoveredBackend {
     fixture_backend_devices(
         dir_name,
         source,
@@ -880,9 +655,9 @@ fn fixture_backend_devices(
     name: &str,
     model_name: &str,
     supported_devices: Vec<super_tts_registry_types::manifest::Device>,
-) -> crate::stt_models::backends::DiscoveredBackend {
-    use crate::stt_models::ModelDefinition;
-    use crate::stt_models::backends::DiscoveredBackend;
+) -> crate::tts_models::backends::DiscoveredBackend {
+    use crate::tts_models::ModelDefinition;
+    use crate::tts_models::backends::DiscoveredBackend;
     use std::time::Duration;
 
     DiscoveredBackend {
@@ -990,7 +765,7 @@ async fn set_active_backend_records_dir_and_returns_payload() {
             .config
             .read()
             .await
-            .transcription
+            .synthesis
             .active_backend
             .as_deref(),
         Some("openai")
@@ -1057,7 +832,7 @@ async fn clear_active_backend_returns_to_idle() {
             .config
             .read()
             .await
-            .transcription
+            .synthesis
             .active_backend
             .is_none()
     );
@@ -1104,31 +879,32 @@ async fn list_models_is_scoped_to_active_backend() {
     assert_eq!(models[0].1, mistral);
 }
 
-/// Trivial in-process `Transcribe` impl used to seed the `model` lock so
+/// Trivial in-process `Synthesize` impl used to seed the `model` lock so
 /// the always-unload semantics of `set_active_backend` can be observed
-/// without touching real inference code.
-struct MockTranscribe {
-    info: crate::stt_models::transcribe::ModelInfoData,
+/// without touching real inference code. It produces no audio: these tests
+/// are about model *lifecycle*, and what synthesis sounds like is
+/// `tests/speak_pipeline.rs`'s subject.
+struct MockModel {
+    info: crate::tts_models::synthesize::ModelInfoData,
 }
-impl crate::stt_models::transcribe::ModelInfo for MockTranscribe {
-    fn info(&self) -> &crate::stt_models::transcribe::ModelInfoData {
+impl crate::tts_models::synthesize::ModelInfo for MockModel {
+    fn info(&self) -> &crate::tts_models::synthesize::ModelInfoData {
         &self.info
     }
 }
-impl crate::stt_models::transcribe::ModelState for MockTranscribe {
+impl crate::tts_models::synthesize::ModelState for MockModel {
     fn device(&self) -> String {
         "cpu".to_string()
     }
 }
 #[async_trait::async_trait]
-impl crate::stt_models::transcribe::Transcribe for MockTranscribe {
-    async fn transcribe_audio(
-        &mut self,
-        _audio: &[f32],
-        _sample_rate: u32,
-        _language: Option<&str>,
-    ) -> anyhow::Result<String> {
-        Ok(String::new())
+impl crate::tts_models::synthesize::Synthesize for MockModel {
+    async fn synthesize(
+        &self,
+        _request: &crate::tts_models::v1::SynthesizeRequest<'_>,
+        _sink: &mut (dyn crate::tts_models::v1::SynthesisSink + Send),
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -1137,8 +913,8 @@ impl crate::stt_models::transcribe::Transcribe for MockTranscribe {
 /// `handle_set_active_backend`.
 async fn seed_loaded_model(daemon: &SuperTTSDaemon, name: &str, source: &str) {
     use crate::daemon::types::LoadedModel;
-    use crate::stt_models::ModelDefinition;
-    use crate::stt_models::transcribe::ModelInfoData;
+    use crate::tts_models::ModelDefinition;
+    use crate::tts_models::synthesize::ModelInfoData;
     use std::time::Duration;
 
     let definition = ModelDefinition {
@@ -1157,7 +933,7 @@ async fn seed_loaded_model(daemon: &SuperTTSDaemon, name: &str, source: &str) {
     let info = ModelInfoData::new(name, source, true, true, Duration::from_secs(1));
     *daemon.model.write().await = Some(LoadedModel {
         definition,
-        instance: Box::new(MockTranscribe { info }),
+        instance: Box::new(MockModel { info }),
     });
 }
 
@@ -1189,7 +965,7 @@ async fn set_backend_option_surfaces_reload_failure() {
 
 /// Disabling online models while an online model is loaded reverts to a local
 /// model. With no local backend installed, the daemon unloads the online model —
-/// the response must say so rather than claim "all transcription is local".
+/// the response must say so rather than claim "all synthesis is local".
 #[tokio::test]
 async fn disabling_online_without_local_fallback_surfaces_warning() {
     let daemon = test_daemon().await;
@@ -1388,7 +1164,7 @@ async fn unload_active_model_drops_model_keeps_backend() {
             .config
             .read()
             .await
-            .transcription
+            .synthesis
             .preferred_model
             .is_empty()
     );
@@ -1450,230 +1226,4 @@ async fn broadcast_model_active_carries_full_identity() {
     assert_eq!(ready["status"], "ready");
     assert_eq!(ready["model_loaded"], true);
     assert_eq!(ready["model_name"], "voxtral-mini");
-}
-
-/// A `Transcribe` fake whose `transcribe_audio` returns a fixed text or fails,
-/// for characterizing the one-shot `handle_transcribe` policy.
-struct ScriptedTranscribe {
-    info: crate::stt_models::transcribe::ModelInfoData,
-    /// `Ok(text)` to return `text`; `Err(())` to fail like a real backend would.
-    result: Result<String, ()>,
-}
-impl crate::stt_models::transcribe::ModelInfo for ScriptedTranscribe {
-    fn info(&self) -> &crate::stt_models::transcribe::ModelInfoData {
-        &self.info
-    }
-}
-impl crate::stt_models::transcribe::ModelState for ScriptedTranscribe {
-    fn device(&self) -> String {
-        "cpu".to_string()
-    }
-}
-#[async_trait::async_trait]
-impl crate::stt_models::transcribe::Transcribe for ScriptedTranscribe {
-    async fn transcribe_audio(
-        &mut self,
-        _audio: &[f32],
-        _sample_rate: u32,
-        _language: Option<&str>,
-    ) -> anyhow::Result<String> {
-        match &self.result {
-            Ok(text) => Ok(text.clone()),
-            Err(()) => anyhow::bail!("scripted backend failure"),
-        }
-    }
-}
-
-/// Seed the daemon's `model` lock with a [`ScriptedTranscribe`]. `online`
-/// selects the async vs. blocking dispatch path; `result` is what the backend
-/// produces.
-async fn seed_scripted_model(daemon: &SuperTTSDaemon, online: bool, result: Result<String, ()>) {
-    use crate::daemon::types::LoadedModel;
-    use crate::stt_models::ModelDefinition;
-    use crate::stt_models::transcribe::ModelInfoData;
-    use std::time::Duration;
-
-    let definition = ModelDefinition {
-        name: "scripted".to_string(),
-        source: "github.com/super-tts/test".to_string(),
-        is_multilingual: true,
-        primary_language: "en".to_string(),
-        supported_languages: vec!["en".to_string()],
-        estimated_vram_bytes: 0,
-        max_input_chars: None,
-        processing_interval: Duration::from_secs(1),
-        supported_devices: vec![super_tts_registry_types::manifest::Device::Cpu],
-        realtime: false,
-        provider: None,
-    };
-    let info = ModelInfoData::new(
-        "scripted",
-        "github.com/super-tts/test",
-        true,
-        online,
-        Duration::from_secs(1),
-    );
-    *daemon.model.write().await = Some(LoadedModel {
-        definition,
-        instance: Box::new(ScriptedTranscribe { info, result }),
-    });
-}
-
-/// One second of finite samples — passes `validate_audio` and survives
-/// `process_audio` without resampling.
-fn one_second_of_audio() -> Vec<f32> {
-    vec![0.1_f32; 16000]
-}
-
-/// Happy path: the backend's text reaches the client in a `success` response.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_transcribe_returns_backend_text() {
-    let daemon = test_daemon().await;
-    seed_scripted_model(&daemon, true, Ok("hello world".to_string())).await;
-
-    let resp = daemon
-        .handle_transcribe(one_second_of_audio(), 16000, "c1".to_string(), None)
-        .await;
-
-    assert_eq!(resp.status, "success");
-    assert_eq!(resp.transcription.as_deref(), Some("hello world"));
-}
-
-/// One-shot policy: a real backend failure is surfaced as an error response,
-/// not masked as a successful empty transcription (audit Tier 1 #6). "No speech"
-/// is an `Ok("")` from the backend and stays a success; a `Failed` dispatch is a
-/// genuine error.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_transcribe_reports_backend_failure_as_error() {
-    let daemon = test_daemon().await;
-    seed_scripted_model(&daemon, true, Err(())).await;
-
-    let resp = daemon
-        .handle_transcribe(one_second_of_audio(), 16000, "c1".to_string(), None)
-        .await;
-
-    assert_eq!(resp.status, "error");
-    assert!(
-        resp.message.as_deref().unwrap_or("").contains("failed"),
-        "error message should name the failure: {:?}",
-        resp.message
-    );
-}
-
-/// With no model loaded, the one-shot path returns a coded error response —
-/// `ErrorCode::ModelNotLoaded`, so an HTTP caller of the pre-captured
-/// `audio_data` path gets the same `409 model_not_loaded` as the daemon-mic
-/// paths (see docs/protocol/endpoints/v1/transcribe.md).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn handle_transcribe_errors_when_no_model_loaded() {
-    let daemon = test_daemon().await;
-
-    let resp = daemon
-        .handle_transcribe(one_second_of_audio(), 16000, "c1".to_string(), None)
-        .await;
-
-    assert_eq!(resp.status, "error");
-    assert_eq!(resp.error_code, Some(ErrorCode::ModelNotLoaded));
-    assert_eq!(resp.message.as_deref(), Some("model_not_loaded"));
-}
-
-/// The whole point of the preflight: no capture, no beeps, and the user is told
-/// in the field they are looking at.
-// `start_paused` so the notice's key-release delay is virtual — this asserts
-// what the preflight does, not how long the notice waits.
-#[tokio::test(start_paused = true)]
-async fn record_with_no_model_types_a_notice_in_write_mode() {
-    // `test_daemon()` carries a notifier that always fails delivery (never
-    // the real session bus — see its doc comment), so the config-default
-    // `Auto` method falls through to typing here; that fallback is what this
-    // test checks.
-    let daemon = test_daemon().await;
-    let (sim, buf) = crate::output::keyboard::Simulator::capture();
-    let mut typer = crate::output::typer::Typer::new(sim);
-
-    let resp = daemon
-        .handle_record_internal(&mut typer, true, RecordingStopMode::ManualOnly, None)
-        .await;
-
-    assert_eq!(resp.status, "error");
-    assert_eq!(resp.error_code, Some(ErrorCode::ModelNotLoaded));
-    assert_eq!(*buf.lock().unwrap(), "[Super TTS: no model loaded]");
-    // Capture must never have started.
-    assert!(
-        !*daemon.busy.read().await,
-        "preflight must not leave the daemon busy"
-    );
-}
-
-/// Without write mode there is no focused field to write into; the caller gets
-/// the error response and nothing is typed.
-#[tokio::test]
-async fn record_with_no_model_types_nothing_without_write_mode() {
-    // See the write-mode test above: `test_daemon()`'s notifier never reaches
-    // the real session bus.
-    let daemon = test_daemon().await;
-    let (sim, buf) = crate::output::keyboard::Simulator::capture();
-    let mut typer = crate::output::typer::Typer::new(sim);
-
-    let resp = daemon
-        .handle_record_internal(&mut typer, false, RecordingStopMode::ManualOnly, None)
-        .await;
-
-    assert_eq!(resp.error_code, Some(ErrorCode::ModelNotLoaded));
-    assert_eq!(
-        *buf.lock().unwrap(),
-        "",
-        "nothing may be typed outside write mode"
-    );
-}
-
-/// The write-method test types the string the protocol doc promises, reports
-/// the backend that typed it, and hands the simulator back to the cache. A
-/// regression that skipped the cache return would rebuild the portal session —
-/// three D-Bus round-trips and possibly an authorization prompt — per test.
-#[tokio::test]
-async fn write_method_test_types_the_documented_string_and_recaches() {
-    let daemon = test_daemon().await;
-    let (sim, buf) = crate::output::keyboard::Simulator::capture();
-    *daemon.simulator.write().await = Some(sim);
-
-    let resp = daemon
-        .handle_command(make_request("test_write_method"))
-        .await;
-
-    assert_eq!(resp.status, "success");
-    assert_eq!(*buf.lock().unwrap(), "Super TTS input test 123");
-    // The configured method (`auto` by default) and the backend that actually
-    // typed are reported separately — the whole point of the endpoint.
-    assert_eq!(resp.write_method.as_deref(), Some("auto"));
-    assert!(
-        resp.resolved_write_method.is_some(),
-        "a client with `auto` configured has no other way to see the real backend"
-    );
-    assert!(
-        daemon.simulator.read().await.is_some(),
-        "a cacheable simulator must go back to the cache"
-    );
-}
-
-/// A recording already owns the keyboard, so the test must refuse rather than
-/// interleave its string into the user's dictation.
-#[tokio::test]
-async fn write_method_test_refuses_while_recording() {
-    let daemon = test_daemon().await;
-    let (sim, buf) = crate::output::keyboard::Simulator::capture();
-    *daemon.simulator.write().await = Some(sim);
-    *daemon.busy.write().await = true;
-
-    let resp = daemon
-        .handle_command(make_request("test_write_method"))
-        .await;
-
-    assert_eq!(resp.status, "error");
-    assert_eq!(resp.error_code, Some(ErrorCode::RecordingInProgress));
-    assert_eq!(
-        *buf.lock().unwrap(),
-        "",
-        "nothing may be typed while a recording holds the keyboard"
-    );
 }

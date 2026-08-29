@@ -124,6 +124,7 @@ async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
     let child = Command::new(DAEMON_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1")
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)

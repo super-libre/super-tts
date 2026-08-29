@@ -7,9 +7,8 @@ pub mod limits;
 mod paths;
 
 pub use inputs::{
-    validate_audio_data, validate_command, validate_event_types, validate_json_value,
-    validate_limit, validate_optional_string, validate_required_string, validate_sample_rate,
-    validate_string,
+    validate_command, validate_event_types, validate_json_value, validate_limit,
+    validate_optional_string, validate_required_string, validate_string,
 };
 pub use paths::{get_http_socket_path, secure_runtime_path};
 
@@ -18,15 +17,6 @@ pub use paths::{get_http_socket_path, secure_runtime_path};
 pub enum ValidationError {
     #[error("String too long: {len} > {max} characters")]
     StringTooLong { len: usize, max: usize },
-
-    #[error("Audio data too large: {samples} > {max} samples")]
-    AudioTooLarge { samples: usize, max: usize },
-
-    #[error("Suspicious audio content: {samples} samples with a uniform padding pattern")]
-    SuspiciousAudioContent { samples: usize },
-
-    #[error("Invalid sample rate: {rate} (must be {min}-{max} Hz)")]
-    InvalidSampleRate { rate: u32, min: u32, max: u32 },
 
     #[error("Too many event types: {count} > {max}")]
     TooManyEventTypes { count: usize, max: usize },

@@ -11,7 +11,7 @@ use cosmic::{
 use super::SuperTtsApplet;
 use super::layout::AppletLayout;
 use crate::app::Message;
-use crate::models::state::{DaemonConnectionState, RecordingState};
+use crate::models::state::{DaemonConnectionState, SpeechState};
 use crate::ui::views::{PopupContentParams, create_popup_content};
 
 // Cache icon bytes to avoid allocation on every render.
@@ -21,11 +21,11 @@ static ERROR_ICON: &[u8] = include_bytes!("../../resources/assets/error-icon.svg
 
 impl SuperTtsApplet {
     pub(super) fn view_applet(&self) -> Element<'_, Message> {
-        // Show visualizations only when the daemon is actively recording
+        // Show visualizations only when the daemon is actively speaking
         // and the user has visualizations enabled.
-        let should_show_visualizations = matches!(self.recording_state, RecordingState::Recording)
-            && self.config.ui.show_visualization;
-        let should_show_working = matches!(self.recording_state, RecordingState::Processing)
+        let should_show_visualizations =
+            matches!(self.speech_state, SpeechState::Speaking) && self.config.ui.show_visualization;
+        let should_show_working = matches!(self.speech_state, SpeechState::Synthesizing)
             && self.config.ui.show_visualization;
 
         // One box for every state, so switching between the icon and the

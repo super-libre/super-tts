@@ -2,10 +2,9 @@
 use crate::config::DaemonConfig;
 use crate::daemon::events::EventBus;
 use crate::download_progress::DownloadStateManager;
-use crate::input::audio::AudioProcessor;
 use crate::resource_management::ResourceManager;
 use crate::services::dbus::DBusManager;
-use crate::stt_models::backends::{self, DiscoveredBackend};
+use crate::tts_models::backends::{self, DiscoveredBackend};
 use anyhow::Result;
 use std::sync::{Arc, RwLock};
 use super_tts_shared::models::protocol::DaemonStatusEvent;
@@ -51,31 +50,23 @@ fn contains_hip_token(label: &str) -> bool {
 /// The definition owns the model's identity and capabilities, so nothing has
 /// to be re-derived at read sites.
 pub struct LoadedModel {
-    pub definition: crate::stt_models::ModelDefinition,
-    pub instance: Box<dyn crate::stt_models::transcribe::Transcribe>,
+    pub definition: crate::tts_models::ModelDefinition,
+    pub instance: Box<dyn crate::tts_models::synthesize::Synthesize>,
 }
 
 /// Shared handle to the currently-loaded model (or `None` while idle/loading).
 pub type SharedLoadedModel = Arc<tokio::sync::RwLock<Option<LoadedModel>>>;
 
-/// The single `/transcribe` preview slot: an `(id, sender)` guarded by a lock,
-/// where `id` lets a racing request claim the slot only when free and clear it
-/// only when it is still its own.
-pub type PreviewSlot =
-    Arc<tokio::sync::RwLock<Option<(u64, tokio::sync::mpsc::UnboundedSender<String>)>>>;
-
 #[derive(Clone)]
 pub struct SuperTTSDaemon {
     pub model: SharedLoadedModel,
-    pub audio_processor: Arc<AudioProcessor>,
     pub shutdown_tx: broadcast::Sender<()>,
     pub dbus_manager: Option<Arc<DBusManager>>,
-    /// Internal pub/sub bus that fans recording / audio / STT events
-    /// out to widget HTTP/SSE subscribers via `GET /events`.
+    /// Internal pub/sub bus that fans playback and daemon-status events out to
+    /// widget HTTP/SSE subscribers via `GET /events`.
     pub events: Arc<EventBus>,
     pub audio_theme: Arc<RwLock<AudioTheme>>,
     pub volume: Arc<RwLock<u8>>,
-    pub busy: Arc<tokio::sync::RwLock<bool>>,
     pub download_manager: Arc<DownloadStateManager>,
     // Device management
     pub preferred_device: Arc<tokio::sync::RwLock<String>>, // "cpu" or "cuda"
@@ -84,24 +75,13 @@ pub struct SuperTTSDaemon {
     pub config: Arc<tokio::sync::RwLock<DaemonConfig>>,
     // Resource management for connection and rate limiting
     pub resource_manager: Arc<ResourceManager>,
-    // Preview typing setting (beta feature)
-    pub preview_typing_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // Sender used to signal a running recording to stop early (shortcut or external stop)
-    pub manual_stop_tx: Arc<tokio::sync::RwLock<Option<tokio::sync::broadcast::Sender<()>>>>,
-    // Cached keyboard simulator (session persists across recordings, except
-    // for backends that go stale while idle — see `Simulator::is_cacheable`)
-    pub simulator: Arc<tokio::sync::RwLock<Option<crate::output::keyboard::Simulator>>>,
-    // Streams preview text to the one waiting `/transcribe` client. See
-    // [`PreviewSlot`]: the id closes the busy-check TOCTOU that let a losing
-    // request null the winner's preview stream.
-    pub preview_text: PreviewSlot,
     // Backends discovered from the backends directory.
     pub backends: Arc<tokio::sync::RwLock<Vec<DiscoveredBackend>>>,
     // Active backend: the relative install dir (a subdir of the backends dir)
     // of the selected backend, or None when idle. Runtime mirror of
-    // `config.transcription.active_backend`.
+    // `config.synthesis.active_backend`.
     pub active_backend: Arc<tokio::sync::RwLock<Option<String>>>,
-    // Desktop-notification channel for recording failures. Behind a mutex
+    // Desktop-notification channel for synthesis failures. Behind a mutex
     // because sending mutates the cached connection and the replaces-id.
     pub notifier: Arc<tokio::sync::Mutex<crate::output::notification::Notifier>>,
     // Self-update check state: last completed check + notify-once
@@ -123,32 +103,24 @@ pub(crate) async fn test_daemon() -> SuperTTSDaemon {
     let (shutdown_tx, _) = broadcast::channel(1);
     SuperTTSDaemon {
         model: Arc::new(tokio::sync::RwLock::new(None)),
-        audio_processor: Arc::new(AudioProcessor::new()),
         shutdown_tx,
         dbus_manager: None,
         events: Arc::new(EventBus::new()),
         audio_theme: Arc::new(RwLock::new(AudioTheme::default())),
         volume: Arc::new(RwLock::new(100)),
-        busy: Arc::new(tokio::sync::RwLock::new(false)),
         download_manager: Arc::new(DownloadStateManager::new()),
         preferred_device: Arc::new(tokio::sync::RwLock::new("cpu".to_string())),
         actual_device: Arc::new(tokio::sync::RwLock::new("cpu".to_string())),
         config: Arc::new(tokio::sync::RwLock::new(DaemonConfig::default())),
         resource_manager: Arc::new(ResourceManager::development()),
-        preview_typing_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        manual_stop_tx: Arc::new(tokio::sync::RwLock::new(None)),
-        simulator: Arc::new(tokio::sync::RwLock::new(None)),
-        preview_text: Arc::new(tokio::sync::RwLock::new(None)),
         backends: Arc::new(tokio::sync::RwLock::new(Vec::new())),
         active_backend: Arc::new(tokio::sync::RwLock::new(None)),
         // A fake notifier, not `Notifier::dbus()`: no daemon test may reach
         // the real session bus, or it can pop a genuine desktop notification
         // on whoever's machine runs the suite. `fail = true` mirrors a
-        // headless/no-notification-server environment, which is also what
-        // makes `NotificationMethod::Auto` (the config default) degrade to
-        // typing — the behavior the write-mode failure-notice tests assert.
-        // A test that genuinely needs delivery to succeed can override
-        // `daemon.notifier` after construction.
+        // headless/no-notification-server environment. A test that genuinely
+        // needs delivery to succeed can override `daemon.notifier` after
+        // construction.
         notifier: Arc::new(tokio::sync::Mutex::new(
             crate::output::notification::Notifier::fake(true).0,
         )),
@@ -170,7 +142,7 @@ impl SuperTTSDaemon {
         &self,
         name: &str,
         source: &str,
-    ) -> Option<crate::stt_models::ModelDefinition> {
+    ) -> Option<crate::tts_models::ModelDefinition> {
         let backends = self.backends.read().await;
         backends::find_model(&backends, name, source).map(|(_, def)| def.clone())
     }
@@ -256,12 +228,16 @@ impl SuperTTSDaemon {
             });
     }
 
-    /// Publish a recording-state transition on the SSE event bus so any
-    /// connected `/events` subscribers (e.g. the COSMIC applet) update
-    /// their visualization. The legacy notification path is gone; this
-    /// is the only fan-out.
-    pub fn broadcast_recording_state_change(&self, is_recording: bool) {
-        self.events.publish_recording_state(is_recording);
+    /// Whether the model is currently occupied — an utterance is being
+    /// synthesized or played out.
+    ///
+    /// Derived from the speech engine's slot rather than mirrored into a
+    /// separate flag. The STT build carried a `busy: RwLock<bool>` alongside
+    /// the recording task; two records of one fact drift, and the one that
+    /// gates model mutations is the one you cannot afford to have stale.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.speech.current().is_some()
     }
 
     /// Persist the current config to disk. Settings handlers call this

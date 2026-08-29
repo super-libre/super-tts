@@ -2,16 +2,16 @@
 
 ## Overview
 
-Super TTS implements a comprehensive defense-in-depth security model to protect against unauthorized access while maintaining usability. The system uses multiple security layers including Unix domain sockets with group-based access control, process authentication for keyboard access, and input validation throughout.
+Super TTS implements a comprehensive defense-in-depth security model to protect against unauthorized access while maintaining usability. The system uses multiple security layers including Unix domain sockets with group-based access control, process authentication for access to the speakers, and input validation throughout.
 
 ## Security Architecture Summary
 
 Based on comprehensive security reviews completed in August 2025, Super TTS demonstrates **excellent security posture** with:
 
-- ✅ **Process Authentication**: Robust authentication for keyboard injection operations
+- ✅ **Process Authentication**: Robust authentication for every privileged operation
 - ✅ **Input Validation**: Comprehensive framework with DoS protection and attack detection
 - ✅ **Memory Safety**: Excellent use of Rust's safety guarantees
-- ✅ **Network Security**: Localhost-only UDP binding prevents remote attacks
+- ✅ **Network Security**: No inbound listener at all — a per-user Unix socket, no TCP or UDP port
 - ✅ **Resource Management**: Connection limits and rate limiting prevent abuse
 - ✅ **Path Security**: Comprehensive validation prevents directory traversal attacks
 - ✅ **Tamper-Resistant Install**: Binaries and the systemd user unit are installed root-owned in system paths; the daemon itself runs unprivileged in the user session
@@ -43,7 +43,7 @@ to configure. Two independent layers enforce this:
 ### Authorization
 
 Reaching the socket is not the same as being authorized. Privileged operations
-(keyboard injection, settings, secrets) require a per-request session token
+(speaking, settings, secrets) require a per-request session token
 carrying user-approved scopes, minted through a one-time consent prompt and
 bound to the client's executable path. See
 [`protocol/auth.md`](protocol/auth.md) for the token and scope model.
@@ -56,12 +56,12 @@ ls -la "$XDG_RUNTIME_DIR/tts/super-tts-http.sock"
 
 ## Security Features
 
-### 1. Keyboard Input Protection
-- **Consent-gated authorization**: Auto-typing is the per-request `write_mode` flag on `POST /transcribe` (or the daemon's configured write mode). Reaching that endpoint at all requires a consent-minted session token with the `transcribe` scope — so a client can only type after the user approved it through the one-time consent prompt. There is no separate keyboard/write scope; it is the same `transcribe` scope dictation uses. See [Authorization](#authorization) and [`protocol/auth.md`](protocol/auth.md)
+### 1. Audio Output Protection
+- **Consent-gated authorization**: Making the machine speak requires a consent-minted session token with the `speak` scope — so a client can only reach the speakers after the user approved it through the one-time consent prompt. See [Authorization](#authorization) and [`protocol/auth.md`](protocol/auth.md)
+- **Interruption is part of the grant**: one utterance plays at a time and the newest wins, so a `speak`-scoped client can cut off whatever else is being read aloud, and can silence it with `/speak/stop`. The consent prompt says so in those words rather than leaving it to be discovered
 - **Peer identity for the prompt**: `SO_PEERCRED` + `/proc/<pid>/exe` tell the consent prompt *which binary* is asking and reject cross-UID peers; this identifies the caller, it is not by itself the authorization
 - **Debug-only test bypass**: The consent auto-approval used by tests/CI (`SUPER_TTS_AUTO_APPROVE`) is compiled out of release builds
-- **Output sanitization**: Backend transcription output is untrusted, so before it is typed the daemon strips non-whitespace control codes (ESC/BEL/NUL/backspace), Unicode bidi overrides, and zero-width characters — a terminal escape sequence or a bidi spoof in a transcript can't reach the focused window
-- **Limited scope**: Only types actual transcription results
+- **No keyboard surface at all**: this daemon does not simulate keystrokes. The STT build did, to type transcriptions into the focused window; that entire subsystem — keyboard backends, the typing sanitizer, the `write_mode` flag — is gone rather than disabled, so there is no path to re-enable it by configuration
 
 ### 2. Network Isolation
 - **No inbound network surface**: The daemon listens only on a per-user Unix domain socket under `$XDG_RUNTIME_DIR/tts/` — there is no TCP or UDP listener, so no host on the network can connect to it
@@ -69,15 +69,15 @@ ls -la "$XDG_RUNTIME_DIR/tts/super-tts-http.sock"
 - **Outbound only for backend installs**: The daemon reaches the network solely to fetch backends over HTTPS from the registry / GitHub — see [Daemon outbound network surface](#daemon-outbound-network-surface) below
 
 ### 3. Consent &amp; Peer Identity
-- **Session tokens + scopes**: Every request other than `/auth/request` requires a `Bearer` session token; each token carries the user-approved scopes that gate what it may do (`transcribe`, `settings`, `secrets`, `status`, and the event-topic scopes — see [`protocol/auth.md`](protocol/auth.md) for the full catalog)
+- **Session tokens + scopes**: Every request other than `/auth/request` requires a `Bearer` session token; each token carries the user-approved scopes that gate what it may do (`speak`, `settings`, `secrets`, `status`, and the event-topic scopes — see [`protocol/auth.md`](protocol/auth.md) for the full catalog)
 - **One-time consent**: Tokens are minted by the `super-tts-consent` helper — a popup naming the requesting binary (resolved via `SO_PEERCRED`) and the scopes it asks for, which the user approves or denies
 - **Same-UID only**: A peer whose UID differs from the daemon's is rejected before any prompt
 - See [`protocol/auth.md`](protocol/auth.md) for the full token, scope, and consent contract
 
 ### 4. Input Validation and DoS Protection
 - **Comprehensive validation**: All external inputs validated with strict limits
-- **Audio data protection**: Maximum 30 minutes of audio at 16kHz to prevent memory exhaustion
-- **Sample rate validation**: Must be between 8kHz and 96kHz
+- **Text length cap**: `POST /speak` accepts at most 50 000 characters, and a model may declare a lower per-request cap in its manifest which the daemon applies on top
+- **Synthesis response caps**: a backend's framed audio response is bounded at 1 MiB per frame and 32 MiB per utterance, so a backend cannot exhaust memory by streaming without end
 - **JSON protection**: Size (1MB) and nesting depth (10 levels) limits prevent JSON bomb attacks
 - **Suspicious pattern detection**: Detects potential padding attacks in audio data
 - **Control character filtering**: Prevents injection of dangerous characters
@@ -150,14 +150,13 @@ cargo run --release --bin super-tts-daemon
 ### Protected Against
 - ✅ Unauthorized local users accessing the daemon (owner-only socket + same-UID peer check)
 - ✅ Remote network attacks (no inbound listener — Unix-socket only, no TCP/UDP port)
-- ✅ Unauthorized keyboard injection (reachable only with a consent-minted `transcribe`-scope token; auto-typing itself is the per-request `write_mode` flag)
-- ✅ Arbitrary command injection via keyboard
+- ✅ Unauthorized use of the speakers (reachable only with a consent-minted `speak`-scope token)
 - ✅ Privilege escalation (runs as an unprivileged user service)
 - ✅ Memory exhaustion attacks (comprehensive input validation)
 - ✅ Connection flooding attacks (rate limiting and connection limits)
 - ✅ JSON bomb attacks (size and depth validation)
 - ✅ Directory traversal attacks (path validation)
-- ✅ Audio data injection attacks (sample validation and pattern detection)
+- ✅ Malformed backend audio (frame-size, total-size, and format validation on every synthesis response)
 - ✅ Cross-user access (same-UID peer check; the consent prompt names the caller's exe)
 - ✅ Silent replacement of the daemon binary or unit file by user-level processes (both are root-owned in system paths; modifying them requires privilege escalation)
 
@@ -236,7 +235,7 @@ cargo audit
 ### Recommended Systemd Hardening
 ```ini
 [Unit]
-Description=Super TTS Speech-to-Text Daemon
+Description=Super TTS Text-to-Speech Daemon
 After=sound.target
 
 [Service]

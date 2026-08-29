@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::daemon::types::{SuperTTSDaemon, normalize_device};
-use crate::stt_models::transcribe::Transcribe;
+use crate::tts_models::synthesize::Synthesize;
 use anyhow::Result;
 use log::{error, info, warn};
 use super_tts_shared::models::protocol::{DaemonResponse, DaemonStatusEvent};
@@ -22,7 +22,7 @@ impl SuperTTSDaemon {
         name: &str,
         source: &str,
         target_device: &str,
-    ) -> Result<Box<dyn Transcribe>> {
+    ) -> Result<Box<dyn Synthesize>> {
         info!("Loading model {name} with target device: {target_device}");
         self.broadcast_device_model_loading_status(name, target_device);
         let (instance, _def) = self
@@ -39,7 +39,7 @@ impl SuperTTSDaemon {
     /// an active recording. A real-time (WebSocket) session holds the `model`
     /// read lock, so the reload's write-lock acquisition serializes behind it.
     pub async fn handle_reload_active_model(&self) -> DaemonResponse {
-        if let Some(resp) = self.guard_model_mutation("reload the model").await {
+        if let Some(resp) = self.guard_model_mutation("reload the model") {
             return resp;
         }
         let current = self
@@ -139,8 +139,8 @@ impl SuperTTSDaemon {
     /// (Tier 3 #2).
     pub(in crate::daemon) async fn finalize_loaded_model(
         &self,
-        definition: crate::stt_models::ModelDefinition,
-        instance: Box<dyn Transcribe>,
+        definition: crate::tts_models::ModelDefinition,
+        instance: Box<dyn Synthesize>,
     ) -> String {
         let actual_device = normalize_device(&instance.device());
         *self.actual_device.write().await = actual_device.clone();
@@ -169,7 +169,7 @@ impl SuperTTSDaemon {
     /// out, clear the active backend instead. No-op when no model is loaded.
     /// Rejected during an active recording / real-time session.
     pub async fn handle_unload_active_model(&self) -> DaemonResponse {
-        if let Some(resp) = self.switch_guard().await {
+        if let Some(resp) = self.switch_guard() {
             return resp;
         }
         if self.model.read().await.is_none() {

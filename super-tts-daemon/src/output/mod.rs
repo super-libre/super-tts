@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-pub mod keyboard;
+// Desktop notifications are all that is left here: the STT build also owned
+// keyboard simulation, because its output was text typed into the focused
+// window. This one's output is audio.
 pub(crate) mod notice;
 pub mod notification;
-pub mod preview;
-pub mod typer;

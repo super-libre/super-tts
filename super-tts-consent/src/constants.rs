@@ -8,12 +8,6 @@
 //! concise (≤ one wrapped line on a typical screen) and user-meaningful.
 //! These are what the user reads in the dialog, not a developer reference.
 
-/// Bullets for the `transcribe` scope.
-pub const TRANSCRIBE_PERMISSIONS: &[&str] = &[
-    "Use your microphone to record speech for this app",
-    "Receive this app's own transcription text (preview and final)",
-];
-
 /// Bullets for the `speak` scope.
 ///
 /// Phrased around what the user gives up — control of the speakers — rather
@@ -36,27 +30,21 @@ pub const PLAYBACK_EVENTS_PERMISSIONS: &[&str] = &[
 ];
 
 /// Bullets for the `status` scope.
-pub const STATUS_PERMISSIONS: &[&str] =
-    &["Read which speech-to-text model and device are currently active"];
+pub const STATUS_PERMISSIONS: &[&str] = &[
+    "Read which voice model and device are currently active",
+    "See whether the machine is speaking right now",
+];
 
 /// Bullets for the `settings` scope.
 pub const SETTINGS_PERMISSIONS: &[&str] = &[
-    "Read and change every daemon setting (model, device, audio cues, volume, recording behavior)",
-    "Allow or block sending audio to online providers (OpenAI, Mistral, Deepgram)",
-    "Install, update, and remove speech-to-text backends",
+    "Read and change every daemon setting (model, device, audio cues, volume)",
+    "Allow or block sending text to online providers",
+    "Install, update, and remove voice backends",
 ];
-
-/// Bullets for the `recording_events` scope.
-pub const RECORDING_EVENTS_PERMISSIONS: &[&str] =
-    &["See when any recording starts and stops on this device"];
 
 /// Bullets for the `audio_visualization` scope.
 pub const AUDIO_VISUALIZATION_PERMISSIONS: &[&str] =
-    &["Receive audio visualization data (frequency bars) while a recording is running"];
-
-/// Bullets for the `global_transcriptions` scope.
-pub const GLOBAL_TRANSCRIPTIONS_PERMISSIONS: &[&str] =
-    &["Read live and final transcription text from every app on this device"];
+    &["Receive audio visualization data (frequency bars) while speech is playing"];
 
 /// Bullets for the `daemon_status` scope.
 pub const DAEMON_STATUS_PERMISSIONS: &[&str] =

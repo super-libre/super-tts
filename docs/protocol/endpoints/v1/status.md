@@ -32,7 +32,7 @@ Content-Type: application/json
   "status":        "success",
   "device":        "cuda",
   "model_loaded":  true,
-  "current_model": "whisper-tiny",
+  "current_model": "kokoro-82m",
   "busy":          false
 }
 ```
@@ -41,8 +41,8 @@ Content-Type: application/json
 |-----------------|---------|----------------------------------------------------------------------------------------|
 | `device`        | string  | The accelerator the loaded model is actually running on: `"cpu"`, `"cuda"`, `"rocm"`, `"metal"`, `"vulkan"`, or `"remote"` for an online model. `"unknown"` if nothing is loaded. |
 | `model_loaded`  | bool    | `false` while the daemon is still loading the initial model or after a failed switch   |
-| `current_model` | string? | The loaded model's name (e.g. `whisper-tiny`); absent when `model_loaded` is `false`   |
-| `busy`          | bool    | `true` while a daemon-mic cycle is active — covers audio capture **and** the post-capture transcription/typing. Clients implementing a toggle hotkey consult this and call [`POST /transcribe/stop`](./transcribe/stop.md) when `true`, [`POST /transcribe`](./transcribe.md) when `false`. |
+| `current_model` | string? | The loaded model's name (e.g. `kokoro-82m`); absent when `model_loaded` is `false`   |
+| `busy`          | bool    | `true` while an utterance is being synthesized or played out. Clients implementing a speak/silence toggle consult this and call [`POST /speak/stop`](./speak/stop.md) when `true`, [`POST /speak`](./speak.md) when `false`. Note that `/speak` itself is *not* gated on it — a new utterance deliberately interrupts the current one. |
 
 **Errors:**
 

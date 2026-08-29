@@ -66,6 +66,7 @@ async fn start_daemon() -> (DaemonGuard, PathBuf) {
     let child = Command::new(DAEMON_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
@@ -194,7 +195,7 @@ async fn settings_scope_endpoints() {
     let client_auth = http_client::auth_request(
         http_socket.clone(),
         "super-tts client smoke",
-        &["transcribe", "status"],
+        &["speak", "status"],
     )
     .await
     .expect("auth_request client");
@@ -293,51 +294,6 @@ async fn settings_scope_endpoints() {
         "audio themes must be the documented snake_case tokens"
     );
 
-    // --- GET /preview_typing ---
-    let (s, body) = raw_get_json(&http_socket, "/preview_typing", &settings_token).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(body["status"], "success");
-
-    // --- POST /preview_typing ---
-    let (s, _) = raw_post_json(
-        &http_socket,
-        "/preview_typing",
-        &settings_token,
-        serde_json::json!({ "enabled": true }),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK);
-
-    // --- GET /custom_models_dir (new endpoint) ---
-    let (s, body) = raw_get_json(&http_socket, "/custom_models_dir", &settings_token).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(body["status"], "success");
-    // The field is Option<Option<String>>; present, possibly null.
-    assert!(body.get("custom_models_dir").is_some());
-
-    // --- POST /custom_models_dir: null clears the override, then read-back ---
-    let (s, _) = raw_post_json(
-        &http_socket,
-        "/custom_models_dir",
-        &settings_token,
-        serde_json::json!({ "path": null }),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK, "POST /custom_models_dir null");
-    let (s, body) = raw_get_json(&http_socket, "/custom_models_dir", &settings_token).await;
-    assert_eq!(s, StatusCode::OK);
-    assert!(body["custom_models_dir"].is_null());
-
-    // --- GET /active_device ---
-    let (s, body) = raw_get_json(&http_socket, "/active_device", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /active_device: {body}");
-    assert_eq!(body["status"], "success");
-    assert!(body["device"].is_string(), "device field missing: {body}");
-    assert!(
-        body["available_devices"].is_array(),
-        "available_devices missing: {body}"
-    );
-
     // --- POST /active_device: invalid device name should error ---
     let (s, body) = raw_post_json(
         &http_socket,
@@ -354,71 +310,6 @@ async fn settings_scope_endpoints() {
         after["device"], "definitely-not-a-real-device",
         "bogus device should not have been accepted (response was {s}: {body})"
     );
-
-    // --- GET /recording_stop_mode ---
-    let (s, body) = raw_get_json(&http_socket, "/recording_stop_mode", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /recording_stop_mode: {body}");
-    assert_eq!(body["status"], "success");
-    let initial_stop_mode = body["recording_stop_mode"]
-        .as_str()
-        .unwrap_or("silence_and_manual")
-        .to_string();
-
-    // --- POST /recording_stop_mode: round-trip ---
-    let target_stop_mode = if initial_stop_mode == "manual_only" {
-        "silence_and_manual"
-    } else {
-        "manual_only"
-    };
-    let (s, _) = raw_post_json(
-        &http_socket,
-        "/recording_stop_mode",
-        &settings_token,
-        serde_json::json!({ "mode": target_stop_mode }),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK, "POST /recording_stop_mode");
-    let (_, body) = raw_get_json(&http_socket, "/recording_stop_mode", &settings_token).await;
-    assert_eq!(body["recording_stop_mode"], target_stop_mode);
-    // Restore.
-    let _ = raw_post_json(
-        &http_socket,
-        "/recording_stop_mode",
-        &settings_token,
-        serde_json::json!({ "mode": initial_stop_mode }),
-    )
-    .await;
-
-    // --- GET /write_method ---
-    let (s, body) = raw_get_json(&http_socket, "/write_method", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /write_method: {body}");
-    assert_eq!(body["status"], "success");
-    let initial_write_method = body["write_method"].as_str().unwrap_or("auto").to_string();
-
-    // --- POST /write_method: round-trip ---
-    let target_write_method = if initial_write_method == "ydotool" {
-        "auto"
-    } else {
-        "ydotool"
-    };
-    let (s, _) = raw_post_json(
-        &http_socket,
-        "/write_method",
-        &settings_token,
-        serde_json::json!({ "method": target_write_method }),
-    )
-    .await;
-    assert_eq!(s, StatusCode::OK, "POST /write_method");
-    let (_, body) = raw_get_json(&http_socket, "/write_method", &settings_token).await;
-    assert_eq!(body["write_method"], target_write_method);
-    // Restore.
-    let _ = raw_post_json(
-        &http_socket,
-        "/write_method",
-        &settings_token,
-        serde_json::json!({ "method": initial_write_method }),
-    )
-    .await;
 
     // --- GET /allow_online_models ---
     let (s, body) = raw_get_json(&http_socket, "/allow_online_models", &settings_token).await;

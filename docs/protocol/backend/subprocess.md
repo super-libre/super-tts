@@ -16,10 +16,11 @@ pointing at its executable.
 ## Transport
 
 The backend is an HTTP/1.1 server that exposes the [`/v1`
-routes](./contract.md#the-v1-contract), including the SSE form of
-`POST /v1/transcribe`. The daemon is the client. This is the same wire shape
+routes](./contract.md#the-v1-contract), including the framed audio body of
+`POST /v1/synthesize`. The daemon is the client. This is the same wire shape
 as the external client↔daemon protocol in [transport.md](../transport.md),
-so an existing HTTP/SSE server stack can be reused directly.
+so an existing HTTP server stack can be reused directly — the framed body is
+an ordinary chunked response with a custom content type.
 
 The daemon provides the socket; the backend binds and serves it. The socket
 **must be a pathname socket** (a path on disk), not an abstract-namespace
@@ -119,6 +120,6 @@ authentication; it serves whatever connects on its socket. It may verify via
   access.
 - Drive `GET /v1/status` through `starting → loading → ready`, reporting load
   `progress` and the actual `device`.
-- Stream `event: preview` / `event: done` from `POST /v1/transcribe` when
-  `options.stream_realtime` is set.
+- Emit `audio` frames from `POST /v1/synthesize` as they are produced rather
+  than buffering the whole utterance — the daemon plays as soon as it can.
 - Exit cleanly on `SIGTERM`.

@@ -1,17 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use crate::models::recording_stop_mode::RecordingStopMode;
-use crate::models::write_method::WriteMethod;
 
 #[derive(Debug)]
 pub enum Command {
-    Transcribe {
-        audio_data: Vec<f32>,
-        sample_rate: u32,
-        client_id: String,
-        /// Optional per-request language override (BCP-47 or `"auto"`). `None`
-        /// falls back to the active model's configured language.
-        language: Option<String>,
-    },
     /// Synthesize `text` with the active model and play it. Cancels whatever
     /// is currently speaking — see `daemon::speech` for the one-at-a-time
     /// policy and why the utterance id exists from the start.
@@ -32,15 +22,6 @@ pub enum Command {
         client_id: Option<String>,
     },
     Status,
-    Record {
-        write_mode: bool,
-        stop_mode: Option<RecordingStopMode>,
-        wait: bool,
-        preview: Option<bool>,
-        /// Optional per-request language override (BCP-47 or `"auto"`). `None`
-        /// falls back to the active model's configured language.
-        language: Option<String>,
-    },
     SetAudioTheme {
         theme: String,
     },
@@ -63,22 +44,6 @@ pub enum Command {
     CancelDownload,
     GetDownloadStatus,
     ListAudioThemes,
-    SetPreviewTyping {
-        enabled: bool,
-    },
-    GetPreviewTyping,
-    SetRecordingStopMode {
-        mode: RecordingStopMode,
-    },
-    GetRecordingStopMode,
-    SetWriteMethod {
-        method: WriteMethod,
-    },
-    GetWriteMethod,
-    /// Type a fixed string with the configured write method so a settings UI
-    /// can show whether keyboard simulation reaches the focused window.
-    /// Contract: `docs/protocol/endpoints/v1/write_method/test.md`.
-    TestWriteMethod,
     /// The raw wire string, unparsed. `handle_set_notification_method` parses
     /// it (mirrors `SetAudioTheme`) so an unrecognized value can be rejected
     /// with a classified `error_code` (400), not just a bare error string.

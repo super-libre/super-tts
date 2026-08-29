@@ -66,7 +66,7 @@ Authorization: Bearer tts_…64hex…
       "installed_accel": [],            // accel of the installed asset; [] for a wasm/cloud backend
       "models": [
         {
-          "name":                 "whisper-1",
+          "name":                 "gpt-4o-mini-tts",
           "provider":             "",             // always empty; see below
           "multilingual":         true,
           "primary_language":     "en",           // model's default language (BCP-47 tag)
@@ -200,5 +200,5 @@ machine-readable `code`), matching `POST /registry/install`:
 | Status | `error` | Cause |
 |---|---|---|
 | `404` | `not_found` | No backend with that source is installed. |
-| `409` | `backend_busy` | A recording or real-time session is active; the backend set cannot be mutated until it finishes. |
+| `409` | `backend_busy` | An utterance or realtime session is active; the backend set cannot be mutated until it finishes. |
 | `500` | `remove_failed` | The backend directory could not be removed (includes a `message`). |

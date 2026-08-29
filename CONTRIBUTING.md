@@ -81,6 +81,11 @@ against live in [`docs/protocol/`](./docs/protocol/).
 
 1. **Before submitting**:
    - Run `cargo test` to ensure all tests pass
+
+     > The integration suites spawn a real daemon, so they set
+     > `SUPER_TTS_MUTE_CUES=1` on it — otherwise auditioning the audio theme
+     > (`POST /audio_theme/test`) plays beeps out of your speakers on every
+     > run. If you add a harness that spawns the daemon binary, set it too.
    - Run `cargo fmt` to format code
    - Run `cargo clippy` to check for warnings
    - Run `cargo audit` to check for security vulnerabilities

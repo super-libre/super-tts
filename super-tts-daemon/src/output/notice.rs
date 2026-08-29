@@ -1,47 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What a recording failure looks like to the user.
+//! What a synthesis failure looks like to the user.
 //!
-//! A failure reaches the user through one of two channels, and they carry
-//! different amounts of detail because they land in different places.
+//! A failure reaches the user as a desktop notification, which has a summary
+//! and a body of its own and carries its app name and icon separately — so the
+//! summary names the failure and the body gives the reason, including the
+//! reasons a backend authored, which is where most of them come from. Backends
+//! are explicitly untrusted (audit 2 Tier 3 #8) and a notification server may
+//! render limited markup in the body, so that text is flattened, escaped, and
+//! clamped by [`sanitize`] before it is handed over, and labelled so a relayed
+//! failure is never read as one of the daemon's own.
 //!
-//! A desktop notification has a summary and a body of its own, and its app name
-//! and icon are supplied separately — so the summary names the failure and the
-//! body gives the reason, including the reasons a backend authored, which is
-//! where most of them come from. Backends are explicitly untrusted (audit 2
-//! Tier 3 #8) and a notification server may render limited markup in the body,
-//! so that text is flattened, escaped, and clamped by [`sanitize`] before it is
-//! handed over, and labelled so a relayed failure is never read as one of the
-//! daemon's own.
-//!
-//! Typing has nowhere to put a reason: the notice goes into whatever window the
-//! user has focused, in among their own text. It stays one fixed, bracketed,
-//! daemon-authored string per failure and never carries backend text.
-
-/// No model is loaded, so the cycle cannot produce text. Caught before capture.
-pub(crate) const NO_MODEL_LOADED: &str = "[Super TTS: no model loaded]";
-
-/// The recorder could not be spawned; capture never began.
-pub(crate) const COULD_NOT_START_RECORDING: &str = "[Super TTS: could not start recording]";
-
-/// Capture began but failed partway through.
-pub(crate) const RECORDING_FAILED: &str = "[Super TTS: recording failed]";
-
-/// Audio was captured but the model failed to transcribe it.
-pub(crate) const TRANSCRIPTION_FAILED: &str = "[Super TTS: transcription failed]";
-
-#[cfg(test)]
-pub(crate) const ALL: &[&str] = &[
-    NO_MODEL_LOADED,
-    COULD_NOT_START_RECORDING,
-    RECORDING_FAILED,
-    TRANSCRIPTION_FAILED,
-];
+//! The STT build had a second channel — typing the notice into the focused
+//! window — because its output was already going there. This daemon's output is
+//! audio, so a failure has nowhere to be typed and one channel is all there is.
 
 /// Who authored a failure's detail, which decides how the notification body
 /// labels it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Origin {
-    /// The daemon itself: its own preconditions, the audio device, the recorder.
+    /// The daemon itself: its own preconditions, the audio device, the pipeline.
     Daemon,
     /// The backend serving the model.
     Backend,
@@ -51,10 +28,8 @@ pub(crate) enum Origin {
 /// a backend chooses its own message length.
 const MAX_DETAIL: usize = 300;
 
-/// One recording failure, rendered for both channels.
+/// One synthesis failure, rendered for the notification channel.
 pub(crate) struct Failure {
-    /// The fixed string the typed channel uses. Never carries detail.
-    pub(crate) typed: &'static str,
     /// Notification summary: what failed. It deliberately omits the app name —
     /// the notification already carries `Super TTS` as its app name and icon,
     /// and repeating it costs the user the only line they are certain to read.
@@ -68,46 +43,31 @@ impl Failure {
     /// so the body says what to do about it.
     pub(crate) fn no_model_loaded() -> Self {
         Self {
-            typed: NO_MODEL_LOADED,
             summary: "No model loaded",
             body: "Load a model and try again.".to_string(),
         }
     }
 
-    /// The recorder could not be spawned.
-    pub(crate) fn could_not_start_recording(detail: &str) -> Self {
+    /// The output device could not be opened, so there is nowhere to play.
+    pub(crate) fn could_not_open_output(detail: &str) -> Self {
         Self {
-            typed: COULD_NOT_START_RECORDING,
-            summary: "Could not start recording",
+            summary: "Could not play audio",
             body: body(
                 Origin::Daemon,
                 detail,
-                "The microphone could not be opened.",
+                "The audio output device could not be opened.",
             ),
         }
     }
 
-    /// Capture began and then died.
-    pub(crate) fn recording_failed(detail: &str) -> Self {
+    /// The backend was reached but produced no usable audio. `origin` is a
+    /// parameter here and fixed in every other constructor because this is the
+    /// one failure the daemon usually did not cause: the backend answered, and
+    /// said no.
+    pub(crate) fn synthesis_failed(origin: Origin, detail: &str) -> Self {
         Self {
-            typed: RECORDING_FAILED,
-            summary: "Recording failed",
-            body: body(
-                Origin::Daemon,
-                detail,
-                "Audio capture stopped before the recording finished.",
-            ),
-        }
-    }
-
-    /// The audio was captured but not transcribed. `origin` is a parameter here
-    /// and fixed in every other constructor because this is the one failure the
-    /// daemon usually did not cause: the backend answered, and said no.
-    pub(crate) fn transcription_failed(origin: Origin, detail: &str) -> Self {
-        Self {
-            typed: TRANSCRIPTION_FAILED,
-            summary: "Transcription failed",
-            body: body(origin, detail, "The recording could not be transcribed."),
+            summary: "Synthesis failed",
+            body: body(origin, detail, "The text could not be synthesized."),
         }
     }
 }
@@ -160,17 +120,16 @@ fn sanitize(detail: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALL, Failure, MAX_DETAIL, Origin, sanitize};
+    use super::{Failure, MAX_DETAIL, Origin, sanitize};
 
     /// Every failure the daemon can raise, for the invariants that must hold
     /// across all of them.
     fn every_failure() -> Vec<Failure> {
         vec![
             Failure::no_model_loaded(),
-            Failure::could_not_start_recording("d"),
-            Failure::recording_failed("d"),
-            Failure::transcription_failed(Origin::Daemon, "d"),
-            Failure::transcription_failed(Origin::Backend, "d"),
+            Failure::could_not_open_output("d"),
+            Failure::synthesis_failed(Origin::Daemon, "d"),
+            Failure::synthesis_failed(Origin::Backend, "d"),
         ]
     }
 
@@ -179,14 +138,14 @@ mod tests {
     /// whose it is.
     #[test]
     fn a_backend_reason_reaches_the_body_labelled() {
-        let f = Failure::transcription_failed(
+        let f = Failure::synthesis_failed(
             Origin::Backend,
-            "Could not reach http://192.168.0.172/v1/audio/transcriptions (write_failed).",
+            "Could not reach http://192.168.0.172/v1/audio/speech (write_failed).",
         );
-        assert_eq!(f.summary, "Transcription failed");
+        assert_eq!(f.summary, "Synthesis failed");
         assert_eq!(
             f.body,
-            "Backend error: Could not reach http://192.168.0.172/v1/audio/transcriptions (write_failed)."
+            "Backend error: Could not reach http://192.168.0.172/v1/audio/speech (write_failed)."
         );
     }
 
@@ -194,20 +153,20 @@ mod tests {
     /// would be noise.
     #[test]
     fn a_daemon_reason_is_not_labelled() {
-        let f = Failure::recording_failed("Audio device disappeared mid-take");
-        assert_eq!(f.body, "Audio device disappeared mid-take");
+        let f = Failure::could_not_open_output("Audio device disappeared mid-utterance");
+        assert_eq!(f.body, "Audio device disappeared mid-utterance");
     }
 
     /// A failure that arrives with nothing to report still says something.
     #[test]
     fn an_empty_reason_falls_back_to_a_fixed_sentence() {
         assert_eq!(
-            Failure::transcription_failed(Origin::Backend, "   ").body,
-            "The recording could not be transcribed."
+            Failure::synthesis_failed(Origin::Backend, "   ").body,
+            "The text could not be synthesized."
         );
         assert_eq!(
-            Failure::could_not_start_recording("").body,
-            "The microphone could not be opened."
+            Failure::could_not_open_output("").body,
+            "The audio output device could not be opened."
         );
     }
 
@@ -221,26 +180,6 @@ mod tests {
                 "summary repeats the app name: {:?}",
                 f.summary
             );
-            assert!(
-                f.typed.starts_with("[Super TTS: "),
-                "a typed notice must stay bracketed and attributed: {:?}",
-                f.typed
-            );
-        }
-    }
-
-    /// [`ALL`] is what the typer's sanitizer test checks every notice against, so
-    /// a failure whose typed string is not in it would be typed without anything
-    /// ever having verified it is safe to type. Fails when a new failure is added
-    /// with a string of its own.
-    #[test]
-    fn every_typed_notice_is_in_the_catalogue() {
-        for f in every_failure() {
-            assert!(
-                ALL.contains(&f.typed),
-                "a typed notice outside the catalogue is typed unchecked: {:?}",
-                f.typed
-            );
         }
     }
 
@@ -253,9 +192,9 @@ mod tests {
             assert!(!f.body.is_empty(), "empty body for {:?}", f.summary);
         }
         for f in [
-            Failure::could_not_start_recording(""),
-            Failure::recording_failed("\n\t "),
-            Failure::transcription_failed(Origin::Backend, "\u{1b}"),
+            Failure::could_not_open_output(""),
+            Failure::synthesis_failed(Origin::Daemon, "\n\t "),
+            Failure::synthesis_failed(Origin::Backend, "\u{1b}"),
         ] {
             assert!(
                 !f.body.is_empty(),
@@ -269,8 +208,8 @@ mod tests {
     #[test]
     fn a_multi_line_reason_collapses_to_one_line() {
         assert_eq!(
-            sanitize("Failed to process audio\n\nCaused by:\n    rate mismatch"),
-            "Failed to process audio Caused by: rate mismatch"
+            sanitize("Failed to synthesize\n\nCaused by:\n    rate mismatch"),
+            "Failed to synthesize Caused by: rate mismatch"
         );
     }
 

@@ -3,7 +3,7 @@
 Re-instantiate the currently-loaded model **in place** (same identity) so a
 changed backend secret or option takes effect without picking a different model.
 It is a no-op when no model is loaded, and is rejected while a daemon-mic
-recording is active. A real-time (WebSocket) session holds the `model` read lock,
+utterance is in flight. A realtime (WebSocket) session holds the `model` read lock,
 so a reload requested during one serializes behind it rather than being rejected.
 
 Unlike [`POST /active_model`](../active_model.md#post-active_model) (which starts
@@ -39,7 +39,7 @@ Content-Type: application/json
 
 {
   "status":  "success",
-  "message": "Successfully switched to model: whisper-tiny"
+  "message": "Successfully switched to model: kokoro-82m"
 }
 ```
 
@@ -60,12 +60,12 @@ Content-Type: application/json
 }
 ```
 
-**Errors:** `recording_in_progress` carries its identifier in `error_code`; the
+**Errors:** `speech_in_progress` carries its identifier in `error_code`; the
 auth failures carry theirs in `message`, and the 500 is uncoded.
 
 | HTTP | Identifier              | Carried in   | Meaning                                              |
 |------|-------------------------|--------------|------------------------------------------------------|
 | 401  | `invalid_session`       | `message`    | Token unknown / expired / `exe_changed`              |
 | 403  | `scope_denied`          | `message`    | Token lacks the `settings` scope                     |
-| 409  | `recording_in_progress` | `error_code` | A daemon-mic recording is active — stop it and retry |
+| 409  | `speech_in_progress` | `error_code` | An utterance is in flight — stop it and retry |
 | 500  | *(uncoded)*             | `message`    | Re-instantiation failed (`Model reload failed: …`); the previous model is unloaded |

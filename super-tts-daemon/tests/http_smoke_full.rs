@@ -7,10 +7,10 @@
 //! full chain:
 //!
 //! 1. Daemon starts WITHOUT `SUPER_TTS_AUTO_APPROVE`, but WITH
-//!    `STT_AUTH_AUTO_APPROVE_AFTER_MS=2000` in its environment.
+//!    `SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS=2000` in its environment.
 //! 2. A test client calls `POST /auth/request`.
 //! 3. The daemon spawns the real `super-tts-consent` helper, which
-//!    inherits `STT_AUTH_AUTO_APPROVE_AFTER_MS` from the daemon's env.
+//!    inherits `SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS` from the daemon's env.
 //! 4. The helper renders the libcosmic layer-shell dialog (visible for
 //!    ~5 seconds during the test), then writes `allow` to stdout via a
 //!    background timer.
@@ -36,7 +36,7 @@ use tokio::time::sleep;
 
 const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 const APP_NAME: &str = "super-tts full smoke test";
-const SCOPES: &[&str] = &["transcribe", "status"];
+const SCOPES: &[&str] = &["speak", "status"];
 const AUTO_APPROVE_MS: u64 = 5_000;
 
 fn skip_if_no_display() -> Option<&'static str> {
@@ -126,8 +126,9 @@ async fn start_daemon_with_auto_approve_timer() -> (DaemonGuard, PathBuf) {
         // The timer below makes the helper auto-approve so the test
         // doesn't hang waiting for human input.
         .env_remove("SUPER_TTS_AUTO_APPROVE")
+        .env("SUPER_TTS_MUTE_CUES", "1") // never beep on the runner's speakers
         .env(
-            "STT_AUTH_AUTO_APPROVE_AFTER_MS",
+            "SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS",
             AUTO_APPROVE_MS.to_string(),
         )
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
@@ -236,7 +237,7 @@ async fn auth_request_real_helper_returns_working_token() {
         "expected InvalidSession variant, got: {err}"
     );
 
-    // (We deliberately skip exercising /transcribe here — the HTTP
+    // (We deliberately skip exercising /speak here — the HTTP
     // path runs a real recording inline and doesn't yet have a fire-
     // and-forget short-circuit, so it'd block the test for the full
     // recording timeout. Auth + ping + status + bogus-token rejection

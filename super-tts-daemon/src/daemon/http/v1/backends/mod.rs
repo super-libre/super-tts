@@ -4,7 +4,7 @@ pub(crate) mod options;
 pub(crate) mod secrets;
 
 use crate::daemon::http::state::AppState;
-use crate::stt_models::backends::DiscoveredBackend;
+use crate::tts_models::backends::DiscoveredBackend;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 

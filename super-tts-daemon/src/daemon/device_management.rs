@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::daemon::types::SuperTTSDaemon;
-use crate::stt_models::transcribe::Transcribe;
+use crate::tts_models::synthesize::Synthesize;
 use log::{error, info, warn};
 use super_tts_shared::models::protocol::{DaemonResponse, DaemonStatusEvent, ErrorCode};
 
@@ -171,7 +171,7 @@ impl SuperTTSDaemon {
         }
 
         // Prevent device switching during active recording.
-        if let Some(resp) = self.guard_model_mutation("switch devices").await {
+        if let Some(resp) = self.guard_model_mutation("switch devices") {
             warn!("Device switch rejected - recording in progress");
             return Err(resp);
         }
@@ -223,7 +223,7 @@ impl SuperTTSDaemon {
     /// Handle successful device switch
     async fn handle_device_switch_success(
         &self,
-        model_instance: Box<dyn Transcribe>,
+        model_instance: Box<dyn Synthesize>,
         device: &str,
         model_to_reload: &str,
         source: &str,

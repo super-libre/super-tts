@@ -17,8 +17,8 @@ use std::time::Duration;
 use super_tts_daemon::audio::playback::DeviceFormat;
 use super_tts_daemon::daemon::speech::{SpeakError, SpeechEngine};
 use super_tts_daemon::daemon::types::{LoadedModel, SharedLoadedModel};
-use super_tts_daemon::stt_models::ModelDefinition;
-use super_tts_daemon::stt_models::wasm::WasmBackend;
+use super_tts_daemon::tts_models::ModelDefinition;
+use super_tts_daemon::tts_models::wasm::WasmBackend;
 use super_tts_registry_types::manifest::Device;
 
 /// The mock synthesizes 960 samples of s16le at 24 kHz.

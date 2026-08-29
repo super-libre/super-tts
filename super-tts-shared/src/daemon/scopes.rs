@@ -10,15 +10,12 @@
 /// truth for `/auth/request` validation and the consent dialog; mirrors the
 /// scope catalog in `docs/protocol/auth.md`.
 pub const KNOWN_SCOPES: &[&str] = &[
-    "transcribe",
     "speak",
     "settings",
     "secrets",
     "status",
-    "recording_events",
     "playback_events",
     "audio_visualization",
-    "global_transcriptions",
     "daemon_status",
 ];
 
@@ -48,9 +45,20 @@ mod tests {
         );
     }
 
+    /// The STT-era scopes are gone with the endpoints they gated. They must
+    /// not linger as accepted-but-inert tokens: a client that asks for
+    /// `transcribe` and is granted it would believe it holds a permission the
+    /// daemon has no way to honor.
+    #[test]
+    fn removed_speech_to_text_scopes_are_not_accepted() {
+        for s in ["transcribe", "recording_events", "global_transcriptions"] {
+            assert!(!is_known_scope(s), "{s} belongs to the STT build");
+        }
+    }
+
     #[test]
     fn old_personas_and_garbage_are_rejected() {
-        for s in ["client", "widget", "", "Settings", "transcribe ", "global"] {
+        for s in ["client", "widget", "", "Settings", "speak ", "global"] {
             assert!(!is_known_scope(s), "{s:?} must not be a known scope");
         }
     }

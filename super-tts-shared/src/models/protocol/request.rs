@@ -8,10 +8,6 @@ use std::collections::HashMap;
 pub struct DaemonRequest {
     pub command: String,
     #[serde(default)]
-    pub audio_data: Option<Vec<f32>>,
-    #[serde(default)]
-    pub sample_rate: Option<u32>,
-    #[serde(default)]
     pub client_id: Option<String>,
 
     // Notification system fields
@@ -37,16 +33,6 @@ impl Validate for DaemonRequest {
     fn validate(&self) -> Result<(), ValidationError> {
         // Validate command string
         validation::validate_command(&self.command)?;
-
-        // Validate audio data if present
-        if let Some(ref audio_data) = self.audio_data {
-            validation::validate_audio_data(audio_data)?;
-        }
-
-        // Validate sample rate if present
-        if let Some(sample_rate) = self.sample_rate {
-            validation::validate_sample_rate(sample_rate)?;
-        }
 
         // Validate string fields
         validation::validate_optional_string(

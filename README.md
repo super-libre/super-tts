@@ -4,25 +4,22 @@
 
 # Super TTS
 
-**Speak into any app on Linux. Your words appear as text.**
+**Give any app on Linux a voice.**
 
-*One shortcut to dictate anywhere • Any model from a growing library • An open protocol any app can build on • Built in Rust*
+*Speak text from anywhere • Any model from a growing library • An open protocol any app can build on • Built in Rust*
 
 [![coverage](https://img.shields.io/endpoint?url=https://jorge-menjivar.github.io/super-tts/coverage/coverage.json)](https://jorge-menjivar.github.io/super-tts/coverage/)
 
 </div>
 
-https://github.com/user-attachments/assets/bbbe20c3-6802-4797-afc8-aa81d1b48415
-
-
 ## What is Super TTS?
 
-Super TTS makes speech-to-text with automatic text input **trivial on Linux, for everyone**. Bind a shortcut (Super+Space by convention), speak, and your words are typed straight into whatever app is focused, e.g. your editor, browser, chat, terminal. No copy-paste, no fiddling.
+Super TTS makes text-to-speech **trivial on Linux, for everyone**. Send it text and it speaks — from a shell pipeline, a keyboard shortcut, or an app that streams an LLM's reply as it is generated.
 
 Under the hood it's two things:
 
-- **A model-agnostic engine.** A background daemon installs speech models from a **library** of backends (local or cloud), loads one, and keeps it warm for instant transcription. You pick the model that fits your hardware and swap it whenever you like.
-- **An open protocol.** The daemon speaks a documented HTTP protocol over a local socket, so *any* app, in any language, can request transcriptions, stream live audio visualizations, or drive recording, with per-app consent. Super TTS's own desktop app, CLI, and COSMIC applet are just the first clients. See [Developers](#-developers).
+- **A model-agnostic engine.** A background daemon installs voice models from a **library** of backends (local or cloud), loads one, and keeps it warm so speech starts immediately. You pick the model that fits your hardware and swap it whenever you like.
+- **An open protocol.** The daemon speaks a documented HTTP protocol over a local socket, so *any* app, in any language, can make the machine talk, follow playback, or stream live audio visualizations — with per-app consent. Super TTS's own desktop app, CLI, and COSMIC applet are just the first clients. See [Developers](#-developers).
 
 ## 🚀 Installation
 
@@ -42,19 +39,19 @@ cd super-tts
 just install
 ```
 
-Either way you get the daemon, the `tts` CLI, a consent helper, the desktop app, and (on COSMIC) the panel applet, wired up as a `systemctl --user` service. Everything installs system-wide (root-owned, so the installer asks for sudo), while the daemon itself runs unprivileged in your user session. On COSMIC the installer offers to bind Super+Space → `tts record --write` for you. GPU acceleration comes from the model you run (see [Models](#-models)).
+Either way you get the daemon, the `tts` CLI, a consent helper, the desktop app, and (on COSMIC) the panel applet, wired up as a `systemctl --user` service. Everything installs system-wide (root-owned, so the installer asks for sudo), while the daemon itself runs unprivileged in your user session. GPU acceleration comes from the model you run (see [Models](#-models)).
 
 ## ⌨️ Using it
 
 ```bash
-tts record --write # Record and transcribes. Types the result after silence is detected or you run the command again.
+tts speak "The kettle is boiling."   # speak some text
+echo "Hello there." | tts speak      # …or pipe it in
+tts stop                             # fall silent
 ```
 
-Bind `tts record --write` to a key combo. Super+Space is the convention (the COSMIC installer does this for you; on other desktops add a custom shortcut for `tts record --write`). When you trigger it:
+`tts speak` returns as soon as the audio is queued — the daemon keeps talking after the command exits. A second `speak` interrupts the first, which is what "say this instead" means; `tts stop` silences it outright.
 
-1. `tts` asks the running daemon to start transcribing from your mic.
-2. You speak; the daemon transcribes your audio.
-3. When you stop (on silence or a second trigger), it types the transcription into the focused app.
+Both are worth binding to a key combo, `tts stop` especially.
 
 Manage the daemon with the usual systemd controls:
 
@@ -63,49 +60,34 @@ systemctl --user start super-tts      # or: enable / status / restart
 journalctl --user -u super-tts -f     # follow logs
 ```
 
-### Recording modes
-
-Two settings shape a session. Both live in the desktop app under **Settings** (or the daemon config); stop mode can also be set per-recording on the CLI.
-
-**Stop mode** - how a recording ends:
-
-| Mode                           | Behavior                                              |
-|--------------------------------|-------------------------------------------------------|
-| **Silence + Manual** (default) | Stops on silence detection or a second shortcut press |
-| **Silence Only**               | Stops only when silence is detected                   |
-| **Manual Only**                | Stops only on a second shortcut press                 |
+### Per-utterance options
 
 ```bash
-tts record --write --stop-mode manual_only
+tts speak --voice af_heart --speed 1.1 "Read this a little faster."
 ```
 
-**Write method** - how text is injected: **Auto** (default) tries the XDG Desktop Portal, then ydotool, then direct Wayland input. Force a specific one in Settings if auto-detection picks wrong.
+| Option           | Effect                                                                   |
+|------------------|--------------------------------------------------------------------------|
+| `--voice`        | A voice the loaded model declares. Defaults to the model's own default.  |
+| `--language`     | BCP-47 override, for multilingual models.                               |
+| `--speed`        | Rate multiplier. Models that can't vary rate ignore it.                 |
+| `--instructions` | Free-text delivery guidance, for models that accept it.                 |
+
+### Long text and streaming
+
+Long text is split on sentence boundaries so playback starts before the whole thing is synthesized. Markup that would otherwise be read out literally — emphasis markers, code fences, link targets, table pipes — is stripped first; numbers, dates, and currency are left exactly as written, because every model in scope reads them correctly and a wrong number-to-words is worse than none.
+
+An app generating text can stream it in as it arrives over a WebSocket, and the daemon speaks each sentence as it completes — so an LLM's opening line is heard while it is still writing the third. See [`/speak/stream`](./docs/protocol/endpoints/v1/speak/stream.md).
 
 ## 🤖 Models
 
-Models come from a **library** of backends you install on demand. Open the app, go to **Library → Browse**, install a backend, and it appears in the model selector. Some run **locally** (your audio never leaves your machine); others are **online** providers you reach with your own API, which is stored securely in your system keyring (GNOME Keyring, KWallet, …).
+Models come from a **library** of backends you install on demand. Open the app, go to **Library → Browse**, install a backend, and it appears in the model selector. Some run **locally** (your text never leaves your machine); others are **online** providers you reach with your own API key, which is stored securely in your system keyring (GNOME Keyring, KWallet, …).
 
-### Recommended models
+> **The catalog is empty right now.** Super TTS is a new engine and no voice backends have been published to it yet. The engine, the protocol, and the installer all work end to end — there is simply nothing in the library to install until the first backends ship. If you want to be first, anyone can [publish one](./docs/protocol/README.md#add-your-own-model).
 
-**Local** - everything stays on your device.
+> **GPU acceleration** is a property of the model, not a separate build of the app. Install a GPU-capable backend and the daemon downloads the build matched to your GPU automatically. You just need an up-to-date driver.
 
-| Model              | Best for                                              |
-|--------------------|-------------------------------------------------------|
-| **Voxtral** (mini / small) | High accuracy; needs an **NVIDIA GPU** (CUDA). |
-| **Qwen3-ASR** (0.6b / 1.7b) | Fast, multilingual; runs on **CPU or an NVIDIA GPU** (CUDA). |
-| **Whisper** (tiny → large) | Versatile and battle-tested; `tiny`/`base` are great **CPU** defaults. |
-
-**Online** - bring your own API key.
-
-| Provider   | Notable models                                       |
-|------------|------------------------------------------------------|
-| **Mistral**  | `voxtral-mini-latest`, plus a realtime Voxtral model |
-| **OpenAI**   | `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` |
-| **Deepgram** | `nova-3`                                              |
-
-> **GPU acceleration** is a property of the model, not a separate build of the app. Install a GPU-capable backend (like Voxtral or Qwen3-ASR) and the daemon downloads the build matched to your NVIDIA GPU automatically. You just need an up-to-date driver.
-
-This is a snapshot. The app always shows the current catalog, published live at [`jorge-menjivar.github.io/super-tts/index.json`](https://jorge-menjivar.github.io/super-tts/index.json). Want a model that isn't there? Anyone can [publish one](./docs/protocol/README.md#add-your-own-model).
+The app always shows the current catalog, published live at [`jorge-menjivar.github.io/super-tts/index.json`](https://jorge-menjivar.github.io/super-tts/index.json).
 
 ## 🖼️ Screenshots
 
@@ -133,17 +115,7 @@ This is a snapshot. The app always shows the current catalog, published live at 
 </tr>
 </table>
 
-**Settings** — tune audio feedback, recording behavior, and text input.
-
-<table>
-<tr>
-<td align="center"><strong>Customization</strong><br><img src=".github/assets/screenshots/app-8.png" width="270"></td>
-<td align="center"><strong>Recording</strong><br><img src=".github/assets/screenshots/app-9.png" width="270"></td>
-<td align="center"><strong>Input simulation</strong><br><img src=".github/assets/screenshots/app-10.png" width="270"></td>
-</tr>
-</table>
-
-**Panel visualizer** — the COSMIC applet shows your mic input live in the panel, in three styles.
+**Panel visualizer** — the COSMIC applet shows the audio live in the panel, in three styles.
 
 <p align="center"><strong>Waveforms</strong><br><img src=".github/assets/screenshots/visualization-waveforms.png" width="100%"></p>
 <p align="center"><strong>Equalizer</strong><br><img src=".github/assets/screenshots/visualization-equalizer.png" width="100%"></p>
@@ -153,15 +125,15 @@ This is a snapshot. The app always shows the current catalog, published live at 
 
 - **`tts: command not found`**: binaries are installed system-wide and are on `PATH` by default — restart your terminal so it rehashes, and check the installer finished without errors.
 - **Daemon won't start / misbehaves**: check `journalctl --user -u super-tts -n 50`.
-- **Transcriptions seem less accurate than they should be**: your microphone input volume may be set too high or too low. Adjust the mic volume in your system sound settings and try again.
-- **Typing doesn't work in some apps**: [`ydotool`](https://github.com/ReimuNotMoe/ydotool) types reliably across virtually all apps. Install it via your package manager, then try it out first by running `sudo ydotoold --socket-path="$HOME/.ydotool_socket" --socket-own="$(id -u):$(id -g)"` in a terminal and setting the write method to **ydotool** in Settings. If that fixes typing, make it permanent by enabling the service (e.g. `systemctl --user enable --now ydotool`).
+- **`tts speak` succeeds but nothing is heard**: the command returns as soon as the audio is queued, so a silent success means either no model is loaded (`tts status` will say so) or the output device is muted. Check your system volume and the daemon log.
+- **Speech is choppy on a remote model**: the daemon starts playing as soon as it has enough audio buffered, so a slow provider can underrun. A local model removes the round trip.
 
 ## 🧑‍💻 Developers
 
 Super TTS is built to be built on. The details live in developer-facing docs:
 
-- **Build a client** — get transcriptions, event streams, or recording control into your own app, in any language, over the documented HTTP protocol → **[docs/protocol/](./docs/protocol/)**
-- **Add your own model** — package a speech model as a backend the daemon can install and run, then publish it to the catalog → **[docs/protocol/](./docs/protocol/)** and **[registry/README.md](./registry/README.md)**
+- **Build a client** — make the machine talk, follow playback, or stream text in from your own app, in any language, over the documented HTTP protocol → **[docs/protocol/](./docs/protocol/)**
+- **Add your own model** — package a voice model as a backend the daemon can install and run, then publish it to the catalog → **[docs/protocol/](./docs/protocol/)** and **[registry/README.md](./registry/README.md)**
 - **Contribute** — build from source, workspace layout, and the PR workflow → **[CONTRIBUTING.md](./CONTRIBUTING.md)**
 
 Architecture and the security model live in **[docs/](./docs/)**.

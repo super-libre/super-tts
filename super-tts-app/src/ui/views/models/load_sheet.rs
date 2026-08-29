@@ -30,7 +30,7 @@ pub(super) fn no_backend_empty_state<'a>() -> Element<'a, Message> {
         .push(ring)
         .push(text::title4("No backend loaded"))
         .push(
-            text::body("Load a backend to start transcribing.")
+            text::body("Load a backend to start speaking.")
                 .class(cosmic::theme::Text::Color(muted_text_color())),
         )
         .push(
@@ -62,7 +62,7 @@ pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
         .width(Length::Fill)
         .push(
             text::caption(
-                "Pick which backend powers transcription. Add and manage backends in your Library.",
+                "Pick which backend powers speech. Add and manage backends in your Library.",
             )
             .class(cosmic::theme::Text::Color(muted)),
         );

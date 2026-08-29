@@ -21,7 +21,7 @@ pub use messages::*;
 
 use crate::config::AppletConfig;
 use crate::daemon::RetryStrategy;
-use crate::models::state::{DaemonConnectionState, IsOpen, RecordingState};
+use crate::models::state::{DaemonConnectionState, IsOpen, SpeechState};
 use crate::models::theme::VisualizationSide;
 use crate::ui::components::sound_visualization::VisualizationComponent;
 use crate::ui::components::working_animation_component::WorkingAnimationComponent;
@@ -29,7 +29,7 @@ use subscription::{PING_INTERVAL_SECS, UdpSubscriptionId, applet_events_subscrip
 
 pub struct SuperTtsApplet {
     core: cosmic::app::Core,
-    recording_state: RecordingState,
+    speech_state: SpeechState,
     daemon_state: DaemonConnectionState,
     popup: Option<window::Id>,
     socket_path: PathBuf,
@@ -40,7 +40,7 @@ pub struct SuperTtsApplet {
     visualization: VisualizationComponent,
     working_animation: WorkingAnimationComponent,
     /// Wall-clock start of the current Processing phase; `Some` only while
-    /// transcribing, used to derive the animation's elapsed time.
+    /// synthesizing, used to derive the animation's elapsed time.
     working_anim_start: Option<Instant>,
     config: AppletConfig,
     icon_alignment_model: SingleSelectModel,
@@ -95,7 +95,7 @@ impl cosmic::Application for SuperTtsApplet {
                 .map(|_| Message::PingTimeout),
         ];
         if self.daemon_state == DaemonConnectionState::Connected
-            && matches!(self.recording_state, RecordingState::Processing)
+            && matches!(self.speech_state, SpeechState::Synthesizing)
         {
             subs.push(
                 cosmic::iced::time::every(Duration::from_millis(33))

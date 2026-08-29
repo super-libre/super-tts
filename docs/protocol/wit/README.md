@@ -4,9 +4,9 @@ This directory holds custom WIT package definitions that are part of the Super T
 
 ## `realtime.wit` — `super-tts:realtime@0.1.0`
 
-Defines two interfaces a wasm backend uses for realtime (WebSocket-based) transcription:
+Defines two interfaces a wasm backend uses for realtime (WebSocket-based) sessions:
 
-- `ws` — outgoing WebSocket client. The backend imports this to reach an upstream realtime API (e.g. Mistral's `wss://api.mistral.ai/v1/audio/transcriptions/realtime`). The daemon enforces the backend's `[network].allowed_hosts` and SSRF resolver.
+- `ws` — outgoing WebSocket client. The backend imports this to reach an upstream realtime API. The daemon enforces the backend's `[network].allowed_hosts` and SSRF resolver.
 - `ws-server` — incoming WebSocket server. The backend exports this so the daemon can hand it a consumer WebSocket session.
 
 A backend that needs realtime support:

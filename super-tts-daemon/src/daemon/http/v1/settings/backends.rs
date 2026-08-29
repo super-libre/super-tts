@@ -24,11 +24,11 @@ pub(crate) async fn uninstall_backend(
     let source = urlencoding::decode(&source_encoded)
         .map_or_else(|_| source_encoded.clone(), std::borrow::Cow::into_owned);
 
-    // Refuse to mutate the backend set mid-recording / mid-realtime — the same
+    // Refuse to mutate the backend set mid-utterance / mid-realtime — the same
     // guard the model/backend switch commands use. Removing a backend (and the
     // `refresh_backends` that follows) under an in-flight session would strand
     // state the session still depends on.
-    if s.daemon.switch_guard().await.is_some() {
+    if s.daemon.switch_guard().is_some() {
         return registry_error(StatusCode::CONFLICT, "backend_busy");
     }
 

@@ -62,7 +62,7 @@ pub async fn run() -> Result<()> {
     let config = DaemonConfig::load();
 
     info!("Starting Super TTS Daemon");
-    info!("Model: {}", config.transcription.preferred_model);
+    info!("Model: {}", config.synthesis.preferred_model);
     info!("Device: {}", config.device.preferred_device);
     info!("Audio theme: {}", config.audio.theme);
 
@@ -77,7 +77,7 @@ pub async fn run() -> Result<()> {
     // unload path — sweeping at startup is the only deterministic way to
     // recover from that. Only meaningful with the subprocess transport.
     #[cfg(feature = "subprocess-backends")]
-    crate::stt_models::subprocess::cleanup_orphan_units().await;
+    crate::tts_models::subprocess::cleanup_orphan_units().await;
 
     // Set up Ctrl+C handler
     let shutdown_tx = daemon.shutdown_tx.clone();
@@ -135,7 +135,7 @@ pub async fn run() -> Result<()> {
     // `std::process::exit` below skips every `Drop` destructor — without
     // this explicit unload the `systemd-run --user` subprocess backend
     // (e.g. Voxtral) would be orphaned. Call the daemon's shutdown unload
-    // path so `Transcribe::shutdown()` runs in an async context and stops
+    // path so `Synthesize::shutdown()` runs in an async context and stops
     // the unit cleanly.
     daemon.shutdown_unload().await;
 

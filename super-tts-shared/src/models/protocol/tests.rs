@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
-use crate::models::recording_stop_mode::RecordingStopMode;
 use serde_json::{Value, json};
 
 fn make_request(command: &str, data: Option<Value>) -> DaemonRequest {
     DaemonRequest {
         command: command.to_string(),
-        audio_data: None,
-        sample_rate: None,
         client_id: None,
         event_types: None,
         client_info: None,
@@ -17,113 +14,6 @@ fn make_request(command: &str, data: Option<Value>) -> DaemonRequest {
         data,
         language: None,
         enabled: None,
-    }
-}
-
-#[test]
-fn record_command_parses_stop_mode() {
-    let request = make_request(
-        "record",
-        Some(json!({
-            "write_mode": false,
-            "stop_mode": "manual_only",
-        })),
-    );
-    let command = Command::try_from(request).expect("record command should parse");
-    match command {
-        Command::Record {
-            write_mode,
-            stop_mode,
-            ..
-        } => {
-            assert!(!write_mode);
-            assert_eq!(stop_mode, Some(RecordingStopMode::ManualOnly));
-        }
-        _ => panic!("expected Command::Record"),
-    }
-}
-
-#[test]
-fn record_command_without_stop_mode_defaults_to_none() {
-    let request = make_request("record", Some(json!({ "write_mode": true })));
-    let command = Command::try_from(request).expect("record command should parse");
-    match command {
-        Command::Record {
-            write_mode,
-            stop_mode,
-            ..
-        } => {
-            assert!(write_mode);
-            assert_eq!(stop_mode, None);
-        }
-        _ => panic!("expected Command::Record"),
-    }
-}
-
-#[test]
-fn record_command_wait_true() {
-    let request = make_request(
-        "record",
-        Some(json!({
-            "write_mode": false,
-            "stop_mode": "manual_only",
-            "wait": true,
-        })),
-    );
-    let command = Command::try_from(request).expect("record command should parse");
-    match command {
-        Command::Record { wait, .. } => assert!(wait),
-        _ => panic!("expected Command::Record"),
-    }
-}
-
-#[test]
-fn record_command_wait_defaults_to_false() {
-    let request = make_request("record", Some(json!({ "write_mode": false })));
-    let command = Command::try_from(request).expect("record command should parse");
-    match command {
-        Command::Record { wait, .. } => assert!(!wait),
-        _ => panic!("expected Command::Record"),
-    }
-}
-
-#[test]
-fn record_command_invalid_stop_mode_is_rejected() {
-    // Tier 1 #26: a present-but-unknown stop_mode is a bad request — reject it
-    // (not silently drop to None), consistent with the SET path.
-    let request = make_request(
-        "record",
-        Some(json!({
-            "write_mode": false,
-            "stop_mode": "not_a_real_mode",
-        })),
-    );
-    assert!(Command::try_from(request).is_err());
-}
-
-#[test]
-fn set_recording_stop_mode_invalid_is_rejected() {
-    // Tier 1 #26: an unknown mode returns an error and leaves the stored
-    // setting unchanged, rather than silently persisting the default.
-    let request = make_request(
-        "set_recording_stop_mode",
-        Some(json!({ "mode": "not_a_real_mode" })),
-    );
-    assert!(Command::try_from(request).is_err());
-}
-
-#[test]
-fn record_command_valid_stop_mode_parses() {
-    // A well-formed override still resolves to the parsed value.
-    let request = make_request(
-        "record",
-        Some(json!({ "write_mode": false, "stop_mode": "manual_only" })),
-    );
-    match Command::try_from(request).expect("record command should parse") {
-        Command::Record { stop_mode, .. } => {
-            assert_eq!(stop_mode, Some(RecordingStopMode::ManualOnly));
-        }
-        _ => panic!("expected Command::Record"),
     }
 }
 
@@ -194,8 +84,8 @@ fn response_allow_online_models_skipped_when_none() {
 fn set_model_parses_online_models() {
     let cases: &[&str] = &[
         "whisper-1",
-        "gpt-4o-transcribe",
-        "gpt-4o-mini-transcribe",
+        "gpt-4o-mini-tts",
+        "tts-1-hd",
         "voxtral-mini-latest",
         "nova-3",
     ];
@@ -247,21 +137,6 @@ fn set_model_passes_source_repo_through() {
             assert_eq!(source, "github.com/super-tts/voxtral");
         }
         _ => panic!("expected Command::SetModel"),
-    }
-}
-
-#[test]
-fn set_recording_stop_mode_parses() {
-    let request = make_request(
-        "set_recording_stop_mode",
-        Some(json!({ "mode": "silence_only" })),
-    );
-    let command = Command::try_from(request).expect("command should parse");
-    match command {
-        Command::SetRecordingStopMode { mode } => {
-            assert_eq!(mode, RecordingStopMode::SilenceOnly);
-        }
-        _ => panic!("expected Command::SetRecordingStopMode"),
     }
 }
 
@@ -453,37 +328,6 @@ fn response_active_backend_absent_is_skipped() {
         serialized.get("active_backend").is_none(),
         "skip_serializing_if=Option::is_none should omit the field"
     );
-}
-
-#[test]
-fn transcribe_command_carries_audio_sample_rate_and_language() {
-    let mut request = make_request("transcribe", None);
-    request.audio_data = Some(vec![0.1, -0.1, 0.2]);
-    request.sample_rate = Some(16000);
-    request.language = Some("en".to_string());
-    match Command::try_from(request).expect("transcribe command should parse") {
-        Command::Transcribe {
-            audio_data,
-            sample_rate,
-            language,
-            ..
-        } => {
-            assert_eq!(audio_data.len(), 3);
-            assert_eq!(sample_rate, 16000);
-            assert_eq!(language.as_deref(), Some("en"));
-        }
-        _ => panic!("expected Command::Transcribe"),
-    }
-}
-
-#[test]
-fn record_command_carries_language_override() {
-    let mut request = make_request("record", Some(json!({ "write_mode": false })));
-    request.language = Some("fr".to_string());
-    match Command::try_from(request).expect("record command should parse") {
-        Command::Record { language, .. } => assert_eq!(language.as_deref(), Some("fr")),
-        _ => panic!("expected Command::Record"),
-    }
 }
 
 /// `resolved_accel` is doubly `Option` so a response that never mentions

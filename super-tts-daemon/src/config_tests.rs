@@ -17,12 +17,8 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-tiny"
-write_mode = false
-preview_typing_enabled = false
-recording_stop_mode = "silence_and_manual"
-write_method = "auto"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert!(!config.online.allow_online_models);
@@ -42,30 +38,30 @@ fn config_with_online_section_round_trips() {
 fn config_with_online_model_preferred_round_trips() {
     let mut config = DaemonConfig::default();
     config.online.allow_online_models = true;
-    config.transcription.preferred_model = "whisper-1".to_string();
+    config.synthesis.preferred_model = "whisper-1".to_string();
 
     let toml_str = toml::to_string_pretty(&config).expect("should serialize");
     let parsed: DaemonConfig = toml::from_str(&toml_str).expect("should deserialize");
     assert!(parsed.online.allow_online_models);
-    assert_eq!(parsed.transcription.preferred_model, "whisper-1");
+    assert_eq!(parsed.synthesis.preferred_model, "whisper-1");
 }
 
 #[test]
 fn config_preserves_all_online_model_variants() {
     for name in [
         "whisper-1",
-        "gpt-4o-transcribe",
-        "gpt-4o-mini-transcribe",
-        "voxtral-mini-transcribe-v2",
+        "gpt-4o-mini-tts",
+        "tts-1-hd",
+        "eleven-multilingual-v2",
         "nova-3",
     ] {
         let model = name.to_string();
         let mut config = DaemonConfig::default();
-        config.transcription.preferred_model = model.clone();
+        config.synthesis.preferred_model = model.clone();
 
         let toml_str = toml::to_string_pretty(&config).expect("should serialize");
         let parsed: DaemonConfig = toml::from_str(&toml_str).expect("should deserialize");
-        assert_eq!(parsed.transcription.preferred_model, model);
+        assert_eq!(parsed.synthesis.preferred_model, model);
     }
 }
 
@@ -78,7 +74,7 @@ fn online_config_default_is_disabled() {
 #[test]
 fn default_config_has_no_custom_models_dir() {
     let config = DaemonConfig::default();
-    assert!(config.transcription.custom_models_dir.is_none());
+    assert!(config.synthesis.custom_models_dir.is_none());
 }
 
 #[test]
@@ -91,26 +87,22 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-tiny"
-write_mode = false
-preview_typing_enabled = false
-recording_stop_mode = "silence_and_manual"
-write_method = "auto"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
-    assert!(config.transcription.custom_models_dir.is_none());
+    assert!(config.synthesis.custom_models_dir.is_none());
 }
 
 #[test]
 fn config_with_custom_models_dir_round_trips() {
     let mut config = DaemonConfig::default();
-    config.transcription.custom_models_dir = Some("/tmp/models".to_string());
+    config.synthesis.custom_models_dir = Some("/tmp/models".to_string());
 
     let toml_str = toml::to_string_pretty(&config).expect("should serialize");
     let parsed: DaemonConfig = toml::from_str(&toml_str).expect("should deserialize");
     assert_eq!(
-        parsed.transcription.custom_models_dir.as_deref(),
+        parsed.synthesis.custom_models_dir.as_deref(),
         Some("/tmp/models")
     );
 }
@@ -121,7 +113,7 @@ fn config_with_none_custom_models_dir_round_trips() {
 
     let toml_str = toml::to_string_pretty(&config).expect("should serialize");
     let parsed: DaemonConfig = toml::from_str(&toml_str).expect("should deserialize");
-    assert!(parsed.transcription.custom_models_dir.is_none());
+    assert!(parsed.synthesis.custom_models_dir.is_none());
 }
 
 #[test]
@@ -175,9 +167,8 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-1"
-write_mode = false
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert!(config.backends.options.is_empty());
@@ -186,7 +177,7 @@ write_mode = false
 /// A pre-existing TOML config carrying a stale provider/source string
 /// (e.g. `PascalCase` variant names from a prior build) must keep loading
 /// — falling back to the type's `Default` rather than failing the whole
-/// `[transcription]` section. The user's other settings have to survive.
+/// `[synthesis]` section. The user's other settings have to survive.
 #[test]
 fn config_with_legacy_provider_string_falls_back() {
     let toml_str = r#"
@@ -197,14 +188,10 @@ preferred_device = "cpu"
 theme = "silent"
 volume = 75
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-tiny"
 preferred_provider = "LocalWhisper"
 preferred_source = "BadValue"
-write_mode = false
-preview_typing_enabled = true
-recording_stop_mode = "silence_and_manual"
-write_method = "auto"
 
 [online]
 allow_online_models = true
@@ -213,11 +200,10 @@ allow_online_models = true
         toml::from_str(toml_str).expect("legacy provider string should not fail the whole config");
     // Both are free-form strings now — any value is accepted, and the legacy
     // provider is carried through rather than rejected or dropped.
-    assert_eq!(config.transcription.preferred_source, "BadValue");
-    assert_eq!(config.transcription.preferred_provider, "LocalWhisper");
+    assert_eq!(config.synthesis.preferred_source, "BadValue");
+    assert_eq!(config.synthesis.preferred_provider, "LocalWhisper");
     // Other fields must survive the field-level fallback.
-    assert_eq!(config.transcription.preferred_model, "whisper-tiny");
-    assert!(config.transcription.preview_typing_enabled);
+    assert_eq!(config.synthesis.preferred_model, "whisper-tiny");
     assert_eq!(config.audio.theme, AudioTheme::Silent);
     assert_eq!(config.audio.volume, 75);
     assert!(config.online.allow_online_models);
@@ -233,29 +219,25 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-base"
 preferred_provider = "local_voxtral"
 preferred_source = "github.com/super-tts/voxtral"
-write_mode = false
-preview_typing_enabled = false
-recording_stop_mode = "silence_and_manual"
-write_method = "auto"
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
     assert_eq!(
-        config.transcription.preferred_source,
+        config.synthesis.preferred_source,
         "github.com/super-tts/voxtral"
     );
-    assert_eq!(config.transcription.preferred_provider, "local_voxtral");
+    assert_eq!(config.synthesis.preferred_provider, "local_voxtral");
 }
 
-/// `transcription.active_backend` defaults to `None` (no backend selected
+/// `synthesis.active_backend` defaults to `None` (no backend selected
 /// at install time → daemon idle).
 #[test]
 fn active_backend_default_is_none() {
     let config = DaemonConfig::default();
-    assert!(config.transcription.active_backend.is_none());
+    assert!(config.synthesis.active_backend.is_none());
 }
 
 /// A persisted relative dir round-trips through TOML, preserving the
@@ -263,7 +245,7 @@ fn active_backend_default_is_none() {
 #[test]
 fn active_backend_round_trips_through_toml() {
     let mut config = DaemonConfig::default();
-    config.transcription.active_backend = Some("mistral".to_string());
+    config.synthesis.active_backend = Some("mistral".to_string());
 
     let serialized = toml::to_string_pretty(&config).expect("serialize");
     assert!(
@@ -272,10 +254,7 @@ fn active_backend_round_trips_through_toml() {
     );
 
     let parsed: DaemonConfig = toml::from_str(&serialized).expect("deserialize");
-    assert_eq!(
-        parsed.transcription.active_backend.as_deref(),
-        Some("mistral")
-    );
+    assert_eq!(parsed.synthesis.active_backend.as_deref(), Some("mistral"));
 }
 
 /// A pre-existing config that predates the `active_backend` field must
@@ -290,12 +269,11 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-tiny"
-write_mode = false
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("should deserialize");
-    assert!(config.transcription.active_backend.is_none());
+    assert!(config.synthesis.active_backend.is_none());
 }
 
 #[test]
@@ -309,47 +287,13 @@ preferred_device = "cuda"
 theme = "Nonexistent"
 volume = 80
 
-[transcription]
+[synthesis]
 preferred_model = "WhisperTiny"
-write_mode = true
-recording_stop_mode = "manual_only"
-write_method = "ydotool"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml_str).expect("must parse, not error");
     assert_eq!(cfg.audio.theme, AudioTheme::default()); // bad field reset
     assert_eq!(cfg.audio.volume, 80); // everything else preserved
     assert_eq!(cfg.device.preferred_device, "cuda");
-    assert!(cfg.transcription.write_mode);
-    assert_eq!(
-        cfg.transcription.recording_stop_mode,
-        RecordingStopMode::ManualOnly
-    );
-    assert_eq!(cfg.transcription.write_method, WriteMethod::Ydotool);
-}
-
-#[test]
-fn daemon_bad_stop_mode_and_write_method_fall_back_preserving_rest() {
-    let toml_str = r#"
-[device]
-preferred_device = "cpu"
-
-[audio]
-theme = "gentle"
-volume = 100
-
-[transcription]
-preferred_model = "WhisperTiny"
-write_mode = false
-recording_stop_mode = "BogusMode"
-write_method = "BogusMethod"
-"#;
-    let cfg: DaemonConfig = toml::from_str(toml_str).expect("must parse, not error");
-    assert_eq!(cfg.audio.theme, AudioTheme::Gentle); // preserved
-    assert_eq!(
-        cfg.transcription.recording_stop_mode,
-        RecordingStopMode::default()
-    );
-    assert_eq!(cfg.transcription.write_method, WriteMethod::default());
 }
 
 #[test]
@@ -373,7 +317,7 @@ fn a_persisted_device_preference_normalizes_and_a_bogus_one_falls_back_to_cpu() 
         format!(
             "[device]\npreferred_device = \"{device}\"\n\
              [audio]\ntheme = \"classic\"\nvolume = 100\n\
-             [transcription]\npreferred_model = \"\"\nwrite_mode = false\n"
+             [synthesis]\npreferred_model = \"\"\nwrite_mode = false\n"
         )
     };
 
@@ -399,113 +343,6 @@ fn a_persisted_device_preference_normalizes_and_a_bogus_one_falls_back_to_cpu() 
     assert_eq!(cfg.device.preferred_device, "cpu");
 }
 
-/// The committed v0.1.3 `daemon.toml` fixture (customized, not defaults). The
-/// canonical copy lives in the on-disk corpus so the release gate and these
-/// detailed assertions test the same bytes.
-fn v0_1_3_daemon_fixture() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../fixtures/configs/v0.1.3/daemon.toml");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-}
-
-#[test]
-fn v0_1_3_full_daemon_config_loads_and_migrates() {
-    let (cfg, was_reset) = DaemonConfig::parse_or_reset(&v0_1_3_daemon_fixture());
-    assert!(!was_reset, "a valid v0.1.3 config must load, not reset");
-
-    // `preferred_device` normalizes rather than surviving verbatim: v0.1.3
-    // wrote the pre-vocabulary "cuda", which now loads as "gpu" (see
-    // `a_persisted_device_preference_normalizes_and_a_bogus_one_falls_back_to_cpu`).
-    assert_eq!(cfg.device.preferred_device, "gpu");
-    assert_eq!(cfg.audio.volume, 80);
-    assert!(cfg.transcription.write_mode);
-    assert!(!cfg.transcription.preview_typing_enabled);
-    assert!(cfg.online.allow_online_models);
-
-    // Settings-enum fields migrate to default: v0.1.3 persisted them in the old
-    // PascalCase form (`Gentle`/`ManualOnly`/`Ydotool`), which the snake_case
-    // wire/config form no longer recognizes, so `deserialize_or_default` degrades
-    // each to its default rather than failing the whole load. (The whole config
-    // still loads cleanly — `was_reset` is false above.)
-    assert_eq!(cfg.audio.theme, AudioTheme::default());
-    assert_eq!(
-        cfg.transcription.recording_stop_mode,
-        RecordingStopMode::default()
-    );
-    assert_eq!(cfg.transcription.write_method, WriteMethod::default());
-
-    // `preferred_model` widened from STTModel enum to String: the old value is
-    // retained verbatim (daemon model loader has its own fallback downstream).
-    assert_eq!(cfg.transcription.preferred_model, "WhisperLargeV3Turbo");
-
-    // Removed field dropped (no `deny_unknown_fields`); the replacement is None.
-    assert_eq!(cfg.transcription.custom_models_dir, None);
-
-    // New fields materialize at their defaults.
-    assert_eq!(cfg.transcription.preferred_source, "");
-    assert_eq!(cfg.transcription.backends_dir, None);
-    assert_eq!(cfg.transcription.active_backend, None);
-    assert_eq!(cfg.transcription.primary_language, None);
-    assert!(cfg.backends.options.is_empty());
-    assert!(cfg.backends.models.is_empty());
-    assert!(
-        cfg.update.check_enabled,
-        "new [update] section defaults on old configs"
-    );
-}
-
-#[test]
-fn v0_1_3_every_preferred_model_variant_loads() {
-    // Every STTModel serde name v0.1.3 could have written to `preferred_model`.
-    const V0_1_3_MODELS: &[&str] = &[
-        "WhisperTiny",
-        "WhisperTinyEn",
-        "WhisperBase",
-        "WhisperBaseEn",
-        "WhisperSmall",
-        "WhisperSmallEn",
-        "WhisperMedium",
-        "WhisperMediumEn",
-        "WhisperLarge",
-        "WhisperLargeV2",
-        "WhisperLargeV3",
-        "WhisperLargeV3Turbo",
-        "WhisperDistilMediumEn",
-        "WhisperDistilLargeV2",
-        "WhisperDistilLargeV3",
-        "VoxtralSmall",
-        "VoxtralMini",
-        "OpenAIWhisper1",
-        "OpenAIGpt4oTranscribe",
-        "OpenAIGpt4oMiniTranscribe",
-        "MistralVoxtralMiniTranscribeV2",
-        "DeepgramNova3",
-    ];
-    for model in V0_1_3_MODELS {
-        let toml_str = format!(
-            "[device]\npreferred_device = \"cpu\"\n\
-             [audio]\ntheme = \"Classic\"\nvolume = 100\n\
-             [transcription]\npreferred_model = \"{model}\"\nwrite_mode = false\n"
-        );
-        let (cfg, was_reset) = DaemonConfig::parse_or_reset(&toml_str);
-        assert!(!was_reset, "v0.1.3 model {model} must load, not reset");
-        assert_eq!(cfg.transcription.preferred_model, *model);
-    }
-}
-
-#[test]
-fn v0_1_3_config_reserializes_to_stable_canonical() {
-    // load() rewrites a migrated config in canonical form; that rewrite must
-    // itself be a valid, stable current config (backends empty → no HashMap
-    // ordering nondeterminism).
-    let (cfg, _) = DaemonConfig::parse_or_reset(&v0_1_3_daemon_fixture());
-    let s1 = toml::to_string_pretty(&cfg).expect("serialize migrated config");
-    let (cfg2, was_reset) = DaemonConfig::parse_or_reset(&s1);
-    assert!(!was_reset, "canonical rewrite must re-parse cleanly");
-    let s2 = toml::to_string_pretty(&cfg2).expect("serialize round-trip");
-    assert_eq!(s1, s2, "canonical form must be idempotent");
-}
-
 #[test]
 fn cleared_preferred_model_persists_as_idle_with_backend_kept() {
     // Invariant behind the unload path (`clear_preferred_model`): dropping the
@@ -513,55 +350,27 @@ fn cleared_preferred_model_persists_as_idle_with_backend_kept() {
     // selected, and that state must survive a save/reload so a daemon restart
     // stays idle instead of reloading the just-unloaded model.
     let mut config = DaemonConfig::default();
-    config.transcription.preferred_model = "whisper-large-v3".to_string();
-    config.transcription.preferred_source = "openai-whisper".to_string();
-    config.transcription.active_backend = Some("openai-whisper".to_string());
+    config.synthesis.preferred_model = "whisper-large-v3".to_string();
+    config.synthesis.preferred_source = "openai-whisper".to_string();
+    config.synthesis.active_backend = Some("openai-whisper".to_string());
 
     // Simulate the clear (the method itself also calls save(), which touches
     // the real config path, so exercise the field effect directly).
-    config.transcription.preferred_model = String::new();
-    config.transcription.preferred_source = String::new();
+    config.synthesis.preferred_model = String::new();
+    config.synthesis.preferred_source = String::new();
 
     let toml_str = toml::to_string_pretty(&config).expect("should serialize");
     let (parsed, was_reset) = DaemonConfig::parse_or_reset(&toml_str);
     assert!(!was_reset, "cleared config must re-parse cleanly");
     assert!(
-        parsed.transcription.preferred_model.is_empty(),
+        parsed.synthesis.preferred_model.is_empty(),
         "restart must not reload an unloaded model"
     );
-    assert!(parsed.transcription.preferred_source.is_empty());
+    assert!(parsed.synthesis.preferred_source.is_empty());
     assert_eq!(
-        parsed.transcription.active_backend.as_deref(),
+        parsed.synthesis.active_backend.as_deref(),
         Some("openai-whisper"),
         "unload keeps the active backend selected"
-    );
-}
-
-#[test]
-fn all_published_daemon_configs_load_cleanly() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/configs");
-    let mut checked = 0;
-    for entry in std::fs::read_dir(&dir).expect("fixtures/configs dir must exist") {
-        let version_dir = entry.expect("readable dir entry").path();
-        if !version_dir.is_dir() {
-            continue; // skip README.md and any other non-version files
-        }
-        let fixture = version_dir.join("daemon.toml");
-        if !fixture.exists() {
-            continue;
-        }
-        let content = std::fs::read_to_string(&fixture).expect("read daemon.toml fixture");
-        let (_, was_reset) = DaemonConfig::parse_or_reset(&content);
-        assert!(
-            !was_reset,
-            "daemon fixture {} must load cleanly (no reset)",
-            fixture.display()
-        );
-        checked += 1;
-    }
-    assert!(
-        checked >= 4,
-        "expected >= 4 daemon fixtures (v0.1.0-v0.1.3), found {checked}"
     );
 }
 
@@ -581,19 +390,16 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "voxtral-mini"
 preferred_provider = "local_voxtral"
 preferred_source = "github.com/super-tts/voxtral"
-write_mode = false
-preview_typing_enabled = false
-recording_stop_mode = "silence_and_manual"
 
 [online]
 allow_online_models = false
 "#;
     let config: DaemonConfig = toml::from_str(toml_str).expect("fixture parses");
-    assert_eq!(config.transcription.preferred_provider, "local_voxtral");
+    assert_eq!(config.synthesis.preferred_provider, "local_voxtral");
 
     let written = toml::to_string_pretty(&config).expect("serializes");
     assert!(
@@ -614,7 +420,7 @@ fn a_model_switch_updates_preferred_provider() {
         "github.com/super-tts/voxtral".to_string(),
         Some("local_voxtral".to_string()),
     );
-    assert_eq!(config.transcription.preferred_provider, "local_voxtral");
+    assert_eq!(config.synthesis.preferred_provider, "local_voxtral");
 
     // Switching to a model from another backend must not leave the old one.
     config.update_preferred_model(
@@ -622,7 +428,7 @@ fn a_model_switch_updates_preferred_provider() {
         "github.com/super-tts/whisper".to_string(),
         Some("local_whisper".to_string()),
     );
-    assert_eq!(config.transcription.preferred_provider, "local_whisper");
+    assert_eq!(config.synthesis.preferred_provider, "local_whisper");
 
     // A model whose manifest declares none clears it rather than keeping a
     // provider that belongs to a different model.
@@ -631,7 +437,7 @@ fn a_model_switch_updates_preferred_provider() {
         "github.com/super-tts/deepgram".to_string(),
         None,
     );
-    assert_eq!(config.transcription.preferred_provider, "");
+    assert_eq!(config.synthesis.preferred_provider, "");
 }
 
 /// A stored method round-trips.
@@ -645,15 +451,12 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper"
-notification_method = "dbus"
+notification_method = "off"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml).unwrap();
-    assert_eq!(
-        cfg.transcription.notification_method,
-        NotificationMethod::Dbus
-    );
+    assert_eq!(cfg.synthesis.notification_method, NotificationMethod::Off);
 }
 
 /// Config-load resilience: an unknown stored value degrades to the default
@@ -669,17 +472,15 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper"
 notification_method = "BogusMethod"
-write_method = "ydotool"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml).unwrap();
     assert_eq!(
-        cfg.transcription.notification_method,
+        cfg.synthesis.notification_method,
         NotificationMethod::default()
     );
-    assert_eq!(cfg.transcription.write_method, WriteMethod::Ydotool);
 }
 
 /// An absent field is the default.
@@ -693,14 +494,11 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml).unwrap();
-    assert_eq!(
-        cfg.transcription.notification_method,
-        NotificationMethod::Auto
-    );
+    assert_eq!(cfg.synthesis.notification_method, NotificationMethod::Auto);
 }
 
 #[test]
@@ -725,12 +523,8 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 100
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-tiny"
-write_mode = false
-preview_typing_enabled = false
-recording_stop_mode = "silence_and_manual"
-write_method = "auto"
 "#;
     let cfg: DaemonConfig = toml::from_str(toml_str).expect("must parse");
     assert!(cfg.update.check_enabled);
@@ -748,7 +542,7 @@ preferred_device = "cpu"
 theme = "classic"
 volume = 80
 
-[transcription]
+[synthesis]
 preferred_model = "whisper-tiny"
 
 [update]
@@ -791,18 +585,18 @@ fn clearing_the_model_preference_clears_the_provider() {
 
     let mut c = seeded();
     c.clear_preferred_model();
-    assert_eq!(c.transcription.preferred_provider, "");
+    assert_eq!(c.synthesis.preferred_provider, "");
 
     let mut c = seeded();
     c.update_active_backend("whisper".to_string());
     assert_eq!(
-        c.transcription.preferred_provider, "",
+        c.synthesis.preferred_provider, "",
         "selecting a backend drops the model preference; the provider must go too"
     );
 
     let mut c = seeded();
     c.clear_active_backend();
-    assert_eq!(c.transcription.preferred_provider, "");
+    assert_eq!(c.synthesis.preferred_provider, "");
 }
 
 /// `rename_active_backend` (an install-time directory migration of the *same*
@@ -812,7 +606,7 @@ fn clearing_the_model_preference_clears_the_provider() {
 #[test]
 fn rename_active_backend_preserves_the_model_preference() {
     let mut c = DaemonConfig::default();
-    c.transcription.active_backend = Some("super-tts-voxtral".to_string());
+    c.synthesis.active_backend = Some("super-tts-voxtral".to_string());
     c.update_preferred_model(
         "voxtral-mini".to_string(),
         "github.com/super-tts/voxtral".to_string(),
@@ -822,9 +616,9 @@ fn rename_active_backend_preserves_the_model_preference() {
     c.rename_active_backend("app.super-tts.voxtral".to_string());
 
     assert_eq!(
-        c.transcription.active_backend.as_deref(),
+        c.synthesis.active_backend.as_deref(),
         Some("app.super-tts.voxtral")
     );
-    assert_eq!(c.transcription.preferred_model, "voxtral-mini");
-    assert_eq!(c.transcription.preferred_provider, "local_voxtral");
+    assert_eq!(c.synthesis.preferred_model, "voxtral-mini");
+    assert_eq!(c.synthesis.preferred_provider, "local_voxtral");
 }

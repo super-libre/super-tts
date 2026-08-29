@@ -215,7 +215,7 @@ run-cli *args:
 #
 # Heads up: the dialog is an overlay layer surface with an exclusive keyboard
 # grab, so it holds the keyboard until you click Allow or Deny — the mouse
-# still works. For a hands-free run, set STT_AUTH_AUTO_APPROVE_AFTER_MS and it
+# still works. For a hands-free run, set SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS and it
 # approves itself after that many milliseconds. That env var is debug-only; a
 # release build can never self-approve.
 #
@@ -223,8 +223,8 @@ run-cli *args:
 #
 # Usage: just run-consent [scope...]
 #   just run-consent
-#   just run-consent transcribe settings secrets
-#   STT_AUTH_AUTO_APPROVE_AFTER_MS=4000 just run-consent
+#   just run-consent speak settings secrets
+#   SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS=4000 just run-consent
 [doc("Run the consent dialog standalone. Usage: just run-consent [scope...]")]
 run-consent *scopes:
     #!/usr/bin/env bash
@@ -232,16 +232,16 @@ run-consent *scopes:
 
     scopes="{{ scopes }}"
     # A spread of scopes so the dialog renders a representative bullet list.
-    [ -n "$scopes" ] || scopes="transcribe status settings"
+    [ -n "$scopes" ] || scopes="speak status settings"
 
     echo "Scopes: $scopes"
     # Quiet RUST_LOG: the default pulls in thousands of wgpu/zbus/wayland lines
     # at startup and buries the dialog's own output.
     env RUST_BACKTRACE=full \
         RUST_LOG=super_tts_consent=debug,super_tts_shared=debug \
-        STT_AUTH_APP_NAME="Test App" \
-        STT_AUTH_SCOPES="$scopes" \
-        STT_AUTH_EXE_PATH="/usr/bin/test-app" \
+        SUPER_TTS_AUTH_APP_NAME="Test App" \
+        SUPER_TTS_AUTH_SCOPES="$scopes" \
+        SUPER_TTS_AUTH_EXE_PATH="/usr/bin/test-app" \
         cargo run --bin {{ consent_name }}
 
 # Run security audit to check for vulnerabilities
@@ -681,7 +681,7 @@ install-daemon:
     echo "✓ Convenience shortcut 'tts' created"
     echo ""
     echo "🚀 Ready to use!"
-    echo "-- tts record --write         # Record, transcribe, and type result"
+    echo "-- tts speak \"hello\"          # Speak some text"
 
     # Reload user systemd and enable service
     echo "Reloading user systemd..."

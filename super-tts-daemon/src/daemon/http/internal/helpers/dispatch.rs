@@ -2,15 +2,14 @@
 use crate::daemon::types::SuperTTSDaemon;
 use axum::http::StatusCode;
 use serde_json::Value;
-use super_tts_shared::models::protocol::{DaemonRequest, DaemonResponse, ErrorCode};
+use super_tts_shared::models::protocol::{DaemonRequest, DaemonResponse};
 
 pub(crate) async fn dispatch(daemon: &SuperTTSDaemon, request: DaemonRequest) -> DaemonResponse {
     daemon.handle_command(request).await
 }
 
 /// Read the optional top-level `language` field (BCP-47 or `"auto"`) from a
-/// request body. Both the mic (`record`) and pre-captured (`transcribe`) paths
-/// honor it as a per-request override.
+/// request body, which every command honors as a per-request override.
 fn language_from_body(data: Option<&Value>) -> Option<String> {
     data.and_then(|d| d.get("language"))
         .and_then(Value::as_str)
@@ -21,8 +20,6 @@ pub(crate) fn build_request(command: &str, data: Option<Value>) -> DaemonRequest
     let language = language_from_body(data.as_ref());
     DaemonRequest {
         command: command.to_string(),
-        audio_data: None,
-        sample_rate: None,
         client_id: Some(format!("http-cli-{}", uuid::Uuid::new_v4())),
         event_types: None,
         client_info: None,
@@ -33,54 +30,6 @@ pub(crate) fn build_request(command: &str, data: Option<Value>) -> DaemonRequest
         language,
         enabled: None,
     }
-}
-
-/// Build a `transcribe` (pre-captured audio) request from a `POST /transcribe`
-/// body that carries a top-level `audio_data` array. `audio_data` is *moved*
-/// out of the body so the (potentially large) sample buffer is never held
-/// twice. Returns a coded `400` [`DaemonResponse`] (boxed — the god-struct is
-/// large) if `audio_data` fails to deserialize into `[f32]`.
-pub(crate) fn build_transcribe_request(
-    mut body: Value,
-) -> Result<DaemonRequest, Box<DaemonResponse>> {
-    let audio_value = body
-        .as_object_mut()
-        .and_then(|map| map.remove("audio_data"));
-    let audio_data: Vec<f32> = match audio_value {
-        Some(v) => serde_json::from_value(v).map_err(|e| {
-            Box::new(DaemonResponse::error_with_code(
-                ErrorCode::InvalidValue,
-                &format!("invalid audio_data: {e}"),
-            ))
-        })?,
-        // The caller only routes here when `audio_data` is present, so this is
-        // unreachable in practice; treat a vanished field as a bad request.
-        None => {
-            return Err(Box::new(DaemonResponse::error_with_code(
-                ErrorCode::InvalidValue,
-                "missing audio_data",
-            )));
-        }
-    };
-    let sample_rate = body
-        .get("sample_rate")
-        .and_then(Value::as_u64)
-        .and_then(|v| u32::try_from(v).ok());
-    let language = language_from_body(Some(&body));
-    Ok(DaemonRequest {
-        command: "transcribe".to_string(),
-        audio_data: Some(audio_data),
-        sample_rate,
-        client_id: Some(format!("http-cli-{}", uuid::Uuid::new_v4())),
-        event_types: None,
-        client_info: None,
-        since_timestamp: None,
-        limit: None,
-        event_type: None,
-        data: None,
-        language,
-        enabled: None,
-    })
 }
 
 /// Map a [`DaemonResponse`] to the HTTP status code it surfaces on the wire.
@@ -144,7 +93,7 @@ mod tests {
             (ErrorCode::InvalidAudioTheme, StatusCode::BAD_REQUEST),
             (ErrorCode::UnsupportedLanguage, StatusCode::BAD_REQUEST),
             // request well-formed but daemon state forbids it → 409
-            (ErrorCode::RecordingInProgress, StatusCode::CONFLICT),
+            (ErrorCode::SpeechInProgress, StatusCode::CONFLICT),
             (ErrorCode::DownloadInProgress, StatusCode::CONFLICT),
             (ErrorCode::NoSwitchInProgress, StatusCode::CONFLICT),
             (ErrorCode::NotFound, StatusCode::NOT_FOUND),
@@ -166,8 +115,8 @@ mod tests {
         // A conflict code whose message happens to read like a bad-input error
         // still maps by the code (409), not the words.
         let resp = DaemonResponse::error_with_code(
-            ErrorCode::RecordingInProgress,
-            "invalid model situation while recording",
+            ErrorCode::SpeechInProgress,
+            "invalid model situation while speaking",
         );
         assert_eq!(status_code_for_response(&resp), StatusCode::CONFLICT);
     }
@@ -188,34 +137,5 @@ mod tests {
             status_code_for_response(&DaemonResponse::success()),
             StatusCode::OK
         );
-    }
-
-    /// A pre-captured `POST /transcribe` body routes to the `transcribe`
-    /// command with `audio_data` moved out and `sample_rate`/`language` read
-    /// from the top level.
-    #[test]
-    fn build_transcribe_request_reads_top_level_fields() {
-        let body = serde_json::json!({
-            "audio_data": [0.1, -0.2, 0.3],
-            "sample_rate": 16000,
-            "language": "es",
-        });
-        let req = super::build_transcribe_request(body).expect("valid audio_data");
-        assert_eq!(req.command, "transcribe");
-        assert_eq!(req.audio_data.as_deref().map(<[f32]>::len), Some(3));
-        assert_eq!(req.sample_rate, Some(16000));
-        assert_eq!(req.language.as_deref(), Some("es"));
-        assert!(
-            req.data.is_none(),
-            "audio_data is moved out, not duplicated"
-        );
-    }
-
-    /// Non-numeric `audio_data` is a `400`, not a panic or a silent mic capture.
-    #[test]
-    fn build_transcribe_request_rejects_non_numeric_audio() {
-        let body = serde_json::json!({ "audio_data": ["not", "numbers"] });
-        let err = super::build_transcribe_request(body).expect_err("should reject");
-        assert_eq!(status_code_for_response(&err), StatusCode::BAD_REQUEST);
     }
 }

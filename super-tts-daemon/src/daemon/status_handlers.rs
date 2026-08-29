@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::daemon::types::SuperTTSDaemon;
-use crate::stt_models::backends;
+use crate::tts_models::backends;
 use log::{error, info};
 use super_tts_shared::models::protocol::DaemonResponse;
 
@@ -26,7 +26,7 @@ impl SuperTTSDaemon {
             None => ("unknown".to_string(), false, None),
         };
 
-        let busy = *self.busy.read().await;
+        let busy = self.is_busy();
 
         let mut response = DaemonResponse::success()
             .with_device(device)

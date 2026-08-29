@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `/notification_method` — how recording failures are surfaced (auto, dbus,
-//! typed, off).
+//! `/notification_method` — how synthesis failures are surfaced (auto, off).
 settings_getter!(
     get_notification_method -> String, "/notification_method", "get_notification_method",
     |resp| resp.notification_method.unwrap_or_else(|| "auto".to_string())

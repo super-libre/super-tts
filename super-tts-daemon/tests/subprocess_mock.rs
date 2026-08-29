@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Drives the daemon's real `SubprocessBackend` orchestration (manifest parse,
-//! socket, systemd-run spawn, ping/load/status/transcribe, teardown) against the
+//! socket, systemd-run spawn, ping/load/status/synthesize, teardown) against the
 //! `mock_backend` fixture — no GPU, model, or network. Needs a systemd `--user`
 //! session, so it is gated behind `SUPER_TTS_TEST_SUBPROCESS=1` and skipped on
 //! hosted CI runners.
@@ -9,9 +9,9 @@
 //!        --features test-fixtures --test `subprocess_mock` -- --nocapture
 #![cfg(all(feature = "subprocess-backends", feature = "test-fixtures"))]
 
-use super_tts_daemon::stt_models::subprocess::SubprocessBackend;
-use super_tts_daemon::stt_models::transcribe::Transcribe;
-use super_tts_daemon::stt_models::v1::{CollectingSink, SynthesizeRequest};
+use super_tts_daemon::tts_models::subprocess::SubprocessBackend;
+use super_tts_daemon::tts_models::synthesize::Synthesize;
+use super_tts_daemon::tts_models::v1::{CollectingSink, SynthesizeRequest};
 use super_tts_shared::audio::frames::{FrameKind, SampleFormat};
 
 /// Removes the per-test backend dir on scope exit — including panic unwinds, so a
@@ -67,14 +67,6 @@ async fn subprocess_orchestration_against_mock() {
     let mut backend = SubprocessBackend::spawn(&dir, "mock", "cpu", None)
         .await
         .expect("spawn + load mock backend");
-
-    // Transcribe drives /v1/transcribe → canned text.
-    let samples = vec![0.0f32; 1600];
-    let text = backend
-        .transcribe_audio(&samples, 16000, None)
-        .await
-        .expect("transcribe");
-    assert_eq!(text, "mock transcription");
 
     // Synthesize drives /v1/synthesize → a framed s16le ramp read incrementally
     // off the socket. The ramp is the point: silence would survive a decoder

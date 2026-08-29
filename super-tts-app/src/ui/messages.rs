@@ -9,8 +9,6 @@
 //! error at both ends instead of silently falling through to `Task::none()`.
 
 use super_tts_shared::models::notification_method::NotificationMethod;
-use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
-use super_tts_shared::models::write_method::WriteMethod;
 
 use cosmic::widget::segmented_button;
 
@@ -26,13 +24,10 @@ pub enum Message {
     ModelsPage(ModelsPageMessage),
     Device(DeviceMessage),
     Download(DownloadMessage),
-    PreviewTyping(PreviewTypingMessage),
-    RecordingStopMode(RecordingStopModeMessage),
-    WriteMethod(WriteMethodMessage),
     NotificationMethod(NotificationMethodMessage),
     Backend(BackendMessage),
     Language(LanguageMessage),
-    Recording(RecordingMessage),
+    Speech(SpeechMessage),
     Update(UpdateMessage),
 
     /// A scoped settings/backend save failed. Stored in `AppModel::action_error`
@@ -246,47 +241,6 @@ pub enum DownloadMessage {
     NoDownloadInProgress,
 }
 
-/// Preview-typing setting.
-#[derive(Debug, Clone)]
-pub enum PreviewTypingMessage {
-    Toggled(bool),       // User toggled the setting
-    SettingLoaded(bool), // Setting loaded from daemon
-    Error(String),       // Error setting or getting preview typing
-}
-
-/// Recording stop-mode setting.
-#[derive(Debug, Clone)]
-pub enum RecordingStopModeMessage {
-    Changed(RecordingStopMode),
-    Loaded(RecordingStopMode),
-    Error(String),
-}
-
-/// Write-method setting.
-#[derive(Debug, Clone)]
-pub enum WriteMethodMessage {
-    Changed(WriteMethod),
-    Loaded(WriteMethod),
-    /// Ask the daemon to type the test string. The Input Simulation test field
-    /// is focused first so the keystrokes have somewhere to land.
-    Test,
-    /// Start the countdown before an unfocused test, giving the user time to
-    /// switch to the window they actually dictate into.
-    TestDelayed,
-    /// One second of that countdown elapsed.
-    TestTick,
-    /// Abandon a running countdown before it types.
-    TestCancel,
-    /// The daemon typed the test string; carries the backend it resolved to,
-    /// which is the only way to see which rung `Auto` picked. `None` when the
-    /// daemon named no backend this build understands — the typing still
-    /// happened, so that is a pass with an empty readout, not a failure.
-    Tested(Option<WriteMethod>),
-    /// Contents of the test field — whatever the daemon (or the user) typed.
-    TestInput(String),
-    Error(String),
-}
-
 /// Notification-method setting.
 #[derive(Debug, Clone)]
 pub enum NotificationMethodMessage {
@@ -345,7 +299,7 @@ pub enum BackendMessage {
     },
 }
 
-/// Transcription language (global Primary Language + per-model override).
+/// Speech language (global Primary Language + per-model override).
 #[derive(Debug, Clone)]
 pub enum LanguageMessage {
     /// Open the language search sheet.
@@ -379,13 +333,19 @@ pub enum LanguageMessage {
     LanguageError(String),
 }
 
-/// Recording / audio / widget (SSE-driven meter + coarse recording state).
+/// Speech / audio / widget (SSE-driven meter + coarse speaking state).
 #[derive(Debug, Clone)]
-pub enum RecordingMessage {
-    StartRecording,
-    StopRecording,
-    PreviewTextReceived(String),
-    TranscriptionReceived(String),
+pub enum SpeechMessage {
+    /// The text in the Speech page's test field changed.
+    TestTextChanged(String),
+    /// Speak whatever is in the test field.
+    Speak,
+    /// The daemon accepted the utterance and returned its id.
+    SpeakStarted(String),
+    /// The daemon refused it; carries the message for the page's banner.
+    SpeakFailed(String),
+    /// Stop the utterance now playing.
+    StopSpeaking,
     AudioFeedbackToggled(bool),
     AudioThemeSelected(AudioTheme),
     AudioThemesLoaded(Vec<AudioTheme>),
@@ -415,9 +375,16 @@ pub enum RecordingMessage {
         level: f32,
         is_speech: bool,
     },
-    /// `recording_state` event from `/events` — coarse `is_recording`
-    /// flag the UI projects into a `RecordingStatus`.
-    WidgetRecordingState(bool),
+    /// `speaking_state` event from `/events` — the coarse flag the UI
+    /// projects into a `SpeakingStatus`, plus the utterance it describes.
+    ///
+    /// The id travels with it because the daemon speaks for whoever asked: an
+    /// utterance this page did not start still turns the badge on, and the id
+    /// is the only way the page can tell the two apart.
+    WidgetSpeakingState {
+        is_speaking: bool,
+        utterance_id: Option<String>,
+    },
 }
 
 /// How a beta-opt-in toggle ended. Three cases because each leaves the UI
@@ -493,12 +460,9 @@ message_from! {
     ModelsPage => ModelsPageMessage,
     Device => DeviceMessage,
     Download => DownloadMessage,
-    PreviewTyping => PreviewTypingMessage,
-    RecordingStopMode => RecordingStopModeMessage,
-    WriteMethod => WriteMethodMessage,
     NotificationMethod => NotificationMethodMessage,
     Backend => BackendMessage,
     Language => LanguageMessage,
-    Recording => RecordingMessage,
+    Speech => SpeechMessage,
     Update => UpdateMessage,
 }

@@ -8,8 +8,8 @@ use serde::de::DeserializeOwned;
 
 /// All endpoints are served under the `/v1` URL prefix. The request
 /// builders below prepend this automatically, so call sites use bare
-/// paths like `/ping`, `/transcribe`, `/events` — the actual
-/// URL on the wire is `/v1/ping`, `/v1/transcribe`, etc.
+/// paths like `/ping`, `/speak`, `/events` — the actual
+/// URL on the wire is `/v1/ping`, `/v1/speak`, etc.
 pub(crate) const API_PREFIX: &str = "/v1";
 
 /// Body type so a GET/DELETE (empty) and a POST (JSON) share one hyper request

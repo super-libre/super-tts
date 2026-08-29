@@ -35,8 +35,8 @@ Authorization: Bearer tts_…64hex…
 {
   "status": "success",
   "available_models": [
-    ["voxtral-mini", "github.com/super-tts/voxtral"],
-    ["whisper-1", "github.com/super-tts/openai"]
+    ["xtts-v2", "github.com/super-tts/xtts"],
+    ["gpt-4o-mini-tts", "github.com/super-tts/openai"]
   ]
 }
 ```

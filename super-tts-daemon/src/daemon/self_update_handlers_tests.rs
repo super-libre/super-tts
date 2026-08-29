@@ -272,12 +272,7 @@ async fn assert_method_notifies(method: NotificationMethod, tag: &str) {
     let _api_base = GithubApiBaseGuard::set(&s.url());
 
     let mut daemon = test_daemon().await;
-    daemon
-        .config
-        .write()
-        .await
-        .transcription
-        .notification_method = method;
+    daemon.config.write().await.synthesis.notification_method = method;
     let (notifier, sent) = Notifier::fake(false);
     daemon.notifier = std::sync::Arc::new(tokio::sync::Mutex::new(notifier));
 
@@ -296,19 +291,14 @@ async fn assert_method_notifies(method: NotificationMethod, tag: &str) {
 }
 
 #[tokio::test]
-async fn dbus_method_sends_a_notification() {
-    assert_method_notifies(NotificationMethod::Dbus, "v82.0.0").await;
-}
-
-#[tokio::test]
 async fn auto_method_sends_a_notification() {
     assert_method_notifies(NotificationMethod::Auto, "v83.0.0").await;
 }
 
-/// `Off` and `Typed` must send no notification AND must not record the
-/// version as notified — the subtle half of the rule: recording it would
-/// mean a later switch to `Dbus`/`Auto` silently never notifies for a
-/// version the user was never actually shown.
+/// `Off` must send no notification AND must not record the version as
+/// notified — the subtle half of the rule: storing it would mean a later
+/// switch to `Auto` silently never notifies for a version the user was never
+/// actually shown.
 async fn assert_method_does_not_notify_or_record(method: NotificationMethod, tag: &str) {
     let _env_guard = github_env_lock().lock().await;
     crate::install_crypto_provider();
@@ -326,13 +316,8 @@ async fn assert_method_does_not_notify_or_record(method: NotificationMethod, tag
     let _api_base = GithubApiBaseGuard::set(&s.url());
 
     let mut daemon = test_daemon().await;
-    daemon
-        .config
-        .write()
-        .await
-        .transcription
-        .notification_method = method;
-    // `fail: false` — irrelevant here since Off/Typed never call
+    daemon.config.write().await.synthesis.notification_method = method;
+    // `fail: false` — irrelevant here since `Off` never calls
     // `notifier.send` at all, which is exactly what this test proves.
     let (notifier, sent) = Notifier::fake(false);
     daemon.notifier = std::sync::Arc::new(tokio::sync::Mutex::new(notifier));
@@ -354,9 +339,4 @@ async fn assert_method_does_not_notify_or_record(method: NotificationMethod, tag
 #[tokio::test]
 async fn off_method_does_not_notify_or_record() {
     assert_method_does_not_notify_or_record(NotificationMethod::Off, "v84.0.0").await;
-}
-
-#[tokio::test]
-async fn typed_method_does_not_notify_or_record() {
-    assert_method_does_not_notify_or_record(NotificationMethod::Typed, "v85.0.0").await;
 }

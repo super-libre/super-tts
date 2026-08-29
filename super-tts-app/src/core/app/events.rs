@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::state::DaemonStatus;
-use crate::ui::messages::{DaemonMessage, Message, ModelsPageMessage, RecordingMessage};
+use crate::ui::messages::{DaemonMessage, Message, ModelsPageMessage, SpeechMessage};
 use log::warn;
 
 /// Classify a daemon [`HttpError`] into the right next `DaemonStatus`.
@@ -28,7 +28,7 @@ pub(super) fn classify_daemon_error(
 
 /// Pick out the events the settings UI cares about and translate them
 /// into the `Message` variants that drive the audio meter +
-/// recording-status badge. Returns `None` for events we don't render
+/// speaking-status badge. Returns `None` for events we don't render
 /// (e.g. `subscribed`, `error`, `revoked`).
 pub(super) fn settings_widget_event_to_message(
     evt: &super_tts_shared::daemon::http_client::WidgetEvent,
@@ -36,18 +36,23 @@ pub(super) fn settings_widget_event_to_message(
     use serde_json::Value;
     let p: &Value = &evt.payload;
     match evt.name.as_str() {
-        "recording_state" => Some(Message::Recording(RecordingMessage::WidgetRecordingState(
-            p.get("is_recording")
+        "speaking_state" => Some(Message::Speech(SpeechMessage::WidgetSpeakingState {
+            is_speaking: p
+                .get("is_speaking")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-        ))),
+            utterance_id: p
+                .get("utterance_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })),
         "frequency_bands" => {
             // reason: audio energy values are small positive floats well within f32 range; precision loss is acceptable for level display.
             #[allow(clippy::cast_possible_truncation)]
             let total_energy = p.get("total_energy").and_then(Value::as_f64).unwrap_or(0.0) as f32;
             let level = raw_level_to_db_display_percent(total_energy);
             let is_speech = total_energy > 0.0001;
-            Some(Message::Recording(RecordingMessage::WidgetAudioLevel {
+            Some(Message::Speech(SpeechMessage::WidgetAudioLevel {
                 level,
                 is_speech,
             }))

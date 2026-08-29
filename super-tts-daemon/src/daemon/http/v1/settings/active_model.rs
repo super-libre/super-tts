@@ -138,7 +138,7 @@ mod tests {
     /// through v0.2.0 unwrap the key and return an error when it is absent, so
     /// dropping it does not degrade their Models page — it makes every
     /// `get_current_model()` fail, leaving the UI stuck on "no model loaded"
-    /// while transcription works fine.
+    /// while synthesis works fine.
     ///
     /// This is the test that fails if the compatibility shim is deleted before
     /// those clients have rolled over.

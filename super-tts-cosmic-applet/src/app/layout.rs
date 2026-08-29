@@ -3,7 +3,7 @@
 //!
 //! The panel sizes its bar around the largest applet it hosts, so an applet
 //! that renders past the size the panel suggests drags the whole bar with it.
-//! Every state this applet can render — the idle icon, the recording
+//! Every state this applet can render — the idle icon, the speaking
 //! visualization, the working animation — therefore resolves to the same box
 //! here, and that box never exceeds the panel's suggested window size on the
 //! cross axis (the panel's thickness).

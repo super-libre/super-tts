@@ -5,9 +5,9 @@
 //! The daemon spawns this binary with three env vars carrying the request
 //! details:
 //!
-//! - `STT_AUTH_APP_NAME` — declared (untrusted) app name from the request
-//! - `STT_AUTH_SCOPES`   — space-separated scope set (e.g. `transcribe status`)
-//! - `STT_AUTH_EXE_PATH` — peer `/proc/<pid>/exe` (trusted, kernel-resolved)
+//! - `SUPER_TTS_AUTH_APP_NAME` — declared (untrusted) app name from the request
+//! - `SUPER_TTS_AUTH_SCOPES`   — space-separated scope set (e.g. `speak status`)
+//! - `SUPER_TTS_AUTH_EXE_PATH` — peer `/proc/<pid>/exe` (trusted, kernel-resolved)
 //!
 //! The user clicks Allow or Deny. The dialog writes one of `allow`, `deny`,
 //! or `dismissed` to stdout (newline-terminated) and exits.
@@ -317,14 +317,11 @@ impl ConsentApp {
 
 fn permissions_for_scope(scope: &str) -> &'static [&'static str] {
     match scope {
-        "transcribe" => constants::TRANSCRIBE_PERMISSIONS,
         "speak" => constants::SPEAK_PERMISSIONS,
         "playback_events" => constants::PLAYBACK_EVENTS_PERMISSIONS,
         "status" => constants::STATUS_PERMISSIONS,
         "settings" => constants::SETTINGS_PERMISSIONS,
-        "recording_events" => constants::RECORDING_EVENTS_PERMISSIONS,
         "audio_visualization" => constants::AUDIO_VISUALIZATION_PERMISSIONS,
-        "global_transcriptions" => constants::GLOBAL_TRANSCRIPTIONS_PERMISSIONS,
         "daemon_status" => constants::DAEMON_STATUS_PERMISSIONS,
         "secrets" => constants::SECRETS_PERMISSIONS,
         _ => constants::UNKNOWN_SCOPE_PERMISSIONS,
@@ -405,7 +402,7 @@ fn install_termination_handlers() {
     }
 }
 
-/// If `STT_AUTH_AUTO_APPROVE_AFTER_MS` is set to a parseable u64,
+/// If `SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS` is set to a parseable u64,
 /// spawn a background thread that sleeps for that many milliseconds
 /// and then writes "allow\n" to stdout + `_exit(0)`. Lets you (or a
 /// test runner) actually see the dialog render for that long before
@@ -418,14 +415,14 @@ fn install_termination_handlers() {
 /// builds with `debug_assertions` on, so the smoke tests keep working.
 #[cfg(debug_assertions)]
 fn maybe_spawn_auto_approve_timer() {
-    let Ok(raw) = std::env::var("STT_AUTH_AUTO_APPROVE_AFTER_MS") else {
+    let Ok(raw) = std::env::var("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS") else {
         return;
     };
     let Ok(ms) = raw.parse::<u64>() else {
-        log::warn!("STT_AUTH_AUTO_APPROVE_AFTER_MS={raw:?} is not a valid u64; ignoring");
+        log::warn!("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS={raw:?} is not a valid u64; ignoring");
         return;
     };
-    log::info!("STT_AUTH_AUTO_APPROVE_AFTER_MS={ms}; auto-approving after {ms}ms");
+    log::info!("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS={ms}; auto-approving after {ms}ms");
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(ms));
         // Mark decided so the SIGTERM/atexit paths don't also write
@@ -453,14 +450,14 @@ struct AuthRequestPayload {
 
 fn read_env() -> AuthRequestPayload {
     AuthRequestPayload {
-        app_name: std::env::var("STT_AUTH_APP_NAME")
+        app_name: std::env::var("SUPER_TTS_AUTH_APP_NAME")
             .unwrap_or_else(|_| "<unknown app>".to_string()),
-        scopes: std::env::var("STT_AUTH_SCOPES")
+        scopes: std::env::var("SUPER_TTS_AUTH_SCOPES")
             .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
             .collect(),
-        exe_path: std::env::var("STT_AUTH_EXE_PATH")
+        exe_path: std::env::var("SUPER_TTS_AUTH_EXE_PATH")
             .unwrap_or_else(|_| "<unknown path>".to_string()),
     }
 }

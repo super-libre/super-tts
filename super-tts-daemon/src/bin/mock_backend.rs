@@ -34,7 +34,6 @@ async fn main() {
         )
         .route("/v1/status", get(status))
         .route("/v1/load", post(load))
-        .route("/v1/transcribe", post(transcribe))
         .route("/v1/synthesize", post(synthesize))
         .route(
             "/v1/cancel",
@@ -164,17 +163,4 @@ async fn synthesize(State(s): State<Arc<AppState>>, _body: String) -> axum::resp
         body,
     )
         .into_response()
-}
-
-async fn transcribe(State(s): State<Arc<AppState>>, _body: String) -> (StatusCode, Json<Value>) {
-    if !s.loaded.load(Ordering::SeqCst) {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "status": "error", "message": "not_ready" })),
-        );
-    }
-    (
-        StatusCode::OK,
-        Json(json!({ "status": "success", "transcription": "mock transcription" })),
-    )
 }

@@ -437,8 +437,8 @@ pub struct ModelEntry {
     /// Suggested minimum interval between streaming passes, in milliseconds.
     #[serde(default)]
     pub processing_interval_ms: Option<u64>,
-    /// When `true`, the model is driven over the consumer WebSocket endpoint
-    /// rather than batch `POST /v1/transcribe`. Requires
+    /// When `true`, the model is driven over the realtime WebSocket transport
+    /// rather than batch `POST /v1/synthesize`. Requires
     /// `[capabilities] websocket = true`. Default `false`.
     #[serde(default)]
     pub realtime: bool,
@@ -1263,7 +1263,7 @@ mod tests {
     /// wrote, and the consumers enforce the rule: the indexer refuses to publish
     /// such a release, and the daemon drops the value and loads the backend
     /// anyway (`super-tts-indexer::manifest::validate`,
-    /// `super_tts_daemon::stt_models::backends`).
+    /// `super_tts_daemon::tts_models::backends`).
     #[test]
     fn parse_keeps_a_base_url_default_for_consumers_to_judge() {
         let m = Manifest::parse(

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `/language` + `/backends/{source}/models/{model}/language` — transcription
+//! `/language` + `/backends/{source}/models/{model}/language` — speech
 //! language settings.
 
 use crate::daemon::client::internal::response::{require_success, require_unit};

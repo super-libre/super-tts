@@ -137,14 +137,8 @@ impl WidgetSubscriptionConfig {
 #[must_use]
 pub fn required_scope_for_topic(topic: &str) -> Option<&'static str> {
     Some(match topic {
-        "recording_started"
-        | "recording_stopped"
-        | "recording_state"
-        | "transcribing_started"
-        | "transcribing_stopped" => "recording_events",
         "frequency_bands" => "audio_visualization",
         "speaking_state" | "speech_progress" => "playback_events",
-        "partial_stt" | "final_stt" => "global_transcriptions",
         "daemon_status_changed" | "download_progress" | "registry_install" => "daemon_status",
         _ => return None,
     })

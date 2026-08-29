@@ -13,7 +13,7 @@ use super::SuperTtsApplet;
 use crate::app::Message;
 use crate::daemon::identity::APP_ID;
 use crate::daemon::{RetryStrategy, ping_daemon};
-use crate::models::state::{DaemonConnectionState, IsOpen, RecordingState};
+use crate::models::state::{DaemonConnectionState, IsOpen, SpeechState};
 use crate::models::theme::{
     IconAlignment, VisualizationColor, VisualizationTheme, WorkingAnimationTheme,
 };
@@ -31,25 +31,18 @@ impl SuperTtsApplet {
             Message::RevealerToggle(src) => self.revealer_toggle(src),
             Message::SetVisualizationTheme(theme) => self.set_visualization_theme(theme),
             Message::SetWorkingAnimation(theme) => self.set_working_animation(theme),
-            Message::WidgetRecordingState(is_recording) => {
-                self.widget_recording_state(is_recording)
-            }
+            Message::WidgetSpeakingState(is_speaking) => self.widget_speaking_state(is_speaking),
             Message::WidgetFrequencyBands {
                 bands,
                 total_energy,
             } => self.widget_frequency_bands(&bands, total_energy),
-            Message::WidgetTranscribingStarted => {
-                // Guard against out-of-order delivery: only enter Processing
-                // mid-cycle, never resurrect it after transcribing_stopped
-                // already returned us to Idle.
-                if !matches!(self.recording_state, RecordingState::Idle) {
-                    self.set_recording_state(RecordingState::Processing);
+            Message::WidgetSpeechProgress { spoken_ms } => {
+                // Audio has reached the device. Guard against out-of-order
+                // delivery: a stray progress frame after `speaking_state:false`
+                // must not resurrect the visualizer.
+                if spoken_ms > 0 && matches!(self.speech_state, SpeechState::Synthesizing) {
+                    self.set_speech_state(SpeechState::Speaking);
                 }
-                cosmic_app::Task::none()
-            }
-            Message::WidgetTranscribingStopped => {
-                self.set_recording_state(RecordingState::Idle);
-                self.visualization.clear();
                 cosmic_app::Task::none()
             }
             Message::WidgetRevoked(reason) => self.widget_revoked(&reason),
@@ -205,11 +198,11 @@ impl SuperTtsApplet {
         cosmic_app::Task::none()
     }
 
-    /// Set the recording state, managing the working-animation clock: start it
-    /// when entering Processing, stop it otherwise. Centralizes the lifecycle
+    /// Set the speech state, managing the working-animation clock: start it
+    /// when entering Synthesizing, stop it otherwise. Centralizes the lifecycle
     /// so every transition keeps the animation in sync.
-    fn set_recording_state(&mut self, new: RecordingState) {
-        if matches!(new, RecordingState::Processing) {
+    fn set_speech_state(&mut self, new: SpeechState) {
+        if matches!(new, SpeechState::Synthesizing) {
             if self.working_anim_start.is_none() {
                 self.working_anim_start = Some(Instant::now());
                 self.working_animation.reset();
@@ -217,23 +210,25 @@ impl SuperTtsApplet {
         } else {
             self.working_anim_start = None;
         }
-        self.recording_state = new;
+        self.speech_state = new;
     }
 
-    fn widget_recording_state(&mut self, is_recording: bool) -> cosmic_app::Task<Message> {
-        let was_recording = matches!(self.recording_state, RecordingState::Recording);
-        let new_state = if is_recording {
-            RecordingState::Recording
-        } else if was_recording {
-            // Just left Recording — show a brief Processing state while
-            // the daemon transcribes.
-            RecordingState::Processing
+    /// An utterance started or ended.
+    ///
+    /// Starting lands in `Synthesizing`, not `Speaking`: the daemon accepts an
+    /// utterance before it has any audio for it, so claiming speech here would
+    /// show a flat visualizer for however long the backend takes. The first
+    /// `speech_progress` with `spoken_ms > 0` is what promotes it.
+    fn widget_speaking_state(&mut self, is_speaking: bool) -> cosmic_app::Task<Message> {
+        if is_speaking {
+            // Only from Idle: a second `speaking_state:true` for an utterance
+            // that superseded the current one must not drop a live visualizer
+            // back into the working animation.
+            if matches!(self.speech_state, SpeechState::Idle) {
+                self.set_speech_state(SpeechState::Synthesizing);
+            }
         } else {
-            RecordingState::Idle
-        };
-
-        self.set_recording_state(new_state);
-        if was_recording && !is_recording {
+            self.set_speech_state(SpeechState::Idle);
             self.visualization.clear();
         }
         cosmic_app::Task::none()

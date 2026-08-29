@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! One streaming-download loop shared by the registry install pipeline
 //! (`registry/install.rs`) and the model-file downloader
-//! (`stt_models/download.rs`).
+//! (`tts_models/download.rs`).
 //!
 //! [`stream_body_to_writer`] streams a response body into a writer, hashing as
 //! it goes, enforcing an optional byte cap and an optional cancellation

@@ -8,7 +8,7 @@ The daemon runs the FFT and broadcasts ready-to-render frequency bands; this
 scope grants those bands and nothing else. Raw PCM is deliberately **not**
 exposed on the wire — a visualizer gets the bar heights it needs without
 receiving reconstructable audio. The COSMIC applet shipped with this repo is a
-client of this scope (plus [`recording_events`](./recording_events.md)).
+client of this scope (plus [`playback_events`](./playback_events.md)).
 
 ## Topics
 

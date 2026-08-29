@@ -30,10 +30,14 @@ use wasi::http::types::{
     Fields, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };
 
-/// The fixed transcription the batch `/v1/transcribe` path returns; the
-/// daemon's `wasm_mock_realtime.rs` pins it.
-pub const MOCK_TRANSCRIPTION: &str = "mock transcription";
-/// The fixed transcript the realtime `done` frame carries; pinned likewise.
+/// The fixed payload the realtime `done` frame carries; the daemon's
+/// `wasm_mock_realtime.rs` pins it.
+///
+/// The frames a realtime session carries are opaque to the host — it pumps
+/// bytes between the consumer and the guest and never reads them — so this
+/// fixture keeps the shape it had. Super TTS has not yet defined what a
+/// realtime *synthesis* session says over that transport; when it does, this
+/// payload changes and the host does not.
 pub const MOCK_REALTIME_TRANSCRIPTION: &str = "mock realtime transcription";
 
 struct Component;
@@ -88,9 +92,6 @@ fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
         ),
         (Method::Post, "/v1/cancel") => ok(&serde_json::json!({
             "status": "success", "message": "Cancelled"
-        })),
-        (Method::Post, "/v1/transcribe") => ok(&serde_json::json!({
-            "status": "success", "transcription": MOCK_TRANSCRIPTION
         })),
         _ => (
             404,

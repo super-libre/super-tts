@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Drives the daemon's real `WasmBackend` orchestration (component load, link,
-//! `/v1` ping/status/transcribe) against a generic mock WASM component fixture —
+//! `/v1` ping/status/synthesize) against a generic mock WASM component fixture —
 //! no real backend, model, or network. The WASM analog of `subprocess_mock.rs`;
 //! unlike that test it needs no systemd session, so it runs in hosted CI.
 //!
@@ -11,9 +11,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super_tts_daemon::stt_models::transcribe::{ModelInfoData, Transcribe};
-use super_tts_daemon::stt_models::v1::{CollectingSink, SynthesizeRequest};
-use super_tts_daemon::stt_models::wasm::WasmBackend;
+use super_tts_daemon::tts_models::synthesize::ModelInfoData;
+use super_tts_daemon::tts_models::v1::{CollectingSink, SynthesizeRequest};
+use super_tts_daemon::tts_models::wasm::WasmBackend;
 use super_tts_shared::audio::frames::{FrameKind, Mark, SampleFormat};
 
 /// Path to the prebuilt mock component (`just build-mock-wasm-backend`).
@@ -24,9 +24,10 @@ fn mock_component() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// Load the mock through the real host and drive the no-network `/v1` routes the
-/// daemon hits: ping → status (ready) → transcribe (canned text). Proves the
-/// daemon's component load/link/invoke path without any real backend.
+/// Load the mock through the real host and drive the no-network lifecycle
+/// routes the daemon hits: ping → status (ready). Proves the daemon's component
+/// load/link/invoke path without any real backend; `/v1/synthesize` — the route
+/// with a body shape worth checking — is the next test's subject.
 #[tokio::test]
 async fn wasm_orchestration_against_mock() {
     let Some(path) = mock_component() else {
@@ -34,7 +35,7 @@ async fn wasm_orchestration_against_mock() {
         return;
     };
 
-    let mut backend = WasmBackend::new(&path, Vec::new(), "mock".to_string(), Vec::new())
+    let backend = WasmBackend::new(&path, Vec::new(), "mock".to_string(), Vec::new())
         .expect("load mock backend");
 
     let ping = backend.ping().await.expect("ping");
@@ -44,12 +45,6 @@ async fn wasm_orchestration_against_mock() {
     let status = backend.status().await.expect("status");
     assert_eq!(status["status"], "success");
     assert_eq!(status["state"], "ready");
-
-    let text = backend
-        .transcribe_audio(&[0.0_f32; 1600], 16000, None)
-        .await
-        .expect("transcription should succeed");
-    assert_eq!(text, "mock transcription");
 }
 
 /// `/v1/synthesize` end to end through the real host: the mock emits a known

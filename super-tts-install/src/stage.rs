@@ -195,14 +195,14 @@ pub fn extract_tarball(tarball: &Path, staging: &Path) -> Result<(), InstallErro
     Ok(())
 }
 
-/// The `tts` convenience wrapper — invokes `super-tts-cli` directly. Used by
-/// keyboard shortcuts (e.g. Super+Space → `tts record --write`).
+/// The `tts` convenience wrapper — invokes `super-tts-cli` directly, so
+/// `tts speak "..."` works from a shell or a user's own keyboard shortcut.
 #[must_use]
 pub fn wrapper_script(prefix: &Path) -> String {
     format!(
         "#!/bin/bash\n\
          # Super TTS convenience wrapper — invokes super-tts-cli directly.\n\
-         # Used by keyboard shortcuts (e.g. Super+Space → \"tts record --write\").\n\
+         # e.g. \"tts speak 'hello'\", or bind it to a keyboard shortcut.\n\
          exec \"{}/bin/super-tts-cli\" \"$@\"\n",
         prefix.display()
     )

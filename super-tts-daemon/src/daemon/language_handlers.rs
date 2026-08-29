@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Handlers for the global + per-model transcription-language endpoints.
+//! Handlers for the global + per-model speech-language endpoints.
 //!
 //! The per-model handlers are keyed by `(source, model)` and resolve against
 //! the **discovered backends** (not the loaded model), so they work for any
@@ -8,7 +8,7 @@
 
 use crate::daemon::language::resolve_language;
 use crate::daemon::types::SuperTTSDaemon;
-use crate::stt_models::ModelDefinition;
+use crate::tts_models::ModelDefinition;
 use super_tts_shared::models::protocol::{Command, DaemonResponse, ErrorCode};
 
 impl SuperTTSDaemon {

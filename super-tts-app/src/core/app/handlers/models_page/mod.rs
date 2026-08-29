@@ -307,7 +307,7 @@ impl AppModel {
 
             ModelsPageMessage::DeselectBackend => {
                 // Optimistically clear the active backend + loaded model; the
-                // daemon goes idle. (Rejected only mid-recording — an edge case
+                // daemon goes idle. (Rejected only mid-utterance — an edge case
                 // that self-heals on the next refresh.)
                 self.models_page.active_backend = None;
                 self.clear_loaded_model();

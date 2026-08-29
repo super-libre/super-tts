@@ -1,6 +1,6 @@
 # `/audio_theme`
 
-Read and set the audio cue theme that plays on recording
+Read and set the audio cue theme that plays on speech
 start/stop. The catalog of available themes lives at
 [`GET /audio_themes`](./audio_themes.md); to actually play the
 current theme's cues (e.g. as a preview in a settings UI), use

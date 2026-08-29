@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::daemon::types::SuperTTSDaemon;
-use crate::stt_models::ModelDefinition;
-use crate::stt_models::backends;
-use crate::stt_models::transcribe::Transcribe;
+use crate::tts_models::ModelDefinition;
+use crate::tts_models::backends;
+use crate::tts_models::synthesize::Synthesize;
 use log::{error, info, warn};
 use super_tts_shared::models::protocol::{DaemonResponse, DaemonStatusEvent, ErrorCode};
 
@@ -24,19 +24,23 @@ impl SuperTTSDaemon {
         }
     }
 
-    /// Reject a model/backend/device mutation while a daemon-mic recording is in
-    /// flight. `action` names the operation for the human `message` (e.g.
-    /// "change the backend", "switch models"); the machine-readable identity is
-    /// always [`ErrorCode::RecordingInProgress`], so callers and clients never
-    /// depend on the wording. Real-time (WebSocket) sessions are guarded
-    /// separately — they hold the `model` read lock for their duration, so a
-    /// mutation's write-lock acquisition already serializes behind them.
-    /// Returns `None` when idle.
-    pub(crate) async fn guard_model_mutation(&self, action: &str) -> Option<DaemonResponse> {
-        if *self.busy.read().await {
+    /// Reject a model/backend/device mutation while an utterance is in flight.
+    /// `action` names the operation for the human `message` (e.g. "change the
+    /// backend", "switch models"); the machine-readable identity is always
+    /// [`ErrorCode::SpeechInProgress`], so callers and clients never depend on
+    /// the wording. Real-time (WebSocket) sessions are guarded separately —
+    /// they hold the `model` read lock for their duration, so a mutation's
+    /// write-lock acquisition already serializes behind them.
+    ///
+    /// Note that `POST /speak` is deliberately *not* guarded: a new utterance
+    /// preempts the current one, which is what a user pressing "speak this
+    /// instead" means. Only swapping the model out from under live synthesis
+    /// is refused. Returns `None` when idle.
+    pub(crate) fn guard_model_mutation(&self, action: &str) -> Option<DaemonResponse> {
+        if self.is_busy() {
             return Some(DaemonResponse::error_with_code(
-                ErrorCode::RecordingInProgress,
-                &format!("Cannot {action} during active recording. Please wait for it to finish."),
+                ErrorCode::SpeechInProgress,
+                &format!("Cannot {action} while speaking. Please wait for it to finish."),
             ));
         }
         None
@@ -44,8 +48,8 @@ impl SuperTTSDaemon {
 
     /// Backend-mutation guard (`change the backend`) shared by the
     /// set/clear/unload active-backend commands and the HTTP uninstall handler.
-    pub(crate) async fn switch_guard(&self) -> Option<DaemonResponse> {
-        self.guard_model_mutation("change the backend").await
+    pub(crate) fn switch_guard(&self) -> Option<DaemonResponse> {
+        self.guard_model_mutation("change the backend")
     }
 
     /// `source` (repo id) of the currently selected backend, or `None` when
@@ -90,7 +94,7 @@ impl SuperTTSDaemon {
     /// the loaded model. Does not load a model — only `set_model` can fail at
     /// runtime.
     pub async fn handle_set_active_backend(&self, source: String) -> DaemonResponse {
-        if let Some(resp) = self.switch_guard().await {
+        if let Some(resp) = self.switch_guard() {
             return resp;
         }
         let dir_name = {
@@ -151,7 +155,7 @@ impl SuperTTSDaemon {
 
     /// Clear the active backend: unload any model and return to idle.
     pub async fn handle_clear_active_backend(&self) -> DaemonResponse {
-        if let Some(resp) = self.switch_guard().await {
+        if let Some(resp) = self.switch_guard() {
             return resp;
         }
         self.unload_current_model().await;
@@ -265,7 +269,7 @@ impl SuperTTSDaemon {
         model: String,
         source: String,
         definition: ModelDefinition,
-        instance: Box<dyn Transcribe>,
+        instance: Box<dyn Synthesize>,
     ) -> DaemonResponse {
         let provider = definition.provider.clone();
         let actual_device = self.finalize_loaded_model(definition, instance).await;
@@ -285,7 +289,7 @@ impl SuperTTSDaemon {
     }
 
     async fn preflight_model_switch(&self, model: &str, source: &str) -> Option<DaemonResponse> {
-        if let Some(resp) = self.guard_model_mutation("switch models").await {
+        if let Some(resp) = self.guard_model_mutation("switch models") {
             warn!("Model switch rejected - recording in progress");
             return Some(resp);
         }

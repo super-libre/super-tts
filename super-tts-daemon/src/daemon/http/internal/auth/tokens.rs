@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn mint_then_validate_roundtrips() {
         let store = TokenStore::default();
-        let scopes = vec!["transcribe".to_string(), "status".to_string()];
+        let scopes = vec!["speak".to_string(), "status".to_string()];
         let exe = PathBuf::from("/usr/bin/super-tts-cli");
 
         let (token, expires_at) = store.mint("Super TTS CLI", &scopes, &exe);

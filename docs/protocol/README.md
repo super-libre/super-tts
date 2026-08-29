@@ -8,8 +8,8 @@ protocol reference; this page is the entry point to it.
 There are two ways to build on Super TTS:
 
 - **[Build a client](#build-a-client)** — any app, in any language, that
-  wants transcriptions, event streams, or control over recording.
-- **[Add your own model](#add-your-own-model)** — package a speech model
+  wants to speak text, follow playback, or control the daemon.
+- **[Add your own model](#add-your-own-model)** — package a voice model
   as a backend the daemon can install and run.
 
 ---
@@ -26,13 +26,13 @@ socket (`$XDG_RUNTIME_DIR/tts/super-tts-http.sock`). No Rust required —
 curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
      -X POST http://tts.local/auth/request \
      -H 'Content-Type: application/json' \
-     -d '{"app_name":"My App","scopes":["transcribe","status"],"version":"0.1"}'
+     -d '{"app_name":"My App","scopes":["speak","status"],"version":"0.1"}'
 # → { "session_token": "tts_…", "scopes": [...], "expires_at": "…" }
 
 # 2. Send the token on every subsequent request.
 curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
-     -X POST http://tts.local/transcribe \
-     -H "Authorization: Bearer $TTS_TOKEN" -d '{"wait":true}'
+     -X POST http://tts.local/speak \
+     -H "Authorization: Bearer $TTS_TOKEN" -d '{"text":"Hello from my app."}'
 ```
 
 What the protocol gives you:
@@ -40,16 +40,17 @@ What the protocol gives you:
 - **Consent-based auth.** A token is minted only after the user approves
   your app in a popup, and it is bound to your binary's identity — an app
   cannot widen its own permissions. See [auth.md](./auth.md).
-- **Fine-grained scopes.** Request exactly what you need from `transcribe`,
-  `status`, `settings`, `secrets`, `recording_events`,
-  `audio_visualization`, `global_transcriptions`, `daemon_status`. Each is
-  documented under [scopes/](./scopes/).
+- **Fine-grained scopes.** Request exactly what you need from `speak`,
+  `status`, `settings`, `secrets`, `playback_events`,
+  `audio_visualization`, `daemon_status`. Each is documented under
+  [scopes/](./scopes/).
 - **Live event streams.** Subscribe over Server-Sent Events
-  (`GET /events?topics=…`) to recording state, audio frequency bands,
-  model/download status, and final transcription text. See
+  (`GET /events?topics=…`) to speaking state, playback progress, audio
+  frequency bands, and model/download status. See
   [endpoints/v1/events.md](./endpoints/v1/events.md).
-- **Realtime transcription.** Realtime-capable models are driven over a
-  WebSocket session at `/transcribe/realtime`.
+- **Streaming text in.** Send an LLM's reply as it is generated over a
+  WebSocket at [`/speak/stream`](./endpoints/v1/speak/stream.md), and the
+  daemon speaks each sentence as it completes.
 
 Reference:
 

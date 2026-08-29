@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::daemon::client::load_audio_themes;
-use crate::state::{AudioTheme, ContextPage, DaemonStatus, RecordingStatus};
+use crate::state::{AudioTheme, ContextPage, DaemonStatus, SpeakingStatus};
 use crate::ui::icons;
-use crate::ui::messages::{Message, ModelMessage, RecordingMessage};
+use crate::ui::messages::{Message, ModelMessage, SpeechMessage};
 use cosmic::prelude::*;
 use cosmic::widget::nav_bar;
 use std::collections::HashMap;
@@ -33,14 +33,9 @@ fn build_nav() -> nav_bar::Model {
         .icon(icons::phosphor(icons::GEAR));
 
     nav.insert()
-        .text("Recording")
-        .data::<crate::state::Page>(crate::state::Page::Recording)
-        .icon(icons::phosphor(icons::MICROPHONE));
-
-    nav.insert()
-        .text("Input Simulation")
-        .data::<crate::state::Page>(crate::state::Page::InputSimulation)
-        .icon(icons::phosphor(icons::KEYBOARD));
+        .text("Speech")
+        .data::<crate::state::Page>(crate::state::Page::Speech)
+        .icon(icons::phosphor(icons::PLAY));
 
     nav.insert()
         .text("Connection")
@@ -61,9 +56,7 @@ fn initial_load_tasks(
 ) -> Task<cosmic::Action<Message>> {
     // Load audio themes on startup (always available)
     let load_themes = Task::perform(load_audio_themes(), |themes| {
-        cosmic::Action::App(Message::Recording(RecordingMessage::AudioThemesLoaded(
-            themes,
-        )))
+        cosmic::Action::App(Message::Speech(SpeechMessage::AudioThemesLoaded(themes)))
     });
 
     // Try to ping the daemon on startup
@@ -99,8 +92,9 @@ impl AppModel {
             daemon_status: DaemonStatus::Disconnected,
             reconnect_retry: super_tts_shared::daemon::retry::RetryStrategy::for_initial_connection(
             ),
-            recording_status: RecordingStatus::Idle,
-            transcription_text: String::new(),
+            speaking_status: SpeakingStatus::Idle,
+            speaking_utterance: None,
+            speech_test_text: String::new(),
             audio_level: 0.0,
             is_speech_detected: false,
             audio_themes: Vec::new(),
@@ -127,14 +121,6 @@ impl AppModel {
             last_switch_progress_at: None,
             last_event_timestamp: None,
 
-            // Initialize preview typing state (disabled by default as beta feature)
-            preview_typing_enabled: false,
-            recording_stop_mode:
-                super_tts_shared::models::recording_stop_mode::RecordingStopMode::default(),
-            write_method: super_tts_shared::models::write_method::WriteMethod::default(),
-            write_method_test_text: String::new(),
-            resolved_write_method: None,
-            write_method_test_countdown: None,
             notification_method:
                 super_tts_shared::models::notification_method::NotificationMethod::default(),
             volume: 100,
@@ -147,7 +133,7 @@ impl AppModel {
             // Models page UI state
             models_page: crate::state::models_page::ModelsPageState::default(),
 
-            // Transcription language state
+            // Speech language state
             language: crate::state::language::LanguageState::default(),
 
             // Backend catalog + per-backend configuration state

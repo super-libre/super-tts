@@ -66,12 +66,12 @@ fn entry_passes_filters(
 /// `pub(super)` so `update.rs` shares this instead of re-implementing the same
 /// match-by-`source` + fresh-read-with-fallback rule.
 pub(super) fn installed_version_for_source(
-    backends: &[crate::stt_models::backends::DiscoveredBackend],
+    backends: &[crate::tts_models::backends::DiscoveredBackend],
     source: &str,
 ) -> Option<String> {
     let b = backends.iter().find(|b| b.source == source)?;
     Some(
-        crate::stt_models::backends::installed_version(&b.dir).unwrap_or_else(|| b.version.clone()),
+        crate::tts_models::backends::installed_version(&b.dir).unwrap_or_else(|| b.version.clone()),
     )
 }
 
@@ -237,7 +237,7 @@ mod tests {
         assert!(!update_available(Some(""), "1.0.0"));
     }
 
-    use crate::stt_models::backends::DiscoveredBackend;
+    use crate::tts_models::backends::DiscoveredBackend;
     use std::path::PathBuf;
 
     fn discovered(dir: &str, source: &str, version: &str) -> DiscoveredBackend {

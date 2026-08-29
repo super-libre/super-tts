@@ -132,7 +132,7 @@ impl AppModel {
             DownloadMessage::DownloadError { model, error } => {
                 warn!("Download error for model {model}: {error}");
                 // Surface on the Models card banner instead of hijacking the
-                // Recording page's transcription box (Tier 3 #11).
+                // Speech page's test panel (Tier 3 #11).
                 self.model_operation_state = ModelOperationState::Error {
                     message: format!("Download failed: {error}"),
                 };

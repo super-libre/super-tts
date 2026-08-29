@@ -83,7 +83,7 @@ impl SuperTTSDaemon {
                     // judged against the one on disk. Falls back to the scan's
                     // value if the manifest cannot be read now, since the last
                     // known version beats none for a backend in that state.
-                    version: crate::stt_models::backends::installed_version(&b.dir)
+                    version: crate::tts_models::backends::installed_version(&b.dir)
                         .unwrap_or_else(|| b.version.clone()),
                     kind: b.kind.clone(),
                     // `"wasm"` is what `installed.json` records for a wasm-kind

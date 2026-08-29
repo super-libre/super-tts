@@ -7,7 +7,7 @@ the catalog of available models lives at [`GET /models`](./models.md).
 The active model is identified by a `(name, source)`
 pair:
 
-- **`name`** — `whisper-1`, `voxtral-mini`, …
+- **`name`** — `gpt-4o-mini-tts`, `xtts-v2`, …
 - **`source`** — the repo id of the backend that serves the model
   (e.g. `github.com/super-tts/openai`), as returned by
   [`GET /models`](./models.md). Empty/omitted resolves to the
@@ -52,7 +52,7 @@ Authorization: Bearer tts_…64hex…
 Content-Type: application/json
 
 {
-  "model":    "whisper-1",
+  "model":    "gpt-4o-mini-tts",
   "source":   "github.com/super-tts/openai"
 }
 ```
@@ -89,7 +89,7 @@ topics above.
 | 401  | `invalid_session`          | Token unknown / expired / `exe_changed`                                       |
 | 403  | `scope_denied`             | Token lacks the `settings` scope                                              |
 | 409  | `switch_in_progress`       | Another model switch is already running                                       |
-| 409  | `recording_in_progress`    | A recording is active; cancel or finish it before switching                   |
+| 409  | `speech_in_progress`    | An utterance is in flight; stop it or let it finish before switching                   |
 
 ## `GET /active_model`
 
@@ -116,8 +116,8 @@ Authorization: Bearer tts_…64hex…
     // Reflects the previously-loaded model while a switch is in
     // flight, and the new model once that switch succeeds.
     "current": {
-      "model":    "voxtral-mini",
-      "source":   "github.com/super-tts/voxtral",
+      "model":    "xtts-v2",
+      "source":   "github.com/super-tts/xtts",
       "provider": "",               // always empty; see below
       "loaded":   true,
       "device":   "cuda"            // "cpu" / "cuda" / "rocm" / "metal"
@@ -130,10 +130,10 @@ Authorization: Bearer tts_…64hex…
     "switch": {
       "phase":      "downloading",  // "downloading" | "completed"
                                     // | "cancelled" | "error"
-      "target":     { "model": "whisper-base" },
+      "target":     { "model": "kokoro-82m" },
       "started_at": "2026-05-22T12:00:00Z",
       "download": {
-        "current_file":     "model.safetensors",
+        "current_file":     "kokoro-v1_0.pth",
         "file_index":       1,
         "total_files":      3,
         "bytes_downloaded": 12345678,
@@ -173,8 +173,8 @@ identify a model by `(name, source)` instead. It will be removed.
 Unload the currently loaded model. The active backend stays selected — the
 user can immediately pick another of its models with `POST /active_model`.
 To return the daemon to fully idle, use [`DELETE /active_backend`](./active_backend.md)
-instead. No-op when nothing is loaded; rejected during an active recording or
-real-time transcription session.
+instead. No-op when nothing is loaded; rejected while an utterance is in
+flight.
 
 **Request:**
 
@@ -190,13 +190,13 @@ Authorization: Bearer tts_…64hex…
 HTTP/1.1 200 OK
 Content-Type: application/json
 
-{ "status": "success", "message": "Unloaded whisper-1" }
+{ "status": "success", "message": "Unloaded gpt-4o-mini-tts" }
 ```
 
 **Errors:**
 
 | HTTP | `message`         | Meaning                                                       |
 |------|-------------------|---------------------------------------------------------------|
-| 409  | `recording_in_progress` | A recording or real-time session is active; stop it first |
+| 409  | `speech_in_progress` | An utterance or realtime session is active; stop it first |
 | 401  | `invalid_session`       | Token unknown / expired / `exe_changed`                  |
 | 403  | `scope_denied`          | Token lacks the `settings` scope                         |

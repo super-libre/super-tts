@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! End-to-end tests for the CLI's non-recording subcommands: `ping`,
-//! `status`, `stop`, and `logout`.
+//! End-to-end tests for every CLI subcommand.
 //!
-//! Complements `cmd_record_toggle.rs` (which covers the `record` toggle
-//! path and is `#[ignore]`'d because it needs a real microphone). These
-//! commands are fully hermetic — none touch the audio pipeline — so they
-//! run as part of the default `cargo test` flow:
+//! All of them are hermetic: the daemon comes up with no backends, so `speak`
+//! is refused before anything reaches an audio device, and none of the others
+//! touch one either. They run as part of the default `cargo test` flow:
 //!
-//! - `ping`   → `GET  /v1/ping`            : liveness, prints the daemon's reply.
-//! - `status` → `GET  /v1/status`          : prints `Model:` / `Device:` lines.
-//! - `stop`   → `POST /v1/transcribe/stop` : idempotent against an idle daemon.
-//! - `logout` → local keyring only         : forgets the cached session token.
+//! - `ping`   → `GET  /v1/ping`       : liveness, prints the daemon's reply.
+//! - `status` → `GET  /v1/status`     : prints `Model:` / `Device:` / `State:`.
+//! - `speak`  → `POST /v1/speak`      : text from arguments or from stdin.
+//! - `stop`   → `POST /v1/speak/stop` : idempotent against an idle daemon.
+//! - `logout` → local keyring only    : forgets the cached session token.
 //!
 //! Both processes run with `SUPER_TTS_KEYRING_MOCK=1` (in-memory keyring,
 //! no secret-service prompt) and `SUPER_TTS_AUTO_APPROVE=1` (the daemon
@@ -85,6 +84,7 @@ fn spawn_daemon() -> (DaemonGuard, PathBuf) {
     let child = Command::new(locate_daemon_bin())
         .env("SUPER_TTS_KEYRING_MOCK", "1")
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
@@ -121,6 +121,7 @@ fn run_cli(socket: &Path, args: &[&str]) -> (i32, String, String) {
     let mut child = Command::new(CLI_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1")
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .args(&full_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -175,24 +176,91 @@ fn status_reports_model_and_device() {
         stdout.contains("Device:"),
         "status should print a Device: line; stdout=`{stdout}` stderr=`{stderr}`"
     );
+    assert!(
+        stdout.contains("State:  idle"),
+        "an idle daemon should report State: idle; stdout=`{stdout}` stderr=`{stderr}`"
+    );
 }
 
-/// `stop` against an idle daemon is idempotent: the daemon answers
-/// `200 { message: "No recording in progress" }` and the CLI surfaces that
-/// message verbatim with a zero exit. This is the path the toggle hotkey
-/// relies on when the user double-presses after audio failed to start.
+/// `speak` reaches `POST /v1/speak` and surfaces the daemon's refusal when no
+/// model is loaded — the routing is the subject, not the audio. A hermetic
+/// daemon has no backends, so this is the reachable end of the path.
+#[test]
+fn speak_routes_to_the_daemon_and_surfaces_its_refusal() {
+    let (_guard, socket) = spawn_daemon();
+    let (code, stdout, stderr) = run_cli(&socket, &["speak", "hello", "there"]);
+    let combined = format!("{stdout}\n{stderr}");
+    assert_ne!(
+        code, 0,
+        "speak with no model loaded must not report success; got `{combined}`"
+    );
+    assert!(
+        combined.contains("model_not_loaded"),
+        "the daemon's coded refusal must reach the user; got `{combined}`"
+    );
+}
+
+/// Text on stdin is what makes `... | super-tts-cli speak` work, which is how a
+/// shell pipeline reaches the daemon without a client of its own. It must route
+/// the same way as trailing arguments rather than silently speaking nothing.
+#[test]
+fn speak_reads_text_from_stdin_when_no_arguments_are_given() {
+    let (_guard, socket) = spawn_daemon();
+
+    let mut child = Command::new(CLI_BIN)
+        .env("SUPER_TTS_KEYRING_MOCK", "1")
+        .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
+        .args(["--socket", socket.to_str().expect("socket utf8"), "speak"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn cli speak");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin pipe");
+        stdin
+            .write_all(b"piped text reaches the daemon")
+            .expect("write stdin");
+    }
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut h) = child.stdout.take() {
+        let _ = h.read_to_string(&mut stdout);
+    }
+    if let Some(mut h) = child.stderr.take() {
+        let _ = h.read_to_string(&mut stderr);
+    }
+    let _ = child.wait().expect("wait cli");
+
+    let combined = format!("{stdout}\n{stderr}");
+    assert!(
+        combined.contains("model_not_loaded"),
+        "piped text must reach the daemon and get its refusal, not a local \
+         'no text given' error; got `{combined}`"
+    );
+}
+
+/// `stop` against an idle daemon is idempotent: the daemon answers `200` with
+/// no utterance id and the CLI says so with a zero exit. A user cancelling on a
+/// keypress should not get an error for having won the race.
 #[test]
 fn stop_is_idempotent_when_idle() {
     let (_guard, socket) = spawn_daemon();
-    let (code, stdout, stderr) = run_cli(&socket, &["stop"]);
-    assert_eq!(
-        code, 0,
-        "stop on idle daemon should exit 0; stdout=`{stdout}` stderr=`{stderr}`"
-    );
-    assert!(
-        stdout.contains("No recording in progress"),
-        "stop should surface the idle message; stdout=`{stdout}` stderr=`{stderr}`"
-    );
+    for attempt in 1..=2 {
+        let (code, stdout, stderr) = run_cli(&socket, &["stop"]);
+        assert_eq!(
+            code, 0,
+            "stop attempt {attempt} on an idle daemon should exit 0; \
+             stdout=`{stdout}` stderr=`{stderr}`"
+        );
+        assert!(
+            stdout.contains("Nothing was speaking"),
+            "stop attempt {attempt} should say nothing was speaking; \
+             stdout=`{stdout}` stderr=`{stderr}`"
+        );
+    }
 }
 
 /// `logout` is local-only — it forgets the cached session token via the

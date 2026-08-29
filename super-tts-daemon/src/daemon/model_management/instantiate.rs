@@ -2,9 +2,9 @@
 use crate::daemon::types::SuperTTSDaemon;
 use crate::registry::host_detect::Host;
 use crate::registry::installed;
-use crate::stt_models::ModelDefinition;
-use crate::stt_models::backends::{self, DiscoveredBackend};
-use crate::stt_models::transcribe::Transcribe;
+use crate::tts_models::ModelDefinition;
+use crate::tts_models::backends::{self, DiscoveredBackend};
+use crate::tts_models::synthesize::Synthesize;
 use anyhow::{Result, anyhow, bail};
 
 impl SuperTTSDaemon {
@@ -23,7 +23,7 @@ impl SuperTTSDaemon {
         name: &str,
         source: &str,
         device_pref: &str,
-    ) -> Result<(Box<dyn Transcribe>, ModelDefinition)> {
+    ) -> Result<(Box<dyn Synthesize>, ModelDefinition)> {
         let (backend, def) = {
             let backends = self.backends.read().await;
             let (b, d) = backends::find_model(&backends, name, source)
@@ -31,7 +31,7 @@ impl SuperTTSDaemon {
             (b.clone(), d.clone())
         };
 
-        let instance: Box<dyn Transcribe> = match backend.kind.as_str() {
+        let instance: Box<dyn Synthesize> = match backend.kind.as_str() {
             "wasm" => self.instantiate_wasm(&backend, &def).await?,
             "subprocess" => {
                 let resolved = resolve_device_for_backend(device_pref, &backend.dir).await;
@@ -48,8 +48,8 @@ impl SuperTTSDaemon {
         &self,
         backend: &DiscoveredBackend,
         def: &ModelDefinition,
-    ) -> Result<Box<dyn Transcribe>> {
-        use crate::stt_models::transcribe::ModelInfoData;
+    ) -> Result<Box<dyn Synthesize>> {
+        use crate::tts_models::synthesize::ModelInfoData;
         // One snapshot of the user's options for both the headers the component
         // is handed and the egress it is granted: read separately, a config
         // write landing between them would authorize a different endpoint than
@@ -68,14 +68,14 @@ impl SuperTTSDaemon {
         // serves shares it). Read it from the manifest so a ws-capable
         // component is linked against the realtime world.
         let websocket_capability =
-            crate::stt_models::backends::manifest::Manifest::load(&backend.dir)?
+            crate::tts_models::backends::manifest::Manifest::load(&backend.dir)?
                 .capabilities
                 .websocket;
         // Egress = the manifest-pinned `allowed_hosts` (fully SSRF-guarded) plus
         // what the user authorized via the `base_url` option, whose `host:port`
         // may be local or private.
         let user_allowed_hosts = Self::base_url_egress_hosts(backend, &overrides);
-        let inst = crate::stt_models::wasm::WasmBackend::with_info(
+        let inst = crate::tts_models::wasm::WasmBackend::with_info(
             &component,
             backend.allowed_hosts.clone(),
             user_allowed_hosts,
@@ -92,7 +92,7 @@ impl SuperTTSDaemon {
         &self,
         backend: &DiscoveredBackend,
         _def: &ModelDefinition,
-    ) -> Result<Box<dyn Transcribe>> {
+    ) -> Result<Box<dyn Synthesize>> {
         bail!(
             "backend {} is a WASM backend, unsupported in this build (rebuild with --features wasm-backends)",
             backend.source
@@ -105,12 +105,12 @@ impl SuperTTSDaemon {
         backend: &DiscoveredBackend,
         name: &str,
         device_pref: &str,
-    ) -> Result<Box<dyn Transcribe>> {
+    ) -> Result<Box<dyn Synthesize>> {
         // Count the files we'll provision so the tracker's denominator is
         // accurate from the first broadcast. Each `[[models.files]]` entry is
         // one file. Empty-files models (cloud-only) skip the tracker entirely —
         // there is nothing to download.
-        let manifest = crate::stt_models::backends::manifest::Manifest::load(&backend.dir)?;
+        let manifest = crate::tts_models::backends::manifest::Manifest::load(&backend.dir)?;
         let total_files = manifest
             .models
             .iter()
@@ -146,7 +146,7 @@ impl SuperTTSDaemon {
             Some(t)
         };
 
-        let result = crate::stt_models::subprocess::SubprocessBackend::spawn(
+        let result = crate::tts_models::subprocess::SubprocessBackend::spawn(
             &backend.dir,
             name,
             device_pref,
@@ -175,7 +175,7 @@ impl SuperTTSDaemon {
         backend: &DiscoveredBackend,
         _name: &str,
         _device_pref: &str,
-    ) -> Result<Box<dyn Transcribe>> {
+    ) -> Result<Box<dyn Synthesize>> {
         bail!(
             "backend {} is a subprocess backend, unsupported in this build (rebuild with --features subprocess-backends)",
             backend.source
@@ -325,7 +325,7 @@ impl SuperTTSDaemon {
     /// The bare host carries no such relaxation; it keeps the gateway's other
     /// ports reachable while they stay public, so no extra port on a local or
     /// private gateway opens up (see
-    /// [`check_host_allowed`](crate::stt_models::wasm::host::check_host_allowed)).
+    /// [`check_host_allowed`](crate::tts_models::wasm::host::check_host_allowed)).
     /// Unparseable or unset values contribute nothing.
     ///
     /// Both outcomes are logged. This is the one path that relaxes the sandbox,
@@ -605,7 +605,7 @@ mod tests {
     async fn base_url_egress_hosts_resolves_override_or_default() {
         use crate::daemon::test_fixtures::openai_backend;
         use crate::daemon::types::test_daemon;
-        use crate::stt_models::backends::DiscoveredBackend;
+        use crate::tts_models::backends::DiscoveredBackend;
 
         let daemon = test_daemon().await;
         let source = "github.com/super-tts/openai";
@@ -659,7 +659,7 @@ mod tests {
     async fn whitespace_in_base_url_cannot_split_the_two_paths() {
         use crate::daemon::test_fixtures::openai_backend;
         use crate::daemon::types::test_daemon;
-        use crate::stt_models::backends::DiscoveredBackend;
+        use crate::tts_models::backends::DiscoveredBackend;
 
         let daemon = test_daemon().await;
         let source = "github.com/super-tts/openai";
@@ -714,7 +714,7 @@ mod tests {
     async fn the_injected_base_url_is_canonical() {
         use crate::daemon::test_fixtures::openai_backend;
         use crate::daemon::types::test_daemon;
-        use crate::stt_models::backends::DiscoveredBackend;
+        use crate::tts_models::backends::DiscoveredBackend;
 
         let daemon = test_daemon().await;
         let source = "github.com/super-tts/openai";
@@ -767,7 +767,7 @@ mod tests {
     async fn an_unreadable_base_url_fails_the_load() {
         use crate::daemon::test_fixtures::openai_backend;
         use crate::daemon::types::test_daemon;
-        use crate::stt_models::backends::DiscoveredBackend;
+        use crate::tts_models::backends::DiscoveredBackend;
 
         let daemon = test_daemon().await;
         let source = "github.com/super-tts/openai";
@@ -806,7 +806,7 @@ mod tests {
     async fn headers_and_egress_read_the_same_snapshot() {
         use crate::daemon::test_fixtures::openai_backend;
         use crate::daemon::types::test_daemon;
-        use crate::stt_models::backends::DiscoveredBackend;
+        use crate::tts_models::backends::DiscoveredBackend;
 
         let daemon = test_daemon().await;
         let source = "github.com/super-tts/openai";

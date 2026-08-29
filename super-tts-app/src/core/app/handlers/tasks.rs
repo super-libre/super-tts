@@ -4,14 +4,13 @@
 //! result-to-`Message` mapping isn't re-rolled at each call site.
 
 use crate::daemon::client::{
-    get_current_audio_theme, get_custom_models_dir, get_notification_method, get_preview_typing,
-    get_recording_stop_mode, get_update_check_enabled, get_update_status, get_volume,
-    get_write_method, list_backends, ping_daemon,
+    get_current_audio_theme, get_custom_models_dir, get_notification_method,
+    get_update_check_enabled, get_update_status, get_volume, list_backends, ping_daemon,
 };
 use crate::state::AudioTheme;
 use crate::ui::messages::{
     BackendMessage, DaemonMessage, Message, ModelsPageMessage, NotificationMethodMessage,
-    PreviewTypingMessage, RecordingStopModeMessage, UpdateMessage, WriteMethodMessage,
+    UpdateMessage,
 };
 use cosmic::prelude::*;
 use log::warn;
@@ -107,49 +106,6 @@ pub(in crate::core::app) fn build_load_settings_tasks() -> Task<cosmic::Action<M
             Err(e) => {
                 warn!("Failed to load custom models dir: {e}");
                 cosmic::Action::App(Message::Daemon(DaemonMessage::CustomModelsDirLoaded(None)))
-            }
-        }),
-        Task::perform(get_preview_typing(), |result| match result {
-            Ok(enabled) => cosmic::Action::App(Message::PreviewTyping(
-                PreviewTypingMessage::SettingLoaded(enabled),
-            )),
-            Err(e) => {
-                log::warn!("Failed to load preview typing setting: {e}");
-                cosmic::Action::App(Message::PreviewTyping(PreviewTypingMessage::SettingLoaded(
-                    false,
-                )))
-            }
-        }),
-        Task::perform(get_recording_stop_mode(), |result| {
-            use super_tts_shared::models::recording_stop_mode::RecordingStopMode;
-            match result {
-                Ok(mode_str) => {
-                    let mode = mode_str.parse::<RecordingStopMode>().unwrap_or_default();
-                    cosmic::Action::App(Message::RecordingStopMode(
-                        RecordingStopModeMessage::Loaded(mode),
-                    ))
-                }
-                Err(e) => {
-                    log::warn!("Failed to load recording stop mode: {e}");
-                    cosmic::Action::App(Message::RecordingStopMode(
-                        RecordingStopModeMessage::Loaded(RecordingStopMode::default()),
-                    ))
-                }
-            }
-        }),
-        Task::perform(get_write_method(), |result| {
-            use super_tts_shared::models::write_method::WriteMethod;
-            match result {
-                Ok(method_str) => {
-                    let method = method_str.parse::<WriteMethod>().unwrap_or_default();
-                    cosmic::Action::App(Message::WriteMethod(WriteMethodMessage::Loaded(method)))
-                }
-                Err(e) => {
-                    log::warn!("Failed to load write method: {e}");
-                    cosmic::Action::App(Message::WriteMethod(WriteMethodMessage::Loaded(
-                        WriteMethod::default(),
-                    )))
-                }
             }
         }),
         Task::perform(get_notification_method(), |result| {

@@ -72,53 +72,6 @@ pub fn validate_required_string(
     }
 }
 
-/// Validate audio data size
-///
-/// # Errors
-/// Returns [`ValidationError::AudioTooLarge`] when sample count exceeds
-/// [`limits::MAX_AUDIO_SAMPLES`]. Also flags suspicious constant-value buffers.
-pub fn validate_audio_data(audio_data: &[f32]) -> Result<(), ValidationError> {
-    if audio_data.len() > limits::MAX_AUDIO_SAMPLES {
-        return Err(ValidationError::AudioTooLarge {
-            samples: audio_data.len(),
-            max: limits::MAX_AUDIO_SAMPLES,
-        });
-    }
-
-    // Additional check for suspicious patterns that could indicate an attack.
-    // This is a content problem, not a size overflow (the buffer is within the
-    // size cap), so report it as such rather than AudioTooLarge.
-    if audio_data.len() > 1_000_000 {
-        // Check if all values are the same (possible padding attack)
-        if audio_data
-            .windows(2)
-            .all(|w| (w[0] - w[1]).abs() < f32::EPSILON)
-        {
-            return Err(ValidationError::SuspiciousAudioContent {
-                samples: audio_data.len(),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Validate sample rate
-///
-/// # Errors
-/// Returns [`ValidationError::InvalidSampleRate`] if `sample_rate` falls
-/// outside [`limits::MIN_SAMPLE_RATE`]..=[`limits::MAX_SAMPLE_RATE`].
-pub fn validate_sample_rate(sample_rate: u32) -> Result<(), ValidationError> {
-    if !(limits::MIN_SAMPLE_RATE..=limits::MAX_SAMPLE_RATE).contains(&sample_rate) {
-        return Err(ValidationError::InvalidSampleRate {
-            rate: sample_rate,
-            min: limits::MIN_SAMPLE_RATE,
-            max: limits::MAX_SAMPLE_RATE,
-        });
-    }
-    Ok(())
-}
-
 /// Validate event types list
 ///
 /// # Errors
@@ -256,39 +209,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_audio_data() {
-        // Valid audio
-        let audio = vec![0.5f32; 1000];
-        assert!(validate_audio_data(&audio).is_ok());
-
-        // Too large → size error.
-        let large_audio = vec![0.5f32; limits::MAX_AUDIO_SAMPLES + 1];
-        assert!(matches!(
-            validate_audio_data(&large_audio),
-            Err(ValidationError::AudioTooLarge { .. })
-        ));
-
-        // Uniform padding within the size cap → content error, not AudioTooLarge.
-        let suspicious_audio = vec![0.5f32; 2_000_000];
-        assert!(matches!(
-            validate_audio_data(&suspicious_audio),
-            Err(ValidationError::SuspiciousAudioContent { .. })
-        ));
-    }
-
-    #[test]
-    fn test_validate_sample_rate() {
-        // Valid rates
-        assert!(validate_sample_rate(16000).is_ok());
-        assert!(validate_sample_rate(44100).is_ok());
-
-        // Invalid rates
-        assert!(validate_sample_rate(0).is_err());
-        assert!(validate_sample_rate(7999).is_err());
-        assert!(validate_sample_rate(96001).is_err());
-    }
-
-    #[test]
     fn test_validate_json_value() {
         // Valid JSON
         let json = json!({"key": "value", "number": 42});
@@ -306,7 +226,7 @@ mod tests {
     #[test]
     fn test_validate_command() {
         // Valid commands
-        assert!(validate_command("transcribe").is_ok());
+        assert!(validate_command("speak").is_ok());
         assert!(validate_command("get_events").is_ok());
         assert!(validate_command("set-model").is_ok());
 

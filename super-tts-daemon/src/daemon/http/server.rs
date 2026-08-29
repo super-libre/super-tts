@@ -13,8 +13,9 @@
 //! - `GET  /v1/auth/status`               — probe token validity (no consent UI)
 //! - `GET  /v1/ping`                      — liveness (any authenticated token)
 //! - `GET  /v1/status`                    — current model + device (`status` scope)
-//! - `POST /v1/transcribe`                — start a daemon-mic recording
-//! - `POST /v1/transcribe/stop`           — stop an in-flight daemon-mic recording
+//! - `POST /v1/speak`                     — synthesize text and play it (`speak` scope)
+//! - `POST /v1/speak/stop`                — stop the current utterance (`speak` scope)
+//! - `GET  /v1/speak/stream`              — WebSocket: stream text in as it is generated
 //! - `GET  /v1/events?topics=…`           — Server-Sent Events stream (per-topic scope)
 //! - `GET  /v1/update`                    — last self-update check result (`settings` scope)
 //! - `POST /v1/update/check`              — force an immediate self-update check (`settings` scope)
@@ -265,7 +266,7 @@ async fn write_oneshot_response(
     stream.shutdown().await
 }
 
-// (auth/request, auth/status, ping, status, transcribe, events, settings moved to v1/; see use re-imports above)
+// (auth/request, auth/status, ping, status, speak, events, settings moved to v1/; see use re-imports above)
 
 #[cfg(test)]
 mod tests {
@@ -334,7 +335,7 @@ mod tests {
             "tok-b".to_string(),
             make_meta(
                 "App B",
-                "transcribe",
+                "speak",
                 "/usr/bin/app-b",
                 Utc::now() + ChronoDuration::days(7),
             ),
@@ -348,10 +349,7 @@ mod tests {
         assert_eq!(back.version, SESSIONS_SCHEMA_VERSION);
         assert_eq!(back.sessions.len(), 2);
         assert_eq!(back.sessions["tok-a"].app_name, "App A");
-        assert_eq!(
-            back.sessions["tok-b"].scopes,
-            vec!["transcribe".to_string()]
-        );
+        assert_eq!(back.sessions["tok-b"].scopes, vec!["speak".to_string()]);
     }
 
     /// `auth_request` always runs the consent flow now (no
@@ -388,7 +386,7 @@ mod tests {
             "stale".to_string(),
             make_meta(
                 "App",
-                "transcribe",
+                "speak",
                 "/usr/bin/app",
                 Utc::now() - ChronoDuration::seconds(1),
             ),
@@ -441,9 +439,9 @@ mod tests {
     #[test]
     fn deny_cache_distinguishes_keys_by_each_component() {
         let cache = DenyCache::default();
-        let app_a = deny_key("App A", "/usr/bin/a", "recording_events");
-        let same_path_renamed = deny_key("Renamed App", "/usr/bin/a", "recording_events");
-        let other_path = deny_key("App A", "/usr/bin/a-renamed", "recording_events");
+        let app_a = deny_key("App A", "/usr/bin/a", "playback_events");
+        let same_path_renamed = deny_key("Renamed App", "/usr/bin/a", "playback_events");
+        let other_path = deny_key("App A", "/usr/bin/a-renamed", "playback_events");
         let other_scope = deny_key("App A", "/usr/bin/a", "settings");
 
         cache.insert(app_a.clone());
@@ -471,7 +469,7 @@ mod tests {
     #[test]
     fn deny_cache_insert_is_idempotent() {
         let cache = DenyCache::default();
-        let key = deny_key("App", "/usr/bin/app", "transcribe");
+        let key = deny_key("App", "/usr/bin/app", "speak");
         cache.insert(key.clone());
         cache.insert(key.clone());
         cache.insert(key.clone());
@@ -490,7 +488,7 @@ mod tests {
     fn deny_cache_instances_do_not_share_state() {
         let a = DenyCache::default();
         let b = DenyCache::default();
-        let key = deny_key("App", "/usr/bin/app", "recording_events");
+        let key = deny_key("App", "/usr/bin/app", "playback_events");
 
         a.insert(key.clone());
         assert!(a.contains(&key));

@@ -18,7 +18,7 @@
 //! - bogus bearer token                     → `401 invalid_session`
 //!
 //! Topic→scope mapping under test (`daemon/events.rs::required_scope`):
-//! `recording_state` → `recording_events`, `frequency_bands` →
+//! `speaking_state` → `playback_events`, `frequency_bands` →
 //! `audio_visualization`.
 //!
 //! Hermetic: `SUPER_TTS_AUTO_APPROVE=1` (no GUI) + `SUPER_TTS_KEYRING_MOCK=1`
@@ -71,6 +71,7 @@ async fn start_daemon() -> (DaemonGuard, PathBuf) {
     let child = Command::new(DAEMON_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1")
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
@@ -281,10 +282,10 @@ async fn language_change_broadcasts_settings_changed() {
 #[tokio::test]
 async fn valid_topic_with_scope_subscribes() {
     let (_guard, sock) = start_daemon().await;
-    let token = mint(&sock, &["recording_events"]).await;
+    let token = mint(&sock, &["playback_events"]).await;
 
     let (status, content_type, text) =
-        events_subscribe(&sock, "topics=recording_state", &token).await;
+        events_subscribe(&sock, "topics=speaking_state", &token).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -299,7 +300,7 @@ async fn valid_topic_with_scope_subscribes() {
         "the stream must open with a `subscribed` ack: {text:?}"
     );
     assert!(
-        text.contains("recording_state"),
+        text.contains("speaking_state"),
         "the ack must echo the subscribed topic: {text:?}"
     );
 }
@@ -309,15 +310,15 @@ async fn valid_topic_with_scope_subscribes() {
 #[tokio::test]
 async fn multi_topic_with_all_scopes_subscribes() {
     let (_guard, sock) = start_daemon().await;
-    let token = mint(&sock, &["recording_events", "audio_visualization"]).await;
+    let token = mint(&sock, &["playback_events", "audio_visualization"]).await;
 
     let (status, _ct, text) =
-        events_subscribe(&sock, "topics=recording_state,frequency_bands", &token).await;
+        events_subscribe(&sock, "topics=speaking_state,frequency_bands", &token).await;
     assert_eq!(status, StatusCode::OK, "subscribe should succeed: {text}");
     assert!(text.contains("event: subscribed"), "missing ack: {text:?}");
     assert!(
-        text.contains("recording_state"),
-        "ack missing recording_state: {text:?}"
+        text.contains("speaking_state"),
+        "ack missing speaking_state: {text:?}"
     );
     assert!(
         text.contains("frequency_bands"),
@@ -333,7 +334,7 @@ async fn multi_topic_with_all_scopes_subscribes() {
 async fn topic_without_its_scope_is_forbidden() {
     let (_guard, sock) = start_daemon().await;
     // Has recording_events but NOT audio_visualization.
-    let token = mint(&sock, &["recording_events"]).await;
+    let token = mint(&sock, &["playback_events"]).await;
 
     let (status, body) = events_error(&sock, "topics=frequency_bands", &token).await;
     assert_eq!(
@@ -350,10 +351,9 @@ async fn topic_without_its_scope_is_forbidden() {
 #[tokio::test]
 async fn mixed_batch_missing_one_scope_is_forbidden() {
     let (_guard, sock) = start_daemon().await;
-    let token = mint(&sock, &["recording_events"]).await;
+    let token = mint(&sock, &["playback_events"]).await;
 
-    let (status, body) =
-        events_error(&sock, "topics=recording_state,frequency_bands", &token).await;
+    let (status, body) = events_error(&sock, "topics=speaking_state,frequency_bands", &token).await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
@@ -368,7 +368,7 @@ async fn mixed_batch_missing_one_scope_is_forbidden() {
 async fn unknown_topic_is_invalid_topic() {
     let (_guard, sock) = start_daemon().await;
     // A broad token so the rejection is about the topic, not the scope.
-    let token = mint(&sock, &["recording_events", "audio_visualization"]).await;
+    let token = mint(&sock, &["playback_events", "audio_visualization"]).await;
 
     let (status, body) = events_error(&sock, "topics=not_a_real_topic", &token).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got: {body}");
@@ -385,7 +385,7 @@ async fn unknown_topic_is_invalid_topic() {
 #[tokio::test]
 async fn missing_and_empty_topics_are_invalid_topic() {
     let (_guard, sock) = start_daemon().await;
-    let token = mint(&sock, &["recording_events"]).await;
+    let token = mint(&sock, &["playback_events"]).await;
 
     // No `topics` query param at all.
     let (status, body) = events_error(&sock, "", &token).await;
@@ -404,7 +404,7 @@ async fn missing_and_empty_topics_are_invalid_topic() {
 #[tokio::test]
 async fn bogus_token_is_unauthorized() {
     let (_guard, sock) = start_daemon().await;
-    let (status, body) = events_error(&sock, "topics=recording_state", "not-a-real-token").await;
+    let (status, body) = events_error(&sock, "topics=speaking_state", "not-a-real-token").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "got: {body}");
     assert_eq!(body["message"], "invalid_session");
 }

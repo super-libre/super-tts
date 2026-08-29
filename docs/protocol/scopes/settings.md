@@ -10,12 +10,12 @@ non-sensitive **options**; a backend's **secrets** (API keys) are managed
 separately under the [`secrets`](./secrets.md) scope and are never readable.
 
 It grants **only** that surface — scopes no longer imply one another. A Settings
-UI that also drives test recordings, shows daemon status, or renders a visualizer
+UI that also drives test speech, shows daemon status, or renders a visualizer
 requests those scopes *alongside* `settings` in the same handshake, e.g.
-`["settings", "status", "transcribe", "recording_events", "audio_visualization", "daemon_status"]`.
+`["settings", "status", "speak", "playback_events", "audio_visualization", "daemon_status"]`.
 See [auth.md](../auth.md) for how scopes compose, and the individual scope docs
-([status](./status.md), [transcribe](./transcribe.md),
-[recording_events](./recording_events.md),
+([status](./status.md), [speak](./speak.md),
+[playback_events](./playback_events.md),
 [audio_visualization](./audio_visualization.md),
 [daemon_status](./daemon_status.md)) for what each adds.
 
@@ -32,7 +32,7 @@ scope and asked for `daemon_status_changed` or `download_progress`.
 |-----------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
 | `/active_model`, `/active_backend`, `/active_device`, `/allow_online_models` (when it triggers a fallback)                       | Yes — `daemon_status_changed` (and `download_progress` while files are being pulled)                 |
 | `/update_check_enabled`, `/update_beta_optin`                                                                                    | Yes — `daemon_status_changed` (`settings_changed` variant)                                            |
-| `/audio_theme`, `/volume`, `/write_method`, `/notification_method`, `/recording_stop_mode`, `/preview_typing`, `/allow_online_models` (no fallback), `/custom_models_dir` | No. Clients that want to see *another* app change one of these must re-`GET` the relevant endpoint.  |
+| `/audio_theme`, `/volume`, `/notification_method`, `/allow_online_models` (no fallback), `/custom_models_dir` | No. Clients that want to see *another* app change one of these must re-`GET` the relevant endpoint.  |
 
 ## Endpoint reference
 
@@ -48,12 +48,8 @@ scope and asked for `daemon_status_changed` or `download_progress`.
 | [`/audio_theme/test`](../endpoints/v1/audio_theme/test.md)  | POST       | Audition the current theme's start + stop cues                                                        |
 | [`/audio_themes`](../endpoints/v1/audio_themes.md)          | GET        | List available themes                                                                                  |
 | [`/volume`](../endpoints/v1/volume.md)                      | POST, GET  | Set / read audio cue volume (0–100)                                                                   |
-| [`/recording_stop_mode`](../endpoints/v1/recording_stop_mode.md) | POST, GET | Default stop behavior for `/transcribe` (silence_only / silence_and_manual / manual_only)                  |
-| [`/preview_typing`](../endpoints/v1/preview_typing.md)      | POST, GET  | Toggle live typing of preview text while recording                                                    |
-| [`/write_method`](../endpoints/v1/write_method.md)          | POST, GET  | Keyboard simulation method (auto / xdg_desktop_portal / ydotool / wayland_protocol)                   |
-| [`/write_method/test`](../endpoints/v1/write_method/test.md) | POST      | Type a test string with the configured method; reports the backend it resolved to                     |
-| [`/notification_method`](../endpoints/v1/notification_method.md) | POST, GET  | How recording failures are surfaced (auto / dbus / typed / off)                                       |
-| [`/allow_online_models`](../endpoints/v1/allow_online_models.md) | POST, GET | Privacy gate for online providers (OpenAI / Mistral / Deepgram)                                       |
+| [`/notification_method`](../endpoints/v1/notification_method.md) | POST, GET  | How synthesis failures are surfaced (auto / off)                                                      |
+| [`/allow_online_models`](../endpoints/v1/allow_online_models.md) | POST, GET | Privacy gate for online providers (OpenAI / ElevenLabs)                                       |
 | [`/custom_models_dir`](../endpoints/v1/custom_models_dir.md) | POST, GET | Where to scan for user-supplied models                                                                |
 | [`/backends`](../endpoints/v1/backends.md)                  | GET, DELETE | List installed backends; uninstall a backend                                                  |
 | [`/backends/{source}/options`](../endpoints/v1/backends/options.md) | GET, POST, DELETE | List / read / set / reset a backend's non-sensitive options                          |
@@ -95,7 +91,7 @@ sequenceDiagram
     D-->>App: 200 SSE stream
 
     Note over App,D: 4. User picks a different model
-    App->>D: POST /active_model<br/>{ model: "voxtral-mini", source: "github.com/super-tts/voxtral" }
+    App->>D: POST /active_model<br/>{ model: "xtts-v2", source: "github.com/super-tts/xtts" }
     D-->>App: 202 { message: "Model switch started" }
 
     Note over App,D: 5. Switch progress arrives on the SSE stream

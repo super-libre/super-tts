@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::stt_models::backends::DiscoveredBackend;
+use crate::tts_models::backends::DiscoveredBackend;
 use super_tts_registry_types::manifest::Manifest;
 
 /// What one reconciliation pass did: the bytes carried across, and the
@@ -141,7 +141,7 @@ async fn repoint_active_backend(
         return;
     };
     let mut cfg = daemon.config.write().await;
-    let Some(active) = cfg.transcription.active_backend.clone() else {
+    let Some(active) = cfg.synthesis.active_backend.clone() else {
         return;
     };
     // Losers and winner are siblings under the backends directory, so a name
@@ -337,7 +337,7 @@ mod tests {
         let daemon = crate::daemon::types::test_daemon().await;
         {
             let mut cfg = daemon.config.write().await;
-            cfg.transcription.active_backend = Some("super-tts-y".to_string());
+            cfg.synthesis.active_backend = Some("super-tts-y".to_string());
             cfg.update_preferred_model(
                 "m".to_string(),
                 "github.com/x/y".to_string(),
@@ -346,23 +346,23 @@ mod tests {
         }
         *daemon.active_backend.write().await = Some("super-tts-y".to_string());
 
-        let (winners, losers) = crate::stt_models::backends::discover(root.path());
+        let (winners, losers) = crate::tts_models::backends::discover(root.path());
         assert_eq!(losers.len(), 1, "the older directory is the loser");
         super::reconcile(&daemon, &losers, &winners).await;
 
         assert!(!loser.exists(), "the duplicate is gone");
         let cfg = daemon.config.read().await;
         assert_eq!(
-            cfg.transcription.active_backend.as_deref(),
+            cfg.synthesis.active_backend.as_deref(),
             Some("app.super-tts.y"),
             "the pointer must follow the directory that survived"
         );
         assert_eq!(
-            cfg.transcription.preferred_model, "m",
+            cfg.synthesis.preferred_model, "m",
             "the model preference must survive the repoint"
         );
-        assert_eq!(cfg.transcription.preferred_provider, "local_y");
-        assert_eq!(cfg.transcription.preferred_source, "github.com/x/y");
+        assert_eq!(cfg.synthesis.preferred_provider, "local_y");
+        assert_eq!(cfg.synthesis.preferred_source, "github.com/x/y");
         drop(cfg);
         assert_eq!(
             daemon.active_backend.read().await.as_deref(),
@@ -382,7 +382,7 @@ mod tests {
         let daemon = crate::daemon::types::test_daemon().await;
         {
             let mut cfg = daemon.config.write().await;
-            cfg.transcription.active_backend = Some("some-other-backend".to_string());
+            cfg.synthesis.active_backend = Some("some-other-backend".to_string());
             cfg.update_preferred_model(
                 "other-model".to_string(),
                 "github.com/x/other".to_string(),
@@ -390,7 +390,7 @@ mod tests {
             );
         }
 
-        let (winners, losers) = crate::stt_models::backends::discover(root.path());
+        let (winners, losers) = crate::tts_models::backends::discover(root.path());
         super::reconcile(&daemon, &losers, &winners).await;
 
         assert!(
@@ -399,10 +399,10 @@ mod tests {
         );
         let cfg = daemon.config.read().await;
         assert_eq!(
-            cfg.transcription.active_backend.as_deref(),
+            cfg.synthesis.active_backend.as_deref(),
             Some("some-other-backend"),
             "an unrelated active backend must not be repointed"
         );
-        assert_eq!(cfg.transcription.preferred_model, "other-model");
+        assert_eq!(cfg.synthesis.preferred_model, "other-model");
     }
 }

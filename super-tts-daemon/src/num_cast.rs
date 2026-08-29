@@ -16,12 +16,6 @@ pub(crate) fn usize_to_f32(x: usize) -> f32 {
     x as f32
 }
 
-/// `usize` → `f64`.
-#[allow(clippy::cast_precision_loss)]
-pub(crate) fn usize_to_f64(x: usize) -> f64 {
-    x as f64
-}
-
 /// `u64` → `f64` (e.g. byte totals for progress %).
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn u64_to_f64(x: u64) -> f64 {

@@ -16,15 +16,16 @@
 //! auto-approves.
 
 use anyhow::{Context, Result, anyhow};
-use clap::{Arg, ArgAction, Command, value_parser};
+use clap::{Arg, Command, value_parser};
+use std::io::Read;
 use std::path::PathBuf;
-use super_tts_shared::daemon::http_client::{self, TranscribeOptions};
+use super_tts_shared::daemon::http_client::{self, SpeakOptions};
 use super_tts_shared::daemon::session::{self, AppId};
 use super_tts_shared::validation::get_http_socket_path;
 
 const APP_ID: AppId = AppId("super-tts-cli");
 const APP_NAME: &str = "Super TTS CLI";
-const SCOPES: &[&str] = &["transcribe", "status"];
+const SCOPES: &[&str] = &["speak", "status"];
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,35 +51,37 @@ async fn main() -> Result<()> {
         .subcommand(Command::new("ping").about("Check that the daemon is reachable"))
         .subcommand(Command::new("status").about("Print daemon state (model + device)"))
         .subcommand(
-            Command::new("record")
-                .about("Start a daemon-mic recording")
+            Command::new("speak")
+                .about("Speak text with the active model")
                 .arg(
-                    Arg::new("write")
-                        .short('w')
-                        .long("write")
-                        .help("Type the transcription into the focused window when done")
-                        .action(ArgAction::SetTrue),
+                    Arg::new("text")
+                        .help("The text to speak; omit to read it from stdin")
+                        .num_args(0..)
+                        .trailing_var_arg(true),
                 )
                 .arg(
-                    Arg::new("wait")
-                        .long("wait")
-                        .help("Hold the connection open and print the final transcription")
-                        .action(ArgAction::SetTrue),
+                    Arg::new("voice")
+                        .long("voice")
+                        .help("A voice id the active model declares"),
                 )
                 .arg(
-                    Arg::new("stop-mode")
-                        .long("stop-mode")
-                        .help("Override the configured stop mode")
-                        // Drive the accepted values from the shared wire-enum
-                        // table so they can't drift from the daemon (Tier 2 #8).
-                        .value_parser(clap::builder::PossibleValuesParser::new(
-                            super_tts_shared::models::recording_stop_mode::RecordingStopMode::WIRE_VARIANTS
-                                .iter()
-                                .copied(),
-                        )),
+                    Arg::new("language")
+                        .long("language")
+                        .help("BCP-47 language override"),
+                )
+                .arg(
+                    Arg::new("speed")
+                        .long("speed")
+                        .help("Rate multiplier; backends that cannot vary rate ignore it")
+                        .value_parser(value_parser!(f32)),
+                )
+                .arg(
+                    Arg::new("instructions")
+                        .long("instructions")
+                        .help("Free-text delivery guidance, for models that accept it"),
                 ),
         )
-        .subcommand(Command::new("stop").about("Stop an in-flight daemon-mic recording"))
+        .subcommand(Command::new("stop").about("Stop the utterance now playing"))
         .subcommand(
             Command::new("logout")
                 .about("Forget the cached session token (forces re-consent next call)"),
@@ -101,15 +104,19 @@ async fn main() -> Result<()> {
                 .await
                 .context("status failed")
         }
-        Some(("record", sub)) => {
-            let write = sub.get_flag("write");
-            let wait = sub.get_flag("wait");
-            let stop_mode = sub.get_one::<String>("stop-mode").cloned();
+        Some(("speak", sub)) => {
+            let text = read_text(sub)?;
+            let opts = SpeakOptions {
+                voice: sub.get_one::<String>("voice").cloned(),
+                language: sub.get_one::<String>("language").cloned(),
+                speed: sub.get_one::<f32>("speed").copied(),
+                instructions: sub.get_one::<String>("instructions").cloned(),
+            };
             run_with_token(socket_path.clone(), |t| {
-                cmd_record(socket_path.clone(), t, write, wait, stop_mode.clone())
+                cmd_speak(socket_path.clone(), t, text.clone(), opts.clone())
             })
             .await
-            .context("record failed")
+            .context("speak failed")
         }
         Some(("stop", _)) => {
             run_with_token(socket_path.clone(), |t| cmd_stop(socket_path.clone(), t))
@@ -170,56 +177,58 @@ async fn cmd_status(
         resp.current_model.as_deref().unwrap_or("(none loaded)")
     );
     println!("Device: {}", resp.device.as_deref().unwrap_or("unknown"));
+    println!(
+        "State:  {}",
+        if resp.busy.unwrap_or(false) {
+            "speaking"
+        } else {
+            "idle"
+        }
+    );
     Ok(())
 }
 
-async fn cmd_record(
+/// The text to speak: the trailing arguments, or all of stdin when none were
+/// given. Reading stdin is what makes `... | super-tts-cli speak` work, which is
+/// how a shell pipeline reaches the daemon without a client of its own.
+fn read_text(sub: &clap::ArgMatches) -> Result<String> {
+    let words: Vec<&str> = sub
+        .get_many::<String>("text")
+        .map(|v| v.map(String::as_str).collect())
+        .unwrap_or_default();
+    if !words.is_empty() {
+        return Ok(words.join(" "));
+    }
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .context("reading text from stdin")?;
+    if buf.trim().is_empty() {
+        return Err(anyhow!("no text given: pass it as arguments or on stdin"));
+    }
+    Ok(buf)
+}
+
+async fn cmd_speak(
     socket_path: PathBuf,
     token: String,
-    write_mode: bool,
-    wait: bool,
-    stop_mode: Option<String>,
+    text: String,
+    opts: SpeakOptions,
 ) -> super_tts_shared::daemon::http_client::HttpResult<()> {
-    // Toggle behavior: probe `/v1/status` first. If a daemon-mic
-    // capture is already in progress, this invocation acts as a stop
-    // signal; otherwise we start a fresh recording. The daemon's
-    // `/v1/transcribe` endpoint refuses with `409 recording_in_progress`
-    // when something is already running — the protocol places the
-    // start-or-stop decision on the client (see
-    // `docs/protocol/endpoints/v1/transcribe.md`).
-    let status = http_client::status(socket_path.clone(), &token).await?;
-    if status.busy.unwrap_or(false) {
-        return cmd_stop(socket_path, token).await;
-    }
-
-    let resp = http_client::transcribe(
-        socket_path,
-        &token,
-        TranscribeOptions {
-            write_mode,
-            stop_mode,
-            wait,
-            // The CLI prints the final result (or fire-and-forgets); it does not
-            // render incremental preview, so it never asks to stream it.
-            stream_realtime: false,
-        },
-    )
-    .await?;
+    // Not a toggle: a second `speak` deliberately preempts the first, which is
+    // what "say this instead" means. Use `stop` to fall silent.
+    let resp = http_client::speak(socket_path, &token, &text, opts).await?;
     if resp.status != "success" {
         return Err(http_client::HttpError::Other(
-            resp.message.unwrap_or_else(|| "record failed".to_string()),
+            resp.message.unwrap_or_else(|| "speak failed".to_string()),
         ));
     }
-    if let Some(transcription) = resp.transcription {
-        if transcription.trim().is_empty() {
-            println!("(no speech detected)");
-        } else {
-            println!("{transcription}");
-        }
-    } else if let Some(message) = resp.message {
-        println!("{message}");
+    // The daemon answers once the utterance is queued, while the device is
+    // still playing it out, so the id is all there is to report.
+    if let Some(id) = resp.utterance_id {
+        println!("Speaking ({id}).");
     } else {
-        println!("Recording started.");
+        println!("Speaking.");
     }
     Ok(())
 }
@@ -228,17 +237,18 @@ async fn cmd_stop(
     socket_path: PathBuf,
     token: String,
 ) -> super_tts_shared::daemon::http_client::HttpResult<()> {
-    let resp = http_client::transcribe_stop(socket_path, &token).await?;
+    let resp = http_client::speak_stop(socket_path, &token).await?;
     if resp.status != "success" {
         return Err(http_client::HttpError::Other(
             resp.message.unwrap_or_else(|| "stop failed".to_string()),
         ));
     }
-    println!(
-        "{}",
-        resp.message
-            .unwrap_or_else(|| "stop signal sent".to_string())
-    );
+    // Stopping when nothing is speaking is a success, not an error — so say
+    // which of the two happened rather than claiming to have stopped something.
+    match resp.utterance_id {
+        Some(id) => println!("Stopped ({id})."),
+        None => println!("Nothing was speaking."),
+    }
     Ok(())
 }
 

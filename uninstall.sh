@@ -33,7 +33,7 @@
 #   - The `tts` system group (other users may depend on it)
 #
 # The daemon is stopped as the final step so any in-flight
-# transcription completes (or at least gets a chance to flush) before
+# utterance finishes playing (or at least gets a chance to flush) before
 # the process exits.
 
 set -u
@@ -241,7 +241,7 @@ if command -v systemctl &> /dev/null; then
 fi
 
 # 10. Stop the daemon LAST. Doing it here means an in-flight
-#     transcription has had until this point to either complete or
+#     utterance has had until this point to either finish playing or
 #     be force-killed. We use `stop` (clean shutdown) and fall back
 #     to `kill` if the process is still alive after a grace window.
 if command -v systemctl &> /dev/null; then

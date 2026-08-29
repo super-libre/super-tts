@@ -101,7 +101,8 @@ impl AppModel {
         if was_disconnected {
             self.device_state = DeviceState::Ready;
             self.model_operation_state = ModelOperationState::Ready;
-            self.transcription_text.clear();
+            self.speaking_status = crate::state::SpeakingStatus::Idle;
+            self.speaking_utterance = None;
         }
 
         // The /events subscription is self-healing

@@ -95,8 +95,8 @@ fn widget_event_to_message(evt: WidgetEvent) -> Message {
 
     let p: &Value = &evt.payload;
     match evt.name.as_str() {
-        "recording_state" => Message::WidgetRecordingState(
-            p.get("is_recording")
+        "speaking_state" => Message::WidgetSpeakingState(
+            p.get("is_speaking")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         ),
@@ -110,8 +110,9 @@ fn widget_event_to_message(evt: WidgetEvent) -> Message {
                 .unwrap_or("unknown")
                 .to_string(),
         ),
-        "transcribing_started" => Message::WidgetTranscribingStarted,
-        "transcribing_stopped" => Message::WidgetTranscribingStopped,
+        "speech_progress" => Message::WidgetSpeechProgress {
+            spoken_ms: p.get("spoken_ms").and_then(Value::as_u64).unwrap_or(0),
+        },
         "subscribed" | "error" => Message::WidgetOtherEvent(evt.name),
         other => Message::WidgetOtherEvent(other.to_string()),
     }

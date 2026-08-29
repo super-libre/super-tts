@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Super TTS is a high-performance speech-to-text service built in Rust with a daemon/client architecture. The system loads AI models once in memory for instant transcription responses.
+Super TTS is a high-performance text-to-speech service built in Rust with a daemon/client architecture. The system loads AI models once in memory so speech starts immediately.
 
 ## Workspace Structure
 

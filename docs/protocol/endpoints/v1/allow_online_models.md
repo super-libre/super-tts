@@ -1,7 +1,7 @@
 # `/allow_online_models`
 
-The privacy gate for online STT providers (OpenAI, Mistral,
-Deepgram). While this flag is `false`, attempts to switch to an
+The privacy gate for online TTS providers (OpenAI, ElevenLabs,
+…). While this flag is `false`, attempts to switch to an
 online model via [`POST /active_model`](./active_model.md) are
 rejected with `400 online_models_disabled`. Flipping `true` →
 `false` while an online model is *currently* active reverts to a
@@ -43,7 +43,7 @@ Content-Type: application/json
 {
   "status":               "success",
   "allow_online_models":  false,
-  "message":              "Online models disabled — all transcription is local"
+  "message":              "Online models disabled — all synthesis is local"
 }
 ```
 

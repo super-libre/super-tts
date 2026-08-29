@@ -12,21 +12,21 @@ use super::events::settings_widget_event_to_message;
 pub(super) struct UdpSubscriptionId(pub(super) u64);
 
 /// Subscribe to the daemon's `/events` SSE stream for the settings UI's
-/// audio meter and recording-state indicator. Reuses the token already
+/// audio meter and speaking-state indicator. Reuses the token already
 /// cached for normal config calls — [`SETTINGS_SCOPES`] grants the
-/// recording / visualization / daemon-status topics below.
+/// playback / visualization / daemon-status topics below.
 pub(super) const SETTINGS_APP_ID: super_tts_shared::daemon::session::AppId =
     super_tts_shared::daemon::session::AppId("super-tts-app");
 const SETTINGS_APP_NAME: &str = "Super TTS Settings App";
 /// Topics the settings app subscribes to over `GET /events`.
 ///
-/// `recording_state` drives the recording badge (`recording_events`),
+/// `speaking_state` drives the speaking badge (`playback_events`),
 /// `frequency_bands` drives the audio meter (`audio_visualization`), and
 /// `daemon_status_changed` / `download_progress` / `registry_install`
 /// drive the model-switch progress bar and Download-tab install cards
 /// (`daemon_status`).
 const SETTINGS_TOPICS: &[&str] = &[
-    "recording_state",
+    "speaking_state",
     "frequency_bands",
     "daemon_status_changed",
     "download_progress",
@@ -34,7 +34,7 @@ const SETTINGS_TOPICS: &[&str] = &[
 ];
 
 /// Self-healing `/events` subscription for the settings UI's audio
-/// meter + recording-status badge. Routes through the shared
+/// meter + speaking-status badge. Routes through the shared
 /// [`run_widget_subscription`] helper so silent drops, idle wedges,
 /// and daemon-side revocations all auto-recover with backoff.
 pub(super) fn audio_events_subscription(

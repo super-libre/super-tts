@@ -43,30 +43,27 @@ Every interaction except event streaming is one HTTP request and one
 HTTP response. Standard HTTP semantics:
 
 ```http
-POST /transcribe HTTP/1.1
+POST /speak HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…64hex…
 Content-Type: application/json
-Content-Length: 178
+Content-Length: 74
 
 {
-  "audio_data":  null,
-  "sample_rate": null,
-  "language":    "en",
-  "wait":        true,
-  "stream_realtime": true,
-  "stop_mode":   "manual_only"
+  "text":     "The kettle is boiling.",
+  "language": "en",
+  "speed":    1.0
 }
 ```
 
 ```http
-HTTP/1.1 200 OK
+HTTP/1.1 202 Accepted
 Content-Type: application/json
-Content-Length: 60
+Content-Length: 55
 
 {
   "status": "success",
-  "transcription": "hello world"
+  "utterance_id": "utt_9f2c1e40"
 }
 ```
 
@@ -137,7 +134,7 @@ connection open and writes one SSE frame per published event until the
 client disconnects or the daemon shuts down.
 
 ```http
-GET /events?topics=recording_state,frequency_bands,daemon_status_changed,download_progress HTTP/1.1
+GET /events?topics=speaking_state,frequency_bands,daemon_status_changed,download_progress HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…
 Accept: text/event-stream
@@ -149,19 +146,19 @@ Content-Type: text/event-stream
 Cache-Control: no-store
 
 event: subscribed
-data: {"client_id":"sub_…","subscribed_to":["recording_state","frequency_bands","daemon_status_changed","download_progress"]}
+data: {"client_id":"sub_…","subscribed_to":["speaking_state","frequency_bands","daemon_status_changed","download_progress"]}
 
-event: recording_state
-data: {"is_recording":true}
+event: speaking_state
+data: {"is_speaking":true,"utterance_id":"utt_9f2c1e40"}
 
 event: daemon_status_changed
-data: {"status":"loading_model","new_model":"whisper-base","timestamp":"2026-05-22T12:34:56Z"}
+data: {"status":"loading_model","new_model":"kokoro-82m","timestamp":"2026-05-22T12:34:56Z"}
 
 event: download_progress
-data: {"model_name":"whisper-base","current_file":"model.safetensors","file_index":1,"total_files":3,"bytes_downloaded":12345,"total_bytes":45678,"percentage":27.0,"status":"downloading","eta_seconds":14,"timestamp":"2026-05-22T12:34:57Z"}
+data: {"model_name":"kokoro-82m","current_file":"kokoro-v1_0.pth","file_index":1,"total_files":3,"bytes_downloaded":12345,"total_bytes":45678,"percentage":27.0,"status":"downloading","eta_seconds":14,"timestamp":"2026-05-22T12:34:57Z"}
 
 event: daemon_status_changed
-data: {"status":"ready","model_loaded":true,"model_name":"whisper-base","timestamp":"2026-05-22T12:35:14Z"}
+data: {"status":"ready","model_loaded":true,"model_name":"kokoro-82m","timestamp":"2026-05-22T12:35:14Z"}
 ```
 
 Conventions:
@@ -174,8 +171,8 @@ Conventions:
   aren't supported.
 - Each subsequent frame's `event:` field is the topic name. The
   `data:` field is one JSON line carrying the topic-specific payload
-  directly (no wrapper envelope). For example, `recording_state` is
-  `{"is_recording":true}`; `daemon_status_changed` is
+  directly (no wrapper envelope). For example, `speaking_state` is
+  `{"is_speaking":true,"utterance_id":"utt_…"}`; `daemon_status_changed` is
   `{"status":"…", …, "timestamp":"…"}`. See
   [`/events`](./endpoints/v1/events.md) for per-topic shapes and the
   scope each topic requires.
@@ -193,8 +190,8 @@ The `topics` query parameter is comma-separated. Repeating it
 
 ### Audio fan-out is on the same stream
 
-The audio fan-out — recording state, frequency bands, partial /
-final STT — is just additional topics on the same SSE stream. There
+The audio fan-out — speaking state, playback progress, frequency
+bands — is just additional topics on the same SSE stream. There
 is no separate UDP socket. Raw PCM is not exposed; the daemon
 computes the frequency bands and broadcasts only those. See
 [`/events`](./endpoints/v1/events.md) for the audio-specific topic
@@ -235,8 +232,8 @@ Every error returns a JSON body with the same shape:
 ```jsonc
 {
   "status":     "error",
-  "error_code": "recording_in_progress",
-  "message":    "Cannot change the backend during active recording.",
+  "error_code": "speech_in_progress",
+  "message":    "Cannot change the backend while speaking.",
   "data":       { "reason": "<machine-readable reason>", ... }
 }
 ```
@@ -290,13 +287,13 @@ The minimal recipe for a fresh client of any scope:
    curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
         -X POST http://tts.local/auth/request \
         -H 'Content-Type: application/json' \
-        -d '{"app_name":"My App","scopes":["transcribe","status"],"version":"0.1"}'
+        -d '{"app_name":"My App","scopes":["speak","status"],"version":"0.1"}'
    ```
    ```python
    import requests_unixsocket
    s = requests_unixsocket.Session()
-   r = s.post("http+unix://%2Frun%2Fuser%2F1000%2Fstt%2Fsuper-tts-http.sock/auth/request",
-              json={"app_name": "My App", "scopes": ["transcribe", "status"], "version": "0.1"})
+   r = s.post("http+unix://%2Frun%2Fuser%2F1000%2Ftts%2Fsuper-tts-http.sock/auth/request",
+              json={"app_name": "My App", "scopes": ["speak", "status"], "version": "0.1"})
    token = r.json()["session_token"]
    ```
    ```javascript
@@ -315,10 +312,10 @@ The minimal recipe for a fresh client of any scope:
 3. For commands, send `Authorization: Bearer <token>` on every request:
    ```bash
    curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
-        -X POST http://tts.local/transcribe \
+        -X POST http://tts.local/speak \
         -H "Authorization: Bearer $TTS_TOKEN" \
         -H 'Content-Type: application/json' \
-        -d '{"data":{"wait":true,"stream_realtime":true}}'
+        -d '{"text":"The kettle is boiling."}'
    ```
 
 4. For event streams, use any HTTP client that supports SSE (or just
@@ -326,7 +323,7 @@ The minimal recipe for a fresh client of any scope:
    ```bash
    curl --unix-socket "$XDG_RUNTIME_DIR/tts/super-tts-http.sock" \
         -N \
-        "http://tts.local/events?topics=recording_state,daemon_status_changed,download_progress" \
+        "http://tts.local/events?topics=speaking_state,daemon_status_changed,download_progress" \
         -H "Authorization: Bearer $TTS_TOKEN"
    ```
 

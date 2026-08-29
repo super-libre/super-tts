@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::command::Command;
 use super::request::DaemonRequest;
-use crate::models::recording_stop_mode::RecordingStopMode;
-use crate::models::write_method::WriteMethod;
 use crate::validation::{self, Validate};
 
 impl TryFrom<DaemonRequest> for Command {
@@ -14,14 +12,12 @@ impl TryFrom<DaemonRequest> for Command {
             return Err(format!("Request validation failed: {e}"));
         }
         match request.command.as_str() {
-            "transcribe" => cmd_transcribe(&request),
             "speak" => cmd_speak(&request),
             "stop_speaking" => Ok(Command::StopSpeaking),
             "ping" => Ok(Command::Ping {
                 client_id: request.client_id.clone(),
             }),
             "status" => Ok(Command::Status),
-            "record" => cmd_record(&request),
             "set_audio_theme" => cmd_set_audio_theme(&request),
             "get_audio_theme" => Ok(Command::GetAudioTheme),
             "test_audio_theme" => Ok(Command::TestAudioTheme),
@@ -34,13 +30,6 @@ impl TryFrom<DaemonRequest> for Command {
             "cancel_download" => Ok(Command::CancelDownload),
             "get_download_status" => Ok(Command::GetDownloadStatus),
             "list_audio_themes" => Ok(Command::ListAudioThemes),
-            "set_preview_typing" => cmd_set_preview_typing(&request),
-            "get_preview_typing" => Ok(Command::GetPreviewTyping),
-            "set_recording_stop_mode" => cmd_set_recording_stop_mode(&request),
-            "get_recording_stop_mode" => Ok(Command::GetRecordingStopMode),
-            "set_write_method" => cmd_set_write_method(&request),
-            "get_write_method" => Ok(Command::GetWriteMethod),
-            "test_write_method" => Ok(Command::TestWriteMethod),
             "set_notification_method" => cmd_set_notification_method(&request),
             "get_notification_method" => Ok(Command::GetNotificationMethod),
             "set_update_check_enabled" => cmd_set_update_check_enabled(&request),
@@ -72,24 +61,6 @@ impl TryFrom<DaemonRequest> for Command {
     }
 }
 
-fn cmd_transcribe(request: &DaemonRequest) -> Result<Command, String> {
-    let audio_data = request
-        .audio_data
-        .clone()
-        .ok_or("Missing audio_data for transcribe command")?;
-    let sample_rate = request.sample_rate.unwrap_or(16000);
-    let client_id = request
-        .client_id
-        .clone()
-        .unwrap_or_else(|| format!("client_{}", uuid::Uuid::new_v4()));
-    Ok(Command::Transcribe {
-        audio_data,
-        sample_rate,
-        client_id,
-        language: request.language.clone(),
-    })
-}
-
 /// Build a `speak` command. `text` is required; everything else refines how it
 /// is spoken and is optional, so a bare `{"text": "..."}` is a valid request.
 fn cmd_speak(request: &DaemonRequest) -> Result<Command, String> {
@@ -111,8 +82,9 @@ fn cmd_speak(request: &DaemonRequest) -> Result<Command, String> {
     Ok(Command::Speak {
         text,
         voice: field("voice"),
-        // The top-level `language` field is shared with the transcribe paths,
-        // so a client sets it the same way on either.
+        // `language` is accepted at the top level as well as inside `data`, so
+        // a client that already sets it the way every other endpoint does
+        // need not learn a second spelling.
         language: request.language.clone().or_else(|| field("language")),
         speed,
         instructions: field("instructions"),
@@ -125,50 +97,6 @@ fn cmd_speak(request: &DaemonRequest) -> Result<Command, String> {
 #[allow(clippy::cast_possible_truncation)]
 fn speed_to_f32(v: f64) -> f32 {
     v as f32
-}
-
-fn cmd_record(request: &DaemonRequest) -> Result<Command, String> {
-    let write_mode = request
-        .data
-        .as_ref()
-        .and_then(|data| data.get("write_mode"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    // `stop_mode` is an optional per-request override: absent -> `None` (the
-    // daemon uses its configured default). A present-but-unknown value is a bad
-    // request — reject it rather than silently dropping it, matching the strict
-    // `set_recording_stop_mode` path (Tier 1 #26). The legacy
-    // `disable_silence_detection` compat branch was undocumented and caller-less.
-    let stop_mode = match request
-        .data
-        .as_ref()
-        .and_then(|data| data.get("stop_mode"))
-        .and_then(|v| v.as_str())
-    {
-        Some(s) => Some(
-            s.parse::<RecordingStopMode>()
-                .map_err(|e| format!("Invalid recording stop mode: {e}"))?,
-        ),
-        None => None,
-    };
-    let wait = request
-        .data
-        .as_ref()
-        .and_then(|data| data.get("wait"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let preview = request
-        .data
-        .as_ref()
-        .and_then(|data| data.get("preview"))
-        .and_then(serde_json::Value::as_bool);
-    Ok(Command::Record {
-        write_mode,
-        stop_mode,
-        wait,
-        preview,
-        language: request.language.clone(),
-    })
 }
 
 fn cmd_set_audio_theme(request: &DaemonRequest) -> Result<Command, String> {
@@ -227,43 +155,6 @@ fn cmd_set_device(request: &DaemonRequest) -> Result<Command, String> {
     }
 
     Ok(Command::SetDevice { device })
-}
-
-fn cmd_set_preview_typing(request: &DaemonRequest) -> Result<Command, String> {
-    let enabled = request
-        .enabled
-        .ok_or("Missing enabled field for set_preview_typing command")?;
-
-    Ok(Command::SetPreviewTyping { enabled })
-}
-
-fn cmd_set_recording_stop_mode(request: &DaemonRequest) -> Result<Command, String> {
-    let mode_str = request
-        .data
-        .as_ref()
-        .and_then(|data| data.get("mode"))
-        .and_then(|v| v.as_str())
-        .ok_or("Missing mode for set_recording_stop_mode command")?;
-    // A present-but-unknown value is a bad request: return an error and leave
-    // the stored setting unchanged, rather than silently persisting the default
-    // (Tier 1 #26). Matches the `record` command's `stop_mode` override.
-    let mode = mode_str
-        .parse::<RecordingStopMode>()
-        .map_err(|e| format!("Invalid recording stop mode: {e}"))?;
-    Ok(Command::SetRecordingStopMode { mode })
-}
-
-fn cmd_set_write_method(request: &DaemonRequest) -> Result<Command, String> {
-    let method_str = request
-        .data
-        .as_ref()
-        .and_then(|data| data.get("method"))
-        .and_then(|v| v.as_str())
-        .ok_or("Missing method for set_write_method command")?;
-    let method = method_str
-        .parse::<WriteMethod>()
-        .map_err(|e| format!("Invalid input method: {e}"))?;
-    Ok(Command::SetWriteMethod { method })
 }
 
 fn cmd_set_notification_method(request: &DaemonRequest) -> Result<Command, String> {

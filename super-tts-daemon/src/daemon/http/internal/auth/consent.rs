@@ -120,9 +120,12 @@ pub(crate) async fn ask_user_for_consent(
     };
 
     let mut cmd = tokio::process::Command::new(&helper);
-    cmd.env("STT_AUTH_APP_NAME", app_name)
-        .env("STT_AUTH_SCOPES", scopes.join(" "))
-        .env("STT_AUTH_EXE_PATH", exe_path.to_string_lossy().as_ref())
+    cmd.env("SUPER_TTS_AUTH_APP_NAME", app_name)
+        .env("SUPER_TTS_AUTH_SCOPES", scopes.join(" "))
+        .env(
+            "SUPER_TTS_AUTH_EXE_PATH",
+            exe_path.to_string_lossy().as_ref(),
+        )
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -359,11 +362,11 @@ mod tests {
     #[test]
     fn normalize_sorts_and_dedups() {
         let got = normalize_scopes(&[
-            "transcribe".to_string(),
+            "speak".to_string(),
             "status".to_string(),
-            "transcribe".to_string(),
+            "speak".to_string(),
         ]);
-        assert_eq!(got, vec!["status".to_string(), "transcribe".to_string()]);
+        assert_eq!(got, vec!["speak".to_string(), "status".to_string()]);
     }
 
     #[test]

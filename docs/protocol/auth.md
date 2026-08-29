@@ -22,20 +22,19 @@ Scopes are fine-grained and **composable** — a token can carry any
 combination. **No scope implies another**: request the exact set you
 need, and the user approves that set.
 
-| Scope                   | What the token can do                                                       | Reference                                          |
-|-------------------------|-----------------------------------------------------------------------------|----------------------------------------------------|
-| `transcribe`            | Start / stop recording; read back your own transcription results            | [transcribe](./scopes/transcribe.md)               |
-| `status`                | Read the daemon's current model + device                                     | [status](./scopes/status.md)                       |
-| `settings`              | Read / write every configuration value, backend options, and the registry   | [settings](./scopes/settings.md)                   |
-| `secrets`               | Store / check / clear backend credentials — **write-only**; never read back  | [secrets](./scopes/secrets.md)                     |
-| `recording_events`      | Subscribe to recording lifecycle events on `/events`                        | [recording_events](./scopes/recording_events.md)   |
-| `audio_visualization`   | Subscribe to frequency-band visualization data on `/events`                 | [audio_visualization](./scopes/audio_visualization.md) |
-| `global_transcriptions` | Subscribe to **every** app's live + final transcription text on `/events`   | [global_transcriptions](./scopes/global_transcriptions.md) |
-| `daemon_status`         | Subscribe to model/device/download/registry status on `/events`             | [daemon_status](./scopes/daemon_status.md)         |
+| Scope                 | What the token can do                                                       | Reference                                              |
+|-----------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
+| `speak`               | Play synthesized speech; stop speech, including another app's               | [speak](./scopes/speak.md)                             |
+| `status`              | Read the daemon's current model + device, and whether it is speaking        | [status](./scopes/status.md)                           |
+| `settings`            | Read / write every configuration value, backend options, and the registry   | [settings](./scopes/settings.md)                       |
+| `secrets`             | Store / check / clear backend credentials — **write-only**; never read back | [secrets](./scopes/secrets.md)                         |
+| `playback_events`     | Subscribe to speaking-state and playback-progress events on `/events`       | [playback_events](./scopes/playback_events.md)         |
+| `audio_visualization` | Subscribe to frequency-band visualization data on `/events`                 | [audio_visualization](./scopes/audio_visualization.md) |
+| `daemon_status`       | Subscribe to model/device/download/registry status on `/events`             | [daemon_status](./scopes/daemon_status.md)             |
 
 A Settings UI, for example, requests several at once
-(`["settings", "secrets", "status", "transcribe", "recording_events", "audio_visualization", "daemon_status"]`),
-while a CLI that only dictates requests `["transcribe", "status"]`.
+(`["settings", "secrets", "status", "speak", "playback_events", "audio_visualization", "daemon_status"]`),
+while a CLI that only speaks requests `["speak", "status"]`.
 
 ## Endpoints
 
@@ -308,18 +307,18 @@ endpoints leak no per-scope information.
 The endpoints and topics each scope unlocks live in the dedicated
 docs — those are the source of truth, not duplicated here:
 
-- `transcribe` — `/transcribe`, `/transcribe/stop`, `/transcribe/realtime`; see [transcribe.md](./scopes/transcribe.md).
+- `speak` — `/speak`, `/speak/stop`, `/speak/stream`; see [speak.md](./scopes/speak.md).
 - `status` — `GET /status`; see [status.md](./scopes/status.md).
 - `settings` — the configuration + registry surface, including backend options; see [settings.md](./scopes/settings.md).
 - `secrets` — backend credential management: `GET/POST/DELETE /backends/{source}/secrets/*` (write-only; values never returned); see [secrets.md](./scopes/secrets.md).
-- `recording_events`, `audio_visualization`, `global_transcriptions`, `daemon_status` — topic sets on `GET /events`; see each scope doc and [`/events`](./endpoints/v1/events.md).
+- `playback_events`, `audio_visualization`, `daemon_status` — topic sets on `GET /events`; see each scope doc and [`/events`](./endpoints/v1/events.md).
 
 Rules to remember:
 
 - A token reaches exactly the endpoints and topics its scopes grant.
   Anything else returns `403 scope_denied`. No scope implies another
-  — a `settings` token cannot drive recordings unless it also holds
-  `transcribe`.
+  — a `settings` token cannot make the daemon speak unless it also
+  holds `speak`.
 - On `GET /events`, requesting any topic outside the token's granted
   scopes fails the whole subscription with `403 scope_denied` before
   the stream opens.
@@ -379,9 +378,8 @@ The wire shape (endpoints, headers, JSON bodies) is identical.
 
 Every `GET /events` subscription is long-lived and is checked for
 binary replacement for as long as it stays open, regardless of which
-topics it carries — this covers all four event-stream scopes
-(`recording_events`, `audio_visualization`, `global_transcriptions`,
-`daemon_status`). If your binary's identity changes mid-stream (upgrade
+topics it carries — this covers all three event-stream scopes
+(`playback_events`, `audio_visualization`, `daemon_status`). If your binary's identity changes mid-stream (upgrade
 in place, replaced on disk), the stream ends with:
 
 ```

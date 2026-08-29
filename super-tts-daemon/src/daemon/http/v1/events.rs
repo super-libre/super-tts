@@ -3,11 +3,22 @@ use crate::daemon::http::internal::auth::middleware::AuthContext;
 use crate::daemon::http::internal::auth::tokens::TokenStore;
 use crate::daemon::http::internal::helpers::responses::{invalid_session, reason, scope_denied};
 use crate::daemon::http::state::{AppState, PeerInfo};
-use crate::daemon::http::v1::transcribe::format_sse_frame_str;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::path::PathBuf;
+
+/// Build the raw bytes of one SSE `event: <name>\ndata: <json>\n\n` frame from
+/// an already-serialized JSON `data:` string. `data` must be single-line (no raw
+/// newlines) — `serde_json::to_string` guarantees this. This is the canonical
+/// framer, used directly with the string `AnyReceiver::recv_json_str` produces
+/// (audit 2 Tier 3 #4).
+pub(crate) fn format_sse_frame_str(event: &str, data: &str) -> axum::body::Bytes {
+    let mut bytes = format!("event: {event}\ndata: ").into_bytes();
+    bytes.extend_from_slice(data.as_bytes());
+    bytes.extend_from_slice(b"\n\n");
+    axum::body::Bytes::from(bytes)
+}
 
 // ---------- /events (SSE) --------------------------------------------------
 

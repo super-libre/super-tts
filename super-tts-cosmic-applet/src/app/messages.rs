@@ -12,17 +12,18 @@ pub enum Message {
     CloseRequested(window::Id),
     DaemonConnected,
     DaemonError(String),
-    /// `recording_state` event from the daemon's `/events` SSE stream.
-    WidgetRecordingState(bool),
+    /// `speaking_state` event from the daemon's `/events` SSE stream.
+    WidgetSpeakingState(bool),
     /// `frequency_bands` event — pre-computed visualization bands.
     WidgetFrequencyBands {
         bands: Vec<f32>,
         total_energy: f32,
     },
-    /// `transcribing_started` event — the daemon began decoding captured audio.
-    WidgetTranscribingStarted,
-    /// `transcribing_stopped` event — decode + typing finished; cycle is idle.
-    WidgetTranscribingStopped,
+    /// `speech_progress` event — how far through the utterance playback is.
+    /// `spoken_ms > 0` is the first evidence that audio actually started.
+    WidgetSpeechProgress {
+        spoken_ms: u64,
+    },
     /// `revoked` event — daemon dropped the session. Reason is the
     /// value of the SSE event's `reason` field (e.g. `"exe_changed"`).
     WidgetRevoked(String),
@@ -49,7 +50,7 @@ pub enum Message {
     LaunchApp,
     RevealerToggle(IsOpen),
     SetVisualizationTheme(VisualizationTheme),
-    /// Pick the working/transcribing animation style.
+    /// Pick the working/synthesizing animation style.
     SetWorkingAnimation(WorkingAnimationTheme),
     SetAppletWidth(u32),
     SetShowIcon(bool),
@@ -57,6 +58,6 @@ pub enum Message {
     SetShowVisualizations(bool),
     SetVisualizationColor(VisualizationColor, bool), // Color and is_dark flag
     SetColorThemeEntity(Entity),                     // Theme selector for color configuration
-    /// Animation frame tick while transcribing (drives the working animation).
+    /// Animation frame tick while synthesizing (drives the working animation).
     WorkingAnimationTick,
 }

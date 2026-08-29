@@ -27,7 +27,7 @@ fn main() -> cosmic::iced::Result {
 
     let matches = Command::new("super-tts-cosmic-applet")
         .version(VERSION)
-        .about("COSMIC panel applet for Super TTS speech-to-text service")
+        .about("COSMIC panel applet for Super TTS text-to-speech service")
         .arg(
             Arg::new("side")
                 .long("side")

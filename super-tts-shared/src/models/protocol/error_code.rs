@@ -14,16 +14,17 @@ use serde::{Deserialize, Serialize};
 pub enum ErrorCode {
     // --- 409 Conflict: the request is well-formed but the daemon's current
     // state forbids it. ---
-    /// A daemon-mic recording is active; a mutation that needs the mic/model
-    /// (backend switch, model switch, reload, unload, device switch, or a fresh
-    /// `POST /transcribe`) must wait for it to finish.
-    RecordingInProgress,
+    /// An utterance is being synthesized or played; a mutation that needs the
+    /// model (backend switch, model switch, reload, unload, device switch)
+    /// must wait for it to finish. Note that `POST /speak` is *not* in that
+    /// list — a new utterance deliberately preempts the current one.
+    SpeechInProgress,
     /// A model download/switch is already in flight.
     DownloadInProgress,
     /// A cancel was requested but there is no switch/download to cancel
     /// (`POST /active_model/cancel`; see `active_model/cancel.md`).
     NoSwitchInProgress,
-    /// No model is loaded, so nothing can be transcribed. The request is
+    /// No model is loaded, so nothing can be synthesized. The request is
     /// well-formed and succeeds once a model is loaded via `POST /active_model`.
     ModelNotLoaded,
 
@@ -66,7 +67,7 @@ impl ErrorCode {
     #[must_use]
     pub fn http_status(self) -> u16 {
         match self {
-            Self::RecordingInProgress
+            Self::SpeechInProgress
             | Self::DownloadInProgress
             | Self::NoSwitchInProgress
             | Self::ModelNotLoaded => 409,
@@ -90,8 +91,8 @@ mod tests {
 
     #[test]
     fn serializes_to_snake_case() {
-        let json = serde_json::to_string(&ErrorCode::RecordingInProgress).unwrap();
-        assert_eq!(json, r#""recording_in_progress""#);
+        let json = serde_json::to_string(&ErrorCode::SpeechInProgress).unwrap();
+        assert_eq!(json, r#""speech_in_progress""#);
     }
 
     #[test]
@@ -103,7 +104,7 @@ mod tests {
 
     #[test]
     fn status_mapping_is_stable() {
-        assert_eq!(ErrorCode::RecordingInProgress.http_status(), 409);
+        assert_eq!(ErrorCode::SpeechInProgress.http_status(), 409);
         assert_eq!(ErrorCode::InvalidAudioTheme.http_status(), 400);
         assert_eq!(ErrorCode::NotFound.http_status(), 404);
         assert_eq!(ErrorCode::Internal.http_status(), 500);

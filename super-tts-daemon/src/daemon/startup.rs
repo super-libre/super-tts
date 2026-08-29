@@ -8,10 +8,9 @@ use crate::config::DaemonConfig;
 use crate::daemon::events::EventBus;
 use crate::daemon::types::{LoadedModel, SharedLoadedModel, SuperTTSDaemon, normalize_device};
 use crate::download_progress::DownloadStateManager;
-use crate::input::audio::AudioProcessor;
 use crate::resource_management::ResourceManager;
 use crate::services::dbus::DBusManager;
-use crate::stt_models::backends;
+use crate::tts_models::backends;
 use anyhow::Result;
 use log::{info, warn};
 use std::sync::{Arc, RwLock};
@@ -20,7 +19,6 @@ use tokio::sync::broadcast;
 /// Pre-assembled subsystem handles created during daemon startup.
 struct DaemonComponents {
     shutdown_tx: broadcast::Sender<()>,
-    audio_processor: Arc<AudioProcessor>,
     model: SharedLoadedModel,
     download_manager: Arc<DownloadStateManager>,
     resource_manager: Arc<ResourceManager>,
@@ -32,7 +30,6 @@ impl DaemonComponents {
     /// values (those come from `SuperTTSDaemon::load_and_persist_config`).
     async fn init() -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
-        let audio_processor = Arc::new(AudioProcessor::new());
 
         // Model slot starts empty; filled once the startup model loads.
         let model: SharedLoadedModel = Arc::new(tokio::sync::RwLock::new(None));
@@ -56,7 +53,6 @@ impl DaemonComponents {
 
         Self {
             shutdown_tx,
-            audio_processor,
             model,
             download_manager,
             resource_manager,
@@ -79,8 +75,7 @@ impl SuperTTSDaemon {
         // Extract config fields needed for the struct before config is moved in.
         let preferred_device = config.device.preferred_device.clone();
         let actual_device = preferred_device.clone(); // Will be updated when model loads
-        let active_backend = config.transcription.active_backend.clone();
-        let preview_typing_enabled = config.transcription.preview_typing_enabled;
+        let active_backend = config.synthesis.active_backend.clone();
         let audio_theme = config.audio.theme;
         let volume = config.audio.volume;
 
@@ -91,24 +86,16 @@ impl SuperTTSDaemon {
 
         let daemon = SuperTTSDaemon {
             model: components.model,
-            audio_processor: components.audio_processor,
             shutdown_tx: components.shutdown_tx,
             dbus_manager: components.dbus_manager,
             events: Arc::clone(&events),
             audio_theme: Arc::new(RwLock::new(audio_theme)),
             volume: Arc::new(RwLock::new(volume)),
-            busy: Arc::new(tokio::sync::RwLock::new(false)),
             download_manager: components.download_manager,
             preferred_device: Arc::new(tokio::sync::RwLock::new(preferred_device)),
             actual_device: Arc::new(tokio::sync::RwLock::new(actual_device)),
             config: Arc::new(tokio::sync::RwLock::new(config)),
             resource_manager: components.resource_manager,
-            preview_typing_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
-                preview_typing_enabled,
-            )),
-            manual_stop_tx: Arc::new(tokio::sync::RwLock::new(None)),
-            simulator: Arc::new(tokio::sync::RwLock::new(None)),
-            preview_text: Arc::new(tokio::sync::RwLock::new(None)),
             backends: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             active_backend: Arc::new(tokio::sync::RwLock::new(active_backend)),
             notifier: Arc::new(tokio::sync::Mutex::new(
@@ -195,7 +182,7 @@ impl SuperTTSDaemon {
     /// The startup path resolves its model from the legacy
     /// `preferred_model`/`preferred_source` config, which
     /// carries no `active_backend` — a config written before that field
-    /// existed loads it as `None`. Without this the daemon transcribes
+    /// existed loads it as `None`. Without this the daemon speaks
     /// happily while `GET /active_backend` stays null, so the settings app
     /// shows its "no backend loaded" empty state and `GET /models` (scoped to
     /// the active backend) returns nothing.
@@ -221,7 +208,7 @@ impl SuperTTSDaemon {
             return false;
         };
         *self.active_backend.write().await = Some(dir.clone());
-        self.config.write().await.transcription.active_backend = Some(dir);
+        self.config.write().await.synthesis.active_backend = Some(dir);
         true
     }
 

@@ -22,12 +22,12 @@ pub enum DaemonStatus {
     Blocked(String),
 }
 
-/// Recording status
+/// Whether the daemon is speaking.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub enum RecordingStatus {
+pub enum SpeakingStatus {
     #[default]
     Idle,
-    Recording,
+    Speaking,
 }
 
 /// The page to display in the application
@@ -35,9 +35,8 @@ pub enum RecordingStatus {
 pub enum Page {
     Connection,
     Customization,
-    Recording,
-    InputSimulation,
-    /// The active transcription backend: its model picker, load/unload, and a
+    Speech,
+    /// The active synthesis backend: its model picker, load/unload, and a
     /// side sheet for switching which installed backend is active.
     Models,
     /// Manage installed backends and browse installable ones (the old Models
@@ -63,7 +62,7 @@ pub enum ContextPage {
     /// backend list stays visible behind it. The backend is identified by
     /// `AppModel::configure_backend`; also Models-scoped.
     ConfigureBackend,
-    /// Right-side search sheet for picking a transcription language. Scope
+    /// Right-side search sheet for picking a speech language. Scope
     /// (global vs per-model) is carried by `AppModel::language_picker_target`.
     LanguagePicker,
     /// Right-side sheet for choosing which installed backend to activate (the
@@ -84,11 +83,8 @@ pub enum ErrorScope {
     Customization,
     /// The per-backend Configure sheet: secret / option saves.
     ConfigureBackend,
-    /// The Recording page: preview-typing / stop-mode saves and the daemon-mic
-    /// recording result.
-    Recording,
-    /// The Input Simulation page: write-method save.
-    InputSimulation,
+    /// The Speech page: notification-method saves and the test utterance.
+    Speech,
 }
 
 /// A scope-tagged, transient action failure rendered as an inline banner on the

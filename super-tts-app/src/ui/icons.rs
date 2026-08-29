@@ -10,8 +10,6 @@ use cosmic::iced::widget::svg;
 use cosmic::widget::icon::{self, Icon};
 
 pub const GEAR: &[u8] = include_bytes!("../../resources/icons/phosphor/gear.svg");
-pub const MICROPHONE: &[u8] = include_bytes!("../../resources/icons/phosphor/microphone.svg");
-pub const KEYBOARD: &[u8] = include_bytes!("../../resources/icons/phosphor/keyboard.svg");
 pub const BRAIN: &[u8] = include_bytes!("../../resources/icons/phosphor/brain.svg");
 pub const PLUG: &[u8] = include_bytes!("../../resources/icons/phosphor/plug.svg");
 pub const WARNING: &[u8] = include_bytes!("../../resources/icons/phosphor/warning.svg");

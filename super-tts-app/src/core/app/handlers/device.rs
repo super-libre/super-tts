@@ -31,7 +31,7 @@ impl AppModel {
             DeviceMessage::DeviceError(err) => {
                 // A device switch is a Models-page operation, so surface the
                 // failure on that page's card banner rather than hijacking the
-                // Recording page's transcription box (Tier 3 #11).
+                // Speech page's test panel (Tier 3 #11).
                 self.device_state = DeviceState::Ready;
                 self.model_operation_state = ModelOperationState::Error {
                     message: format!("Device error: {err}"),

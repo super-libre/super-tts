@@ -70,6 +70,7 @@ async fn start_daemon_with_registry(registry_url: &str) -> (DaemonGuard, PathBuf
     let child = Command::new(DAEMON_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
         .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("SUPER_TTS_REGISTRY_URL", registry_url)
         .env("XDG_CONFIG_HOME", &config_home)

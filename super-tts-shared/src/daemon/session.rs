@@ -239,7 +239,7 @@ mod tests {
         cache_set(app_id, "TOK-from-cache".to_string());
 
         let bogus_socket = PathBuf::from("/nonexistent/super-tts/socket");
-        let result = obtain(bogus_socket, app_id, "Test", &["transcribe"]).await;
+        let result = obtain(bogus_socket, app_id, "Test", &["speak"]).await;
 
         // Cleanup before asserting (in case the assert panics, the
         // global cache stays clean for sibling tests).

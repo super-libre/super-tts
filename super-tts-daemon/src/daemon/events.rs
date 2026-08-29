@@ -4,7 +4,7 @@
 //!
 //! `EventBus` owns one `tokio::sync::broadcast::Sender` per topic that the
 //! daemon publishes to `/events` subscribers (recording state, frequency
-//! bands, transcription text, daemon status). The HTTP `GET /events` handler
+//! bands, playback progress, daemon status). The HTTP `GET /events` handler
 //! subscribes to whichever topics the client requested and forwards each
 //! event as an SSE frame.
 //!
@@ -38,42 +38,6 @@ const STATE_BUF_CAPACITY: usize = 32;
 
 // ---------- Event payload types ----------------------------------------------
 
-#[derive(Clone, Debug, Serialize)]
-pub struct RecordingStartedEvent {
-    pub client_id: String,
-    pub timestamp: String,
-    pub write_mode: bool,
-}
-
-/// `recording_stopped` — mic capture ended (before transcription).
-#[derive(Clone, Debug, Serialize)]
-pub struct RecordingStoppedEvent {
-    pub client_id: String,
-    pub timestamp: String,
-}
-
-/// `transcribing_started` — model decode of the captured audio began.
-#[derive(Clone, Debug, Serialize)]
-pub struct TranscribingStartedEvent {
-    pub client_id: String,
-    pub timestamp: String,
-}
-
-/// `transcribing_stopped` — decode + typing finished; carries the outcome.
-#[derive(Clone, Debug, Serialize)]
-pub struct TranscribingStoppedEvent {
-    pub client_id: String,
-    pub timestamp: String,
-    pub transcription_success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct RecordingStateEvent {
-    pub is_recording: bool,
-}
-
 /// Payload of the `speaking_state` topic.
 #[derive(Clone, Debug, Serialize)]
 pub struct SpeakingStateEvent {
@@ -103,12 +67,6 @@ pub struct FrequencyBandsEvent {
     pub bands_b64: String,
     pub sample_rate: f32,
     pub total_energy: f32,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SttEvent {
-    pub text: String,
-    pub confidence: f32,
 }
 
 /// `daemon_status_changed` carries a heterogeneous payload: the `status`
@@ -227,32 +185,11 @@ macro_rules! event_topics {
 }
 
 event_topics! {
-    RecordingStarted {
-        wire: "recording_started", scope: "recording_events",
-        field: recording_started, payload: RecordingStartedEvent, capacity: STATE_BUF_CAPACITY,
-    },
-    RecordingStopped {
-        wire: "recording_stopped", scope: "recording_events",
-        field: recording_stopped, payload: RecordingStoppedEvent, capacity: STATE_BUF_CAPACITY,
-    },
-    RecordingState {
-        wire: "recording_state", scope: "recording_events",
-        field: recording_state, payload: RecordingStateEvent, capacity: STATE_BUF_CAPACITY,
-    },
-    TranscribingStarted {
-        wire: "transcribing_started", scope: "recording_events",
-        field: transcribing_started, payload: TranscribingStartedEvent, capacity: STATE_BUF_CAPACITY,
-    },
-    TranscribingStopped {
-        wire: "transcribing_stopped", scope: "recording_events",
-        field: transcribing_stopped, payload: TranscribingStoppedEvent, capacity: STATE_BUF_CAPACITY,
-    },
     FrequencyBands {
         wire: "frequency_bands", scope: "audio_visualization",
         field: frequency_bands, payload: FrequencyBandsEvent, capacity: AUDIO_BUF_CAPACITY,
     },
-    /// Whether speech is currently coming out of the speakers. The playback
-    /// counterpart of `recording_state`.
+    /// Whether speech is currently coming out of the speakers.
     SpeakingState {
         wire: "speaking_state", scope: "playback_events",
         field: speaking_state, payload: SpeakingStateEvent, capacity: STATE_BUF_CAPACITY,
@@ -261,14 +198,6 @@ event_topics! {
     SpeechProgress {
         wire: "speech_progress", scope: "playback_events",
         field: speech_progress, payload: SpeechProgressEvent, capacity: STATE_BUF_CAPACITY,
-    },
-    PartialStt {
-        wire: "partial_stt", scope: "global_transcriptions",
-        field: partial_stt, payload: SttEvent, capacity: STATE_BUF_CAPACITY,
-    },
-    FinalStt {
-        wire: "final_stt", scope: "global_transcriptions",
-        field: final_stt, payload: SttEvent, capacity: STATE_BUF_CAPACITY,
     },
     DaemonStatusChanged {
         wire: "daemon_status_changed", scope: "daemon_status",
@@ -300,30 +229,6 @@ impl EventBus {
     // returns `Err(SendError(_))` only when no subscribers exist; we drop it
     // because that's the steady state when no widget is connected.
 
-    pub fn publish_recording_started(&self, evt: RecordingStartedEvent) {
-        let _ = self.recording_started.send(evt);
-    }
-
-    pub fn publish_recording_stopped(&self, evt: RecordingStoppedEvent) {
-        let _ = self.recording_stopped.send(evt);
-    }
-
-    /// Publish a `transcribing_started` event (paired with `publish_transcribing_stopped`).
-    pub fn publish_transcribing_started(&self, evt: TranscribingStartedEvent) {
-        let _ = self.transcribing_started.send(evt);
-    }
-
-    /// Publish a `transcribing_stopped` event (paired with `publish_transcribing_started`).
-    pub fn publish_transcribing_stopped(&self, evt: TranscribingStoppedEvent) {
-        let _ = self.transcribing_stopped.send(evt);
-    }
-
-    pub fn publish_recording_state(&self, is_recording: bool) {
-        let _ = self
-            .recording_state
-            .send(RecordingStateEvent { is_recording });
-    }
-
     /// Publish a `speaking_state` change.
     pub fn publish_speaking_state(&self, is_speaking: bool, utterance_id: Option<String>) {
         let _ = self.speaking_state.send(SpeakingStateEvent {
@@ -347,14 +252,6 @@ impl EventBus {
             sample_rate,
             total_energy,
         });
-    }
-
-    pub fn publish_partial_stt(&self, text: String, confidence: f32) {
-        let _ = self.partial_stt.send(SttEvent { text, confidence });
-    }
-
-    pub fn publish_final_stt(&self, text: String, confidence: f32) {
-        let _ = self.final_stt.send(SttEvent { text, confidence });
     }
 
     /// Publish a `daemon_status_changed` event. Payload is whatever the
@@ -434,16 +331,9 @@ impl AnyReceiver {
             }};
         }
         match self {
-            Self::RecordingStarted(rx) => recv_arm!(rx, RecordingStarted),
-            Self::RecordingStopped(rx) => recv_arm!(rx, RecordingStopped),
-            Self::RecordingState(rx) => recv_arm!(rx, RecordingState),
-            Self::TranscribingStarted(rx) => recv_arm!(rx, TranscribingStarted),
-            Self::TranscribingStopped(rx) => recv_arm!(rx, TranscribingStopped),
             Self::FrequencyBands(rx) => recv_arm!(rx, FrequencyBands),
             Self::SpeakingState(rx) => recv_arm!(rx, SpeakingState),
             Self::SpeechProgress(rx) => recv_arm!(rx, SpeechProgress),
-            Self::PartialStt(rx) => recv_arm!(rx, PartialStt),
-            Self::FinalStt(rx) => recv_arm!(rx, FinalStt),
             Self::DaemonStatusChanged(rx) => recv_arm!(rx, DaemonStatusChanged),
             Self::DownloadProgress(rx) => recv_arm!(rx, DownloadProgress),
             Self::RegistryInstall(rx) => recv_arm!(rx, RegistryInstall),
@@ -491,11 +381,12 @@ mod tests {
     #[tokio::test]
     async fn single_subscriber_round_trip() {
         let bus = EventBus::new();
-        let mut rx = bus.subscribe(Topic::RecordingState);
-        bus.publish_recording_state(true);
+        let mut rx = bus.subscribe(Topic::SpeakingState);
+        bus.publish_speaking_state(true, Some("u-1".to_string()));
         let (topic, payload) = rx.recv_json().await.expect("should receive");
-        assert_eq!(topic, "recording_state");
-        assert_eq!(payload["is_recording"], serde_json::json!(true));
+        assert_eq!(topic, "speaking_state");
+        assert_eq!(payload["is_speaking"], serde_json::json!(true));
+        assert_eq!(payload["utterance_id"], serde_json::json!("u-1"));
     }
 
     #[tokio::test]
@@ -523,16 +414,16 @@ mod tests {
         // non-blockingly (`try_recv`) — calling `recv().await` on an
         // empty channel with no senders dropped would block forever.
         let bus = EventBus::new();
-        let AnyReceiver::RecordingState(mut fast_rx) = bus.subscribe(Topic::RecordingState) else {
-            unreachable!("subscribe(RecordingState) returns the matching variant")
+        let AnyReceiver::SpeakingState(mut fast_rx) = bus.subscribe(Topic::SpeakingState) else {
+            unreachable!("subscribe(SpeakingState) returns the matching variant")
         };
-        let AnyReceiver::RecordingState(mut slow_rx) = bus.subscribe(Topic::RecordingState) else {
-            unreachable!("subscribe(RecordingState) returns the matching variant")
+        let AnyReceiver::SpeakingState(mut slow_rx) = bus.subscribe(Topic::SpeakingState) else {
+            unreachable!("subscribe(SpeakingState) returns the matching variant")
         };
 
         // Push enough state changes to overflow the STATE_BUF_CAPACITY-sized ring.
         for i in 0..(STATE_BUF_CAPACITY * 2) {
-            bus.publish_recording_state(i % 2 == 0);
+            bus.publish_speaking_state(i % 2 == 0, None);
         }
 
         // Fast receiver: drain non-blockingly until empty. Tolerate a
@@ -582,23 +473,16 @@ mod tests {
     #[tokio::test]
     async fn publish_with_no_subscribers_is_silent() {
         let bus = EventBus::new();
-        // No subscriber for partial_stt — call must not panic / propagate.
-        bus.publish_partial_stt("hello".into(), 0.9);
+        // No subscriber for speech_progress — call must not panic / propagate.
+        bus.publish_speech_progress("u-1".into(), 120, 480);
     }
 
     #[test]
     fn topic_round_trips_through_str() {
         for t in [
-            Topic::RecordingStarted,
-            Topic::RecordingStopped,
-            Topic::RecordingState,
-            Topic::TranscribingStarted,
-            Topic::TranscribingStopped,
             Topic::FrequencyBands,
             Topic::SpeakingState,
             Topic::SpeechProgress,
-            Topic::PartialStt,
-            Topic::FinalStt,
             Topic::DaemonStatusChanged,
             Topic::DownloadProgress,
             Topic::RegistryInstall,
@@ -633,22 +517,18 @@ mod tests {
         assert_eq!(payload["model_name"], serde_json::json!("whisper-tiny"));
     }
 
+    /// A `None` on an optional payload field is omitted from the wire rather
+    /// than sent as `null`, so a consumer can use key presence as the test.
     #[tokio::test]
-    async fn transcribing_stopped_round_trip() {
+    async fn an_absent_optional_field_is_omitted_from_the_payload() {
         let bus = EventBus::new();
-        let mut rx = bus.subscribe(Topic::TranscribingStopped);
-        bus.publish_transcribing_stopped(TranscribingStoppedEvent {
-            client_id: "test-client".into(),
-            timestamp: "2026-06-08T00:00:00Z".into(),
-            transcription_success: true,
-            error: None,
-        });
+        let mut rx = bus.subscribe(Topic::SpeakingState);
+        bus.publish_speaking_state(false, None);
         let (topic, payload) = rx.recv_json().await.expect("should receive");
-        assert_eq!(topic, "transcribing_stopped");
-        assert_eq!(payload["client_id"], serde_json::json!("test-client"));
-        assert_eq!(payload["transcription_success"], serde_json::json!(true));
+        assert_eq!(topic, "speaking_state");
+        assert_eq!(payload["is_speaking"], serde_json::json!(false));
         assert!(
-            payload.get("error").is_none(),
+            payload.get("utterance_id").is_none(),
             "None fields must be omitted"
         );
     }
@@ -666,23 +546,12 @@ mod tests {
 
     #[test]
     fn required_scope_maps_every_topic() {
-        assert_eq!(Topic::RecordingStarted.required_scope(), "recording_events");
-        assert_eq!(Topic::RecordingStopped.required_scope(), "recording_events");
-        assert_eq!(Topic::RecordingState.required_scope(), "recording_events");
-        assert_eq!(
-            Topic::TranscribingStarted.required_scope(),
-            "recording_events"
-        );
-        assert_eq!(
-            Topic::TranscribingStopped.required_scope(),
-            "recording_events"
-        );
         assert_eq!(
             Topic::FrequencyBands.required_scope(),
             "audio_visualization"
         );
-        assert_eq!(Topic::PartialStt.required_scope(), "global_transcriptions");
-        assert_eq!(Topic::FinalStt.required_scope(), "global_transcriptions");
+        assert_eq!(Topic::SpeakingState.required_scope(), "playback_events");
+        assert_eq!(Topic::SpeechProgress.required_scope(), "playback_events");
         assert_eq!(Topic::DaemonStatusChanged.required_scope(), "daemon_status");
         assert_eq!(Topic::DownloadProgress.required_scope(), "daemon_status");
         assert_eq!(Topic::RegistryInstall.required_scope(), "daemon_status");
@@ -696,16 +565,9 @@ mod tests {
         // daemon enforces here. This pins the two sources of truth together.
         use super_tts_shared::daemon::widget_subscription::required_scope_for_topic;
         for topic in [
-            Topic::RecordingStarted,
-            Topic::RecordingStopped,
-            Topic::RecordingState,
-            Topic::TranscribingStarted,
-            Topic::TranscribingStopped,
             Topic::FrequencyBands,
             Topic::SpeakingState,
             Topic::SpeechProgress,
-            Topic::PartialStt,
-            Topic::FinalStt,
             Topic::DaemonStatusChanged,
             Topic::DownloadProgress,
             Topic::RegistryInstall,
@@ -770,16 +632,18 @@ mod playback_topic_tests {
         );
     }
 
-    /// Playback events are gated separately from recording ones: an app that
-    /// may watch speech should not thereby learn when the microphone is live.
+    /// Playback events are gated separately from the visualizer feed. An applet
+    /// that draws a waveform holds `audio_visualization`; knowing *what* the
+    /// daemon is speaking and how far through it is, is a different disclosure
+    /// and must cost a second grant.
     #[test]
     fn playback_topics_need_their_own_scope() {
         assert_eq!(Topic::SpeakingState.required_scope(), "playback_events");
         assert_eq!(Topic::SpeechProgress.required_scope(), "playback_events");
-        assert_eq!(
-            Topic::RecordingState.required_scope(),
-            "recording_events",
-            "and must not be reachable with the recording scope"
+        assert_ne!(
+            Topic::SpeakingState.required_scope(),
+            Topic::FrequencyBands.required_scope(),
+            "the visualizer grant must not also carry utterance state"
         );
     }
 }

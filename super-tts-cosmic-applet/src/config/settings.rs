@@ -27,7 +27,7 @@ pub struct VisualizationConfig {
     )]
     pub side: VisualizationSide,
     pub colors: VisualizationColorConfig,
-    /// Animation shown while the daemon transcribes (`Processing` state).
+    /// Animation shown while the daemon synthesizes (`Synthesizing` state).
     #[serde(
         default,
         deserialize_with = "super_tts_shared::utils::serde_helpers::deserialize_or_default"
@@ -46,7 +46,7 @@ pub struct UiConfig {
     /// How far the visualization runs along the panel, in pixels:
     /// its width on a top or bottom panel, its height on a side one.
     pub applet_width: u32,
-    pub show_visualization: bool, // Whether to show visualizations when recording
+    pub show_visualization: bool, // Whether to show visualizations while speaking
 }
 
 impl Default for AppletConfig {
@@ -62,7 +62,7 @@ impl Default for AppletConfig {
                 show_icon: true,
                 icon_alignment: IconAlignment::End,
                 applet_width: 120,        // Default width in pixels
-                show_visualization: true, // Default to showing visualizations when recording
+                show_visualization: true, // Default to showing visualizations while speaking
             },
         }
     }

@@ -32,7 +32,7 @@ use tokio::time::sleep;
 
 const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 const APP_NAME: &str = "super-tts gui smoke test";
-const SCOPES: &[&str] = &["transcribe", "status"];
+const SCOPES: &[&str] = &["speak", "status"];
 
 fn skip_if_no_display() -> Option<&'static str> {
     let has_x11 = std::env::var_os("DISPLAY").is_some();
@@ -111,6 +111,7 @@ async fn start_daemon_no_auto_approve() -> (DaemonGuard, PathBuf) {
         .env("XDG_RUNTIME_DIR", &xdg)
         .env("XDG_CONFIG_HOME", &config_home)
         .env_remove("SUPER_TTS_AUTO_APPROVE") // ensure the popup path runs
+        .env("SUPER_TTS_MUTE_CUES", "1") // never beep on the runner's speakers
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

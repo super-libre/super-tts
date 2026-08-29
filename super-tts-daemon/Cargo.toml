@@ -118,7 +118,7 @@
     # has cuda/cudnn/flash-attn features.
     default = ["subprocess-backends", "wasm-backends"]
     # Spawn STT backends as sandboxed native subprocesses.
-    # `http-body` is shared with the wasm transport: `stt_models::v1` pumps a
+    # `http-body` is shared with the wasm transport: `tts_models::v1` pumps a
     # framed synthesis body generically over `http_body::Body`, so both
     # transports reach it through the same code.
     subprocess-backends = ["dep:bytes", "dep:http-body", "hyper/client"]

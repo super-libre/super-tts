@@ -1,6 +1,6 @@
 # `/language`
 
-Read and set the **global Primary Language** — the default transcription
+Read and set the **global Primary Language** — the default speech
 language applied to any multilingual model that supports it. A value is a
 BCP-47 tag (`en`, `es-MX`, `es-419`) or the reserved `auto` (auto-detect);
 absent means no preference (each model uses its own `primary_language`). Per-model

@@ -831,7 +831,7 @@ fn verify_manifest_bytes(
     pin_sha256: &str,
     entry: &IndexBackend,
 ) -> Result<String, (InstallPhase, InstallError)> {
-    use crate::stt_models::backends::manifest::{Manifest, validate_runtime};
+    use crate::tts_models::backends::manifest::{Manifest, validate_runtime};
     use InstallPhase as P;
 
     // An empty pin sha is the Custom-repo "unverified source" case (no index

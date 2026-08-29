@@ -11,7 +11,7 @@ mod view;
 use subscription::{UdpSubscriptionId, audio_events_subscription};
 
 use crate::daemon::backends::BackendInfo;
-use crate::state::{AudioTheme, ContextPage, DaemonStatus, MenuAction, RecordingStatus};
+use crate::state::{AudioTheme, ContextPage, DaemonStatus, MenuAction, SpeakingStatus};
 use crate::ui::messages::{DaemonMessage, Message, ModelsPageMessage, ShellMessage};
 use cosmic::app::context_drawer;
 use cosmic::iced::Subscription;
@@ -70,13 +70,17 @@ pub struct AppModel {
     /// Reconnect backoff (shared `RetryStrategy`: exponential + jitter),
     /// advanced on each failed reconnect and reset on a successful connection.
     pub reconnect_retry: super_tts_shared::daemon::retry::RetryStrategy,
-    /// Current recording status
-    pub recording_status: RecordingStatus,
-    /// Latest transcription text
-    pub transcription_text: String,
+    /// Whether the daemon is speaking right now.
+    pub speaking_status: SpeakingStatus,
+    /// The utterance the daemon is playing, when it named one. Not necessarily
+    /// this app's: any client can ask the daemon to speak, and the badge
+    /// reflects the device, not this page.
+    pub speaking_utterance: Option<String>,
+    /// Text in the Speech page's test field.
+    pub speech_test_text: String,
     /// Current audio level (0.0 to 1.0)
     pub audio_level: f32,
-    /// Whether speech is currently detected
+    /// Whether audio is currently coming out of the speakers.
     pub is_speech_detected: bool,
     /// Available audio themes
     pub audio_themes: Vec<AudioTheme>,
@@ -122,25 +126,6 @@ pub struct AppModel {
     /// Last event timestamp for polling daemon events
     pub last_event_timestamp: Option<String>,
 
-    // Preview typing state
-    /// Whether preview typing is enabled (beta feature)
-    pub preview_typing_enabled: bool,
-
-    // Recording stop mode
-    pub recording_stop_mode: super_tts_shared::models::recording_stop_mode::RecordingStopMode,
-
-    // Write method
-    pub write_method: super_tts_shared::models::write_method::WriteMethod,
-    /// Text in the Input Simulation test field — where `POST /write_method/test`
-    /// lands, since the daemon types into whatever window has focus.
-    pub write_method_test_text: String,
-    /// Backend the last test actually typed through. `None` until a test runs;
-    /// with `write_method == Auto` this is the only readout of the real backend.
-    pub resolved_write_method: Option<super_tts_shared::models::write_method::WriteMethod>,
-    /// Seconds left before a delayed write-method test types. `None` when no
-    /// countdown is running, which is also how a cancel is recorded.
-    pub write_method_test_countdown: Option<u8>,
-
     // Notification method
     pub notification_method: super_tts_shared::models::notification_method::NotificationMethod,
 
@@ -158,7 +143,7 @@ pub struct AppModel {
     // Models page UI state (tabs, active-backend card selection/staging, menus).
     pub models_page: crate::state::models_page::ModelsPageState,
 
-    // Transcription language state (global Primary Language + per-model picker).
+    // Speech language state (global Primary Language + per-model picker).
     pub language: crate::state::language::LanguageState,
 
     // Installed-backend catalog and per-backend configuration state.
@@ -302,7 +287,7 @@ impl cosmic::Application for AppModel {
         const GPU_POLL_INTERVAL_SECS: u64 = 3;
 
         Subscription::batch(vec![
-            // HTTP /events SSE subscription. Covers the recording /
+            // HTTP /events SSE subscription. Covers the playback /
             // audio-meter topics and the model/device/download status
             // topics — the settings app's token holds every scope these
             // need, so one subscription carries the full set.

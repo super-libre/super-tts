@@ -5,9 +5,9 @@
 //! breaks a single definition instead of a hand-written literal in every module
 //! that happens to need a backend.
 
-use crate::stt_models::ModelDefinition;
-use crate::stt_models::backends::DiscoveredBackend;
-use crate::stt_models::backends::manifest::{Opt, OptionDefault, OptionType, Secret};
+use crate::tts_models::ModelDefinition;
+use crate::tts_models::backends::DiscoveredBackend;
+use crate::tts_models::backends::manifest::{Opt, OptionDefault, OptionType, Secret};
 
 /// The cloud-backend shape the option, egress, and catalog tests all need: one
 /// required secret, `api.openai.com` as declared egress, and a `base_url`

@@ -39,11 +39,11 @@ GET /registry/backends?include_incompatible=false&kind=wasm&online=true&q=openai
   "generated_at": "2026-05-29T18:00:00Z",
   "backends": [
     {
-      "id": "voxtral",
-      "backend_id": "app.super-tts.voxtral",
+      "id": "xtts",
+      "backend_id": "app.super-tts.xtts",
       "source": "github.com/jorge-menjivar/super-tts",
       "version": "0.2.0",
-      "name": "Voxtral",
+      "name": "XTTS",
       "description": "…",
       "license": "Apache-2.0",
       "kind": "subprocess",
@@ -53,7 +53,7 @@ GET /registry/backends?include_incompatible=false&kind=wasm&online=true&q=openai
       "supports_gpu": true,
       "supports_cpu": true,
       "models": [
-        { "name": "voxtral-mini", "provider": "",
+        { "name": "xtts-v2", "provider": "",
           "supported_devices": ["cpu", "gpu"] }
       ],
       "secrets": [],

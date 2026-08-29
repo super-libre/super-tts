@@ -91,7 +91,7 @@ pub fn survivors(old: &Manifest, new: &Manifest) -> Vec<String> {
 /// still intact after an `Err`. This is safe for `install`'s caller
 /// (`preserve_models`) because a file this leaves behind under `from_dir` is
 /// simply re-downloaded the next time it is provisioned
-/// (`stt_models::download::usable_existing` re-verifies every file's hash
+/// (`tts_models::download::usable_existing` re-verifies every file's hash
 /// before trusting it), so the end state is always correct content — it is
 /// only ever less carry-over than intended, never wrong bytes served. See
 /// `preserve_models`'s doc comment for the one place that safety net does not

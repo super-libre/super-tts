@@ -2,8 +2,8 @@
 use super::{decode_source, find_backend, json_error, ok};
 use crate::daemon::http::internal::helpers::dispatch::dispatch_command;
 use crate::daemon::http::state::AppState;
-use crate::stt_models::backends::DiscoveredBackend;
-use crate::stt_models::backends::manifest::OptionType;
+use crate::tts_models::backends::DiscoveredBackend;
+use crate::tts_models::backends::manifest::OptionType;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -106,7 +106,7 @@ async fn set(
     // the mistake that actually misleads people — a well-formed URL naming the
     // wrong port — and model load already refuses it with a message naming the
     // option. What this must not do is quietly drop it.
-    let value = if name == crate::stt_models::backends::base_url::OPTION_NAME {
+    let value = if name == crate::tts_models::backends::base_url::OPTION_NAME {
         canonical_base_url(&body.value)
     } else {
         body.value.clone()
@@ -163,7 +163,7 @@ async fn delete_option(
 /// configured their way out of.
 #[cfg(feature = "wasm-backends")]
 fn canonical_base_url(value: &str) -> String {
-    crate::stt_models::backends::base_url::normalize(value)
+    crate::tts_models::backends::base_url::normalize(value)
         .unwrap_or_else(|| value.trim().to_string())
 }
 

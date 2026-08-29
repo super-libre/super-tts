@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Transcription-language UI state, extracted from `AppModel` following the
+//! Speech-language UI state, extracted from `AppModel` following the
 //! `RegistryState` template (App Tier 3 #15).
 
 use crate::state::LanguageResolution;

@@ -7,10 +7,10 @@
 A Settings UI uses this scope to drive progress bars without polling: it sees a
 model switch move through `loading_model` → download ticks → `ready`, and it sees
 backend-registry installs report progress. The scope reveals nothing about audio
-or transcription text — only daemon configuration/lifecycle state.
+or spoken text — only daemon configuration/lifecycle state.
 
 It is usually requested alongside [`settings`](./settings.md) (which performs the
-mutations these events report on) and the recording/visualization scopes a
+mutations these events report on) and the playback/visualization scopes a
 Settings UI also shows. Scopes are composable — see [auth.md](../auth.md).
 
 ## Topics

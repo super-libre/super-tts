@@ -48,9 +48,9 @@ pub fn create_visualization_theme_selector<'a>(
     .apply(Element::from)
 }
 
-/// Dropdown selector for the working/transcribing animation. Mirrors
+/// Dropdown selector for the working/synthesizing animation. Mirrors
 /// [`create_visualization_theme_selector`]; the chosen style drives the
-/// animation shown while the daemon transcribes.
+/// animation shown while the daemon synthesizes.
 pub fn create_working_animation_selector<'a>(
     selected: WorkingAnimationTheme,
     is_open: &IsOpen,
