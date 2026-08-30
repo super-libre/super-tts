@@ -36,6 +36,54 @@ async fn spawn_http_listener(daemon: &SuperTTSDaemon) -> Result<tokio::task::Joi
     .await
 }
 
+/// Wait for a signal asking the daemon to stop.
+///
+/// Watches SIGTERM as well as SIGINT. Only SIGINT was handled before, which
+/// meant `systemctl stop` and a plain `kill` — both SIGTERM — killed the daemon
+/// through the default disposition, skipping the graceful path entirely. That
+/// path is what stops the `systemd-run --user` backend unit: the backend is its
+/// own unit, not a child in the daemon's cgroup, so nothing else reaps it. The
+/// symptom is a subprocess backend left running with a whole model resident,
+/// invisible until [`cleanup_orphan_units`] sweeps it at the next start.
+///
+/// A signal that cannot be registered is logged rather than panicked on. This
+/// runs in a spawned task, so a panic here would kill only the task and leave a
+/// daemon that can never shut down at all — strictly worse than watching one
+/// signal instead of two.
+///
+/// [`cleanup_orphan_units`]: crate::tts_models::subprocess::cleanup_orphan_units
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut interrupt = match signal(SignalKind::interrupt()) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            error!("cannot listen for SIGINT: {e}");
+            None
+        }
+    };
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            error!("cannot listen for SIGTERM: {e}");
+            None
+        }
+    };
+
+    // `Option::as_mut` in each arm so a signal that failed to register simply
+    // never fires, instead of taking the whole select down with it.
+    tokio::select! {
+        () = async { match interrupt.as_mut() {
+            Some(s) => { s.recv().await; }
+            None => std::future::pending().await,
+        } } => info!("Received SIGINT, initiating shutdown..."),
+        () = async { match terminate.as_mut() {
+            Some(s) => { s.recv().await; }
+            None => std::future::pending().await,
+        } } => info!("Received SIGTERM, initiating shutdown..."),
+    }
+}
+
 /// Main entry point for the daemon
 ///
 /// # Errors
@@ -79,13 +127,9 @@ pub async fn run() -> Result<()> {
     #[cfg(feature = "subprocess-backends")]
     crate::tts_models::subprocess::cleanup_orphan_units().await;
 
-    // Set up Ctrl+C handler
     let shutdown_tx = daemon.shutdown_tx.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to listen for Ctrl+C");
-        info!("Received Ctrl+C, initiating shutdown...");
+        shutdown_signal().await;
         let _ = shutdown_tx.send(());
     });
 

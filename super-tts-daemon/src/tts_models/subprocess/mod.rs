@@ -35,6 +35,31 @@ pub struct SubprocessBackend {
     info: ModelInfoData,
     /// Device label reported by the backend's `/v1/status` (e.g. `"cuda"`).
     device: String,
+    /// Whether [`Synthesize::shutdown`] already stopped the unit.
+    ///
+    /// `Drop` is the safety net for crash paths, but on the ordinary path
+    /// `shutdown` has already run and a second `systemctl stop` would fail with
+    /// [`EXIT_UNIT_NOT_LOADED`] and warn that the subprocess might still be
+    /// running — a false alarm on every clean shutdown, and the fastest way to
+    /// teach an operator to ignore this log.
+    stopped: bool,
+}
+
+/// `systemctl`'s exit code for an operation on a unit it does not have loaded.
+///
+/// For a stop, that is the goal state rather than a failure: the unit is gone,
+/// whether this call removed it or it was already collected.
+const EXIT_UNIT_NOT_LOADED: i32 = 5;
+
+/// Interpret the result of `systemctl --user stop <unit>` for logging.
+fn report_stop(unit: &str, status: std::process::ExitStatus) {
+    if status.success() {
+        info!("stopped backend unit {unit}");
+    } else if status.code() == Some(EXIT_UNIT_NOT_LOADED) {
+        info!("backend unit {unit} was already gone");
+    } else {
+        warn!("systemctl --user stop {unit} exited with {status}; subprocess may still be running");
+    }
 }
 
 impl SubprocessBackend {
@@ -156,6 +181,7 @@ impl SubprocessBackend {
             model_id: model_name.to_string(),
             info,
             device: "unknown".to_string(),
+            stopped: false,
         };
 
         backend.wait_for_ping(Duration::from_secs(30)).await?;
@@ -325,19 +351,14 @@ impl Drop for SubprocessBackend {
         // result so a failure doesn't silently leave the subprocess running
         // — the previous `let _ = …` swallowed every error, which made the
         // "backend not stopping" failure mode invisible.
+        if self.stopped {
+            return;
+        }
         match std::process::Command::new("systemctl")
             .args(["--user", "stop", &self.unit])
             .status()
         {
-            Ok(status) if status.success() => {
-                info!("stopped backend unit {}", self.unit);
-            }
-            Ok(status) => {
-                warn!(
-                    "systemctl --user stop {} exited with {}; subprocess may still be running",
-                    self.unit, status,
-                );
-            }
+            Ok(status) => report_stop(&self.unit, status),
             Err(e) => {
                 warn!("failed to invoke systemctl to stop {}: {e}", self.unit);
             }
@@ -374,22 +395,20 @@ impl Synthesize for SubprocessBackend {
     /// remove the socket file. Called by the daemon before the
     /// [`LoadedModel`](crate::daemon::types::LoadedModel) is dropped — gives
     /// us a real `.await` instead of blocking the runtime in `Drop`. After
-    /// this returns, the synchronous `Drop` impl is effectively a no-op
-    /// (the unit is already stopped) and stays for crash paths and tests.
+    /// this returns the synchronous `Drop` impl returns immediately, which is
+    /// what the `stopped` flag is for; `Drop` stays for the crash paths where
+    /// this never ran.
     async fn shutdown(&mut self) -> Result<()> {
         let status = tokio::process::Command::new("systemctl")
             .args(["--user", "stop", &self.unit])
             .status()
             .await
             .with_context(|| format!("invoke systemctl to stop {}", self.unit))?;
-        if status.success() {
-            info!("stopped backend unit {}", self.unit);
-        } else {
-            warn!(
-                "systemctl --user stop {} exited with {status}; subprocess may still be running",
-                self.unit,
-            );
-        }
+        report_stop(&self.unit, status);
+        // Set even when the stop reported a failure: the attempt was made, and
+        // `Drop` repeating it moments later would not succeed where this did
+        // not. The startup sweep is what recovers a unit that truly survived.
+        self.stopped = true;
         let _ = std::fs::remove_file(&self.socket);
         Ok(())
     }

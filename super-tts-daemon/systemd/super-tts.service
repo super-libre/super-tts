@@ -1,5 +1,5 @@
 [Unit]
-Description=Super TTS Daemon - Speech-to-text service
+Description=Super TTS Daemon - Text-to-speech service
 Documentation=https://github.com/jorge-menjivar/super-tts
 After=pipewire.service pulseaudio.service graphical-session.target
 Requires=graphical-session.target
@@ -11,7 +11,6 @@ ExecStartPre=/bin/sh -c 'while [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do 
 # same unit works for /usr/local/bin (script install) and /usr/bin
 # (distro package) without editing.
 ExecStart=super-tts-daemon
-ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 TimeoutStartSec=60
