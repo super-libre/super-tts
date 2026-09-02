@@ -88,7 +88,7 @@ one-at-a-time — adding an id later would break every client written against it
 
 | HTTP | `error_code`        | Meaning                                                                                     |
 |------|---------------------|---------------------------------------------------------------------------------------------|
-| 400  | `invalid_value`     | `text` missing, empty, or over the cap; or a malformed field.                               |
+| 400  | `invalid_value`     | `text` missing, empty, or over the cap; a `voice` the model does not declare or whose shape it did not opt into (see [`voice_kinds`](../../backend/config.md#voices)); or a malformed field. |
 | 401  | `invalid_session`   | Token unknown / expired / `exe_changed` — re-auth and retry.                                |
 | 403  | `scope_denied`      | Token lacks the `speak` scope.                                                              |
 | 409  | `model_not_loaded`  | No model is loaded. Load one via [`POST /active_model`](./active_model.md) and retry.        |

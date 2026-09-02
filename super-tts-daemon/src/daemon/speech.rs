@@ -130,6 +130,10 @@ pub enum SpeakError {
     /// No model is loaded.
     #[error("model_not_loaded")]
     NotLoaded,
+    /// The `voice` id is not one the model can resolve: either a shape it did
+    /// not opt into, or a preset it does not declare.
+    #[error("unknown_voice: {0}")]
+    UnknownVoice(String),
     /// The audio device could not be opened.
     #[error("audio_device_unavailable: {0}")]
     Device(String),
@@ -397,6 +401,12 @@ impl SpeechEngine {
         let policy = {
             let guard = model.read().await;
             let loaded = guard.as_ref().ok_or(SpeakError::NotLoaded)?;
+            // Before `cancel` below, for the same reason the not-loaded check
+            // is: a request that cannot be served must not interrupt what is
+            // already playing.
+            if let Some(voice) = options.voice {
+                check_voice(&loaded.definition, voice)?;
+            }
             ChunkPolicy::for_model(loaded.definition.max_input_chars)
         };
 
@@ -856,6 +866,48 @@ async fn open_device_thread() -> Result<Playback, SpeakError> {
     }
 }
 
+/// Check a requested `voice` against what the model declares.
+///
+/// Two rules, both from `docs/protocol/backend/config.md`. The id's *shape*
+/// must be a kind the model opted into: a bare id is `preset`, `voice:<uuid>`
+/// is `cloned`, and `desc:<text>` is `described`. A preset id must then name
+/// one of the model's `[[models.voices]]`.
+///
+/// The second rule is skipped when the model declares no presets, because the
+/// manifest allows an empty list for a model whose voices are all cloned or
+/// described — there is then nothing to check against, and refusing every id
+/// would break a model that resolves them itself.
+fn check_voice(
+    definition: &crate::tts_models::ModelDefinition,
+    voice: &str,
+) -> Result<(), SpeakError> {
+    use super_tts_registry_types::manifest::VoiceKind;
+
+    let kind = if voice.starts_with("voice:") {
+        VoiceKind::Cloned
+    } else if voice.starts_with("desc:") {
+        VoiceKind::Described
+    } else {
+        VoiceKind::Preset
+    };
+    if !definition.voice_kinds.contains(&kind) {
+        return Err(SpeakError::UnknownVoice(format!(
+            "model '{}' does not accept a {kind} voice id",
+            definition.name
+        )));
+    }
+    if kind == VoiceKind::Preset
+        && !definition.voices.is_empty()
+        && !definition.voices.iter().any(|v| v == voice)
+    {
+        return Err(SpeakError::UnknownVoice(format!(
+            "model '{}' declares no voice '{voice}'",
+            definition.name
+        )));
+    }
+    Ok(())
+}
+
 impl crate::daemon::types::SuperTTSDaemon {
     /// Handle `Command::Speak`.
     ///
@@ -897,7 +949,7 @@ impl crate::daemon::types::SuperTTSDaemon {
         // input-validation errors do not, because whoever sent bad text is by
         // definition looking at the response.
         if let Some(failure) = match &err {
-            SpeakError::EmptyText | SpeakError::TextTooLong => None,
+            SpeakError::EmptyText | SpeakError::TextTooLong | SpeakError::UnknownVoice(_) => None,
             SpeakError::NotLoaded => Some(Failure::no_model_loaded()),
             SpeakError::Device(detail) => Some(Failure::could_not_open_output(detail)),
             SpeakError::Synthesis(detail) => {
@@ -910,7 +962,7 @@ impl crate::daemon::types::SuperTTSDaemon {
         }
 
         match err {
-            e @ (SpeakError::EmptyText | SpeakError::TextTooLong) => {
+            e @ (SpeakError::EmptyText | SpeakError::TextTooLong | SpeakError::UnknownVoice(_)) => {
                 DaemonResponse::error_with_code(ErrorCode::InvalidValue, &e.to_string())
             }
             SpeakError::NotLoaded => {
@@ -931,3 +983,7 @@ impl crate::daemon::types::SuperTTSDaemon {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "speech_tests.rs"]
+mod tests;

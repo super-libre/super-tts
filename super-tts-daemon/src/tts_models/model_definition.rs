@@ -19,7 +19,7 @@
 
 use std::time::Duration;
 
-use super_tts_registry_types::manifest::Device;
+use super_tts_registry_types::manifest::{Device, VoiceKind};
 
 /// Fully resolved description of a single model served by a backend.
 ///
@@ -51,6 +51,17 @@ pub struct ModelDefinition {
     /// means unbounded, and the daemon then sends whole utterances rather than
     /// splitting them — see [`crate::text::chunk`].
     pub max_input_chars: Option<u32>,
+    /// Which `voice` id shapes the model can resolve, from `voice_kinds`.
+    /// The daemon refuses a shape the model did not opt into, so a backend
+    /// never sees an id it cannot resolve.
+    pub voice_kinds: Vec<VoiceKind>,
+    /// Ids of the preset voices the model declares in `[[models.voices]]`.
+    ///
+    /// Empty when it declares none, which the manifest allows for a model
+    /// whose voices are entirely cloned or described. A preset id is checked
+    /// against this list only when there is a list to check it against —
+    /// otherwise there is nothing to say it is wrong.
+    pub voices: Vec<String>,
     /// Whether this model is reached over the realtime WebSocket path
     /// (the realtime WIT's `ws-server.handle`) rather than batch
     /// `POST /v1/synthesize`.

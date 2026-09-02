@@ -19,7 +19,7 @@ use super_tts_daemon::daemon::speech::{SpeakError, SpeechEngine};
 use super_tts_daemon::daemon::types::{LoadedModel, SharedLoadedModel};
 use super_tts_daemon::tts_models::ModelDefinition;
 use super_tts_daemon::tts_models::wasm::WasmBackend;
-use super_tts_registry_types::manifest::Device;
+use super_tts_registry_types::manifest::{Device, VoiceKind};
 
 /// The mock synthesizes 960 samples of s16le at 24 kHz.
 const MOCK_SAMPLES: usize = 960;
@@ -50,6 +50,8 @@ fn definition() -> ModelDefinition {
         max_input_chars: None,
         processing_interval: Duration::from_millis(0),
         supported_devices: vec![Device::None],
+        voice_kinds: vec![VoiceKind::Preset],
+        voices: Vec::new(),
         realtime: false,
         provider: None,
     }

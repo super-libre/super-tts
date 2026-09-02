@@ -95,4 +95,4 @@ not be able to open them without limit.
 | `401 invalid_session`       | Token unknown / expired / `exe_changed` — re-auth and retry.  |
 | `403 scope_denied`          | Token lacks the `speak` scope.                                |
 | `503 speak_sessions_busy`   | Four sessions are already open.                               |
-| `{"type":"error", …}`       | Anything that goes wrong after the upgrade: no model loaded, the backend failed, the audio device could not be opened. |
+| `{"type":"error", …}`       | Anything that goes wrong after the upgrade: no model loaded, a `voice` the model does not declare or whose shape it did not opt into, the backend failed, the audio device could not be opened. |
