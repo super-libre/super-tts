@@ -65,7 +65,7 @@ install of that kind produces:
 | Kind         | Copied                                                                 |
 |--------------|------------------------------------------------------------------------|
 | `wasm`       | `backend.toml` and the file `[backend].entrypoint` names — nothing else. |
-| `subprocess` | The directory tree, minus VCS metadata (`.git`).                        |
+| `subprocess` | The directory tree, minus VCS metadata (`.git`) and cache directories.  |
 
 A `wasm` install is exactly those two files, so the import takes them and
 ignores everything beside them: pointing `local_path` at a source checkout
@@ -76,6 +76,17 @@ bundled interpreter, shared libraries, resource files — and the registry
 equivalent is an opaque tarball, so the whole tree is taken. Stage a
 subprocess backend as the directory you would have tarred, not as a source
 checkout: everything beside the executable is copied verbatim.
+
+Two things are left behind, being the two that cannot be a runtime dependency.
+One is `.git`. The other is any directory carrying a `CACHEDIR.TAG` whose first
+line is the signature from the [Cache Directory Tagging
+Specification](https://bford.info/cachedir/) — the marker Cargo writes into
+`target/`, by which a directory declares its contents rebuildable. This is what
+keeps importing a source checkout cheap: a Rust backend's build tree is
+routinely gigabytes, and copying it turns an install that should take a moment
+into a minute of disk traffic. The rule is keyed on the tag rather than on the
+name `target`, so a directory the backend actually needs is never dropped for
+being named like a build one. Each skip is logged.
 
 Model files are not part of either copy. The daemon downloads each
 [`[[models.files]]`](../../../backend/config.md#modelsfiles) entry into its
