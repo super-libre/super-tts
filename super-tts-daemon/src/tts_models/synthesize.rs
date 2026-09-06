@@ -113,6 +113,46 @@ pub trait Synthesize: ModelState {
         sink: &mut (dyn crate::tts_models::v1::SynthesisSink + Send),
     ) -> Result<()>;
 
+    /// Register a cloned voice's reference audio with the backend, so later
+    /// syntheses can name it by id alone.
+    ///
+    /// Called once per `(loaded instance, voice)` pair, before the first
+    /// synthesis that uses the voice — not per request. Deriving a speaker
+    /// embedding or encoding reference codes is real work, and the daemon
+    /// issues one synthesis per sentence, so a per-request push would repeat
+    /// that work for every sentence of a paragraph.
+    ///
+    /// Default: unsupported. The daemon only calls this for a model whose
+    /// manifest declares `cloned` in `voice_kinds`, so the default is
+    /// unreachable for a well-formed backend — it exists so a host that has
+    /// not implemented the route says so plainly instead of appearing to
+    /// succeed.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot be reached or refuses the clip.
+    async fn register_voice(
+        &self,
+        request: &crate::tts_models::v1::RegisterVoiceRequest<'_>,
+    ) -> Result<()> {
+        let _ = request;
+        anyhow::bail!("this backend does not accept cloned voices")
+    }
+
+    /// Release a registered cloned voice.
+    ///
+    /// Best-effort housekeeping for a voice the user deleted while the model
+    /// that holds it is still loaded. Default no-op: a backend that keeps
+    /// nothing has nothing to release, and the registration dies with the
+    /// instance either way.
+    ///
+    /// # Errors
+    /// Returns an error if the backend was reachable and refused; a voice the
+    /// backend does not know is not an error.
+    async fn unregister_voice(&self, voice: &str) -> Result<()> {
+        let _ = voice;
+        Ok(())
+    }
+
     /// Run a realtime streaming session, pumping frames between the
     /// consumer and an upstream until the session ends. Default:
     /// unsupported. Only WASM backends serving a `realtime` model override

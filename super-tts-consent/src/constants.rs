@@ -50,6 +50,16 @@ pub const AUDIO_VISUALIZATION_PERMISSIONS: &[&str] =
 pub const DAEMON_STATUS_PERMISSIONS: &[&str] =
     &["Monitor model changes, downloads, and backend installation progress"];
 
+/// Bullets for the `voices` scope.
+///
+/// These are recordings of somebody speaking, so the bullets name the
+/// recordings themselves rather than "manage voices" — the thing the user is
+/// deciding about is audio of a person, not a settings list.
+pub const VOICES_PERMISSIONS: &[&str] = &[
+    "List, play back, and delete your saved voice recordings",
+    "Add new voice recordings to clone a voice from",
+];
+
 /// Bullets for the `secrets` scope shown in the consent popup.
 pub const SECRETS_PERMISSIONS: &[&str] = &[
     "Store, update, and clear this backend's API credentials",

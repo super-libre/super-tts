@@ -249,6 +249,9 @@ pub struct SpeechEngine {
     /// Where `speaking_state`, `speech_progress`, and `frequency_bands` go.
     /// `None` in tests that only inspect the ring.
     events: Option<Arc<crate::daemon::events::EventBus>>,
+    /// Reference clips for cloned voices, resolved when a `voice:<uuid>` id
+    /// reaches the speak path. `None` in tests that never clone.
+    voices: Option<Arc<crate::voices::VoiceLibrary>>,
 }
 
 impl std::fmt::Debug for SpeechEngine {
@@ -288,6 +291,7 @@ impl SpeechEngine {
             current: CurrentSlot::default(),
             test_format: None,
             events: None,
+            voices: None,
         }
     }
 
@@ -302,6 +306,7 @@ impl SpeechEngine {
             current: CurrentSlot::default(),
             test_format: Some(format),
             events: None,
+            voices: None,
         }
     }
 
@@ -313,6 +318,18 @@ impl SpeechEngine {
     #[must_use]
     pub fn with_events(mut self, bus: Arc<crate::daemon::events::EventBus>) -> Self {
         self.events = Some(bus);
+        self
+    }
+
+    /// Resolve cloned voices against `library`.
+    ///
+    /// Separate from construction for the same reason [`Self::with_events`]
+    /// is: the daemon builds the engine and the library independently, and an
+    /// engine without one still speaks — it just cannot resolve a
+    /// `voice:<uuid>` id.
+    #[must_use]
+    pub fn with_voices(mut self, library: Arc<crate::voices::VoiceLibrary>) -> Self {
+        self.voices = Some(library);
         self
     }
 
@@ -384,6 +401,73 @@ impl SpeechEngine {
         id
     }
 
+    /// Make sure a `voice:<uuid>` id has been registered with the loaded
+    /// backend, pushing its reference clip the first time it is used.
+    ///
+    /// A no-op for preset and described ids, and for a voice this instance has
+    /// already been given: registration is per loaded instance, so switching
+    /// models re-registers and unloading forgets.
+    async fn ensure_cloned_voice(
+        &self,
+        loaded: &crate::daemon::types::LoadedModel,
+        voice: &str,
+    ) -> Result<(), SpeakError> {
+        let Some(id) = crate::voices::strip_prefix(voice) else {
+            return Ok(());
+        };
+        if loaded.cloned_voices.lock().contains(voice) {
+            return Ok(());
+        }
+        let Some(library) = self.voices.clone() else {
+            return Err(SpeakError::UnknownVoice(
+                "this daemon has no voice library".into(),
+            ));
+        };
+
+        let record = library
+            .get(id)
+            .map_err(|e| SpeakError::UnknownVoice(format!("voice '{voice}': {e}")))?;
+        // Checked here rather than at synthesis so the user is told which
+        // half is missing, once, instead of watching every request fail.
+        if loaded.definition.clone_needs_transcript && record.transcript.is_none() {
+            return Err(SpeakError::UnknownVoice(format!(
+                "model '{}' clones from a reference transcript, and voice '{}' was stored without one",
+                loaded.definition.name, record.label
+            )));
+        }
+
+        // Decoding and trimming the clip is CPU work on a file; it does not
+        // belong on the runtime thread that is about to pump audio.
+        let clip = {
+            let library = Arc::clone(&library);
+            let id = id.to_string();
+            let budget = loaded.definition.clone_ref_seconds;
+            tokio::task::spawn_blocking(move || library.clip_pcm(&id, budget))
+                .await
+                .map_err(|e| SpeakError::Synthesis(format!("reading the reference clip: {e}")))?
+                .map_err(|e| SpeakError::UnknownVoice(format!("voice '{voice}': {e}")))?
+        };
+
+        info!(
+            "registering cloned voice {voice} ({:.1}s) with {}",
+            clip.seconds, loaded.definition.name
+        );
+        loaded
+            .instance
+            .register_voice(&crate::tts_models::v1::RegisterVoiceRequest {
+                voice,
+                transcript: record.transcript.as_deref(),
+                sample_rate: crate::voices::CLIP_SAMPLE_RATE,
+                channels: crate::voices::CLIP_CHANNELS,
+                format: crate::voices::CLIP_FORMAT,
+                pcm: &clip.pcm,
+            })
+            .await
+            .map_err(|e| SpeakError::Synthesis(format!("registering voice '{voice}': {e}")))?;
+        loaded.cloned_voices.lock().insert(voice.to_string());
+        Ok(())
+    }
+
     /// Begin a streaming utterance.
     ///
     /// Text is fed in with [`SpeakSession::push`] and completed with
@@ -406,6 +490,11 @@ impl SpeechEngine {
             // already playing.
             if let Some(voice) = options.voice {
                 check_voice(&loaded.definition, voice)?;
+                // Under the same read guard as the check, and before the slot
+                // is claimed: a cloned voice the backend has not been given
+                // yet must be pushed before the first chunk, and a model
+                // switch must not land in between.
+                self.ensure_cloned_voice(loaded, voice).await?;
             }
             ChunkPolicy::for_model(loaded.definition.max_input_chars)
         };

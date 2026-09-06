@@ -13,6 +13,7 @@ pub mod self_update;
 pub mod services;
 pub mod text;
 pub mod tts_models;
+pub mod voices;
 
 // Re-export the main run function
 pub use daemon_main::run;

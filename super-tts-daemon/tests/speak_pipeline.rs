@@ -51,6 +51,8 @@ fn definition() -> ModelDefinition {
         processing_interval: Duration::from_millis(0),
         supported_devices: vec![Device::None],
         voice_kinds: vec![VoiceKind::Preset],
+        clone_ref_seconds: None,
+        clone_needs_transcript: false,
         voices: Vec::new(),
         realtime: false,
         provider: None,
@@ -63,10 +65,10 @@ fn loaded_model() -> Option<SharedLoadedModel> {
     let path = mock_component()?;
     let backend = WasmBackend::new(&path, Vec::new(), "mock".to_string(), Vec::new())
         .expect("load mock backend");
-    Some(Arc::new(tokio::sync::RwLock::new(Some(LoadedModel {
-        definition: definition(),
-        instance: Box::new(backend),
-    }))))
+    Some(Arc::new(tokio::sync::RwLock::new(Some(LoadedModel::new(
+        definition(),
+        Box::new(backend),
+    )))))
 }
 
 /// An empty slot, for the not-loaded path.
@@ -296,10 +298,10 @@ fn loaded_model_with_limit(limit: u32) -> Option<SharedLoadedModel> {
         .expect("load mock backend");
     let mut def = definition();
     def.max_input_chars = Some(limit);
-    Some(Arc::new(tokio::sync::RwLock::new(Some(LoadedModel {
-        definition: def,
-        instance: Box::new(backend),
-    }))))
+    Some(Arc::new(tokio::sync::RwLock::new(Some(LoadedModel::new(
+        def,
+        Box::new(backend),
+    )))))
 }
 
 /// Text past the model's limit becomes several synthesis requests, and the

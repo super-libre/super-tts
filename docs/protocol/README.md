@@ -41,7 +41,7 @@ What the protocol gives you:
   your app in a popup, and it is bound to your binary's identity — an app
   cannot widen its own permissions. See [auth.md](./auth.md).
 - **Fine-grained scopes.** Request exactly what you need from `speak`,
-  `status`, `settings`, `secrets`, `playback_events`,
+  `status`, `settings`, `secrets`, `voices`, `playback_events`,
   `audio_visualization`, `daemon_status`. Each is documented under
   [scopes/](./scopes/).
 - **Live event streams.** Subscribe over Server-Sent Events

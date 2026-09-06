@@ -444,7 +444,8 @@ language = "en"
 | `output_sample_rate`      | integer         | no       | Native output rate in Hz, e.g. `24000`. **Advisory** — the authoritative rate is the `x-tts-sample-rate` response header on each synthesis, since a manifest cannot know what a cloud provider will actually return. It lets the settings UI show a rate and the daemon pre-size buffers before the first response. Must be 8000–192000. |
 | `default_voice`          | string          | no       | Voice used when a request omits `voice`. **Required** when `voices` is non-empty, and must name one of them. |
 | `voice_kinds`            | array of string | no       | Which `voice` id shapes this model accepts, from `["preset", "cloned", "described"]`. Default `["preset"]`. Non-empty. The daemon refuses a shape the model did not opt into, so a backend never sees an id it cannot resolve. |
-| `clone_ref_seconds`      | number          | no       | Longest reference audio accepted for a cloned voice, in seconds. **Required** when `voice_kinds` contains `cloned`, forbidden otherwise. Must be positive. |
+| `clone_ref_seconds`      | number          | no       | Longest reference audio accepted for a cloned voice, in seconds. **Required** when `voice_kinds` contains `cloned`, forbidden otherwise. Must be positive. The daemon trims a longer recording to this before registering it, so the value is a budget rather than a filter. |
+| `clone_needs_transcript` | boolean         | no       | Whether registering a cloned voice also requires the reference clip's transcript. Default `false`; forbidden without `cloned` in `voice_kinds`. Set it for in-context cloning, which conditions on the words as well as the audio — the daemon then refuses to register a clip stored without one, instead of letting every synthesis fail. Speaker-embedding cloning leaves it unset. |
 | `voices`                 | array of table  | no       | Preset voices the model provides — see [`[[models.voices]]`](#voices). Empty for models whose voices are entirely cloned or described. |
 | `provider`               | string          | no       | Compatibility field. Not part of model identity and read by nothing in the daemon; it is echoed back verbatim as `provider` in [`POST /v1/load`](./contract.md#post-v1load) so a backend that still validates it keeps loading. |
 
@@ -483,7 +484,7 @@ resolve:
 | Kind        | Id shape       | Meaning                                                                 |
 |-------------|----------------|-------------------------------------------------------------------------|
 | `preset`    | a bare id      | One of the `[[models.voices]]` entries.                                  |
-| `cloned`    | `voice:<uuid>` | A user-cloned voice; the daemon pushes the reference audio on the request. Requires `clone_ref_seconds`. |
+| `cloned`    | `voice:<uuid>` | A user-cloned voice. The daemon pushes the reference audio once, over [`POST /v1/voices`](./contract.md#post-v1voices), the first time the loaded model is asked for it — not on the synthesis request. Requires `clone_ref_seconds`. |
 | `described` | `desc:<text>`  | A free-text voice description, for models that synthesize a voice from one. |
 
 A model that declares only `preset` (the default) never receives a `voice:` or
@@ -604,6 +605,8 @@ output_sample_rate   = 24000
 # reference-audio budget that `cloned` requires.
 voice_kinds       = ["preset", "cloned"]
 clone_ref_seconds = 30.0
+# This model derives a speaker embedding from the audio alone, so it does not
+# set `clone_needs_transcript`; a model that clones in-context would.
 default_voice     = "en_sample"
 
 files = [

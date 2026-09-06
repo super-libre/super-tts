@@ -330,6 +330,43 @@ impl SubprocessBackend {
         result
     }
 
+    /// `POST /v1/voices` — hand the backend one cloned voice's reference
+    /// audio.
+    ///
+    /// # Errors
+    /// Returns an error if the socket dial fails or the backend refuses the
+    /// clip.
+    pub async fn register_voice(
+        &self,
+        req: &crate::tts_models::v1::RegisterVoiceRequest<'_>,
+    ) -> Result<()> {
+        let body = crate::tts_models::v1::build_register_voice_body(req)?;
+        let mut headers = json_headers();
+        headers.push(("x-tts-model".to_string(), self.model_id.clone()));
+        let (status, resp) = self.request("POST", "/v1/voices", &headers, body).await?;
+        if (200..300).contains(&status) {
+            return Ok(());
+        }
+        Err(crate::tts_models::v1::voice_error(status, &resp))
+    }
+
+    /// `DELETE /v1/voices/{voice}` — drop a registered cloned voice.
+    ///
+    /// The id is percent-encoded into the path, so the `voice:` prefix travels
+    /// as one path segment whatever a backend's router does with a raw colon.
+    ///
+    /// # Errors
+    /// Returns an error if the socket dial fails or the backend refuses. A
+    /// `404` is success: the goal is that the backend not hold the voice.
+    pub async fn unregister_voice(&self, voice: &str) -> Result<()> {
+        let path = format!("/v1/voices/{}", urlencoding::encode(voice));
+        let (status, resp) = self.request("DELETE", &path, &[], Vec::new()).await?;
+        if status == 404 || (200..300).contains(&status) {
+            return Ok(());
+        }
+        Err(crate::tts_models::v1::voice_error(status, &resp))
+    }
+
     /// Capture recent unit logs for diagnostics.
     fn unit_logs(&self) -> String {
         std::process::Command::new("journalctl")
@@ -389,6 +426,17 @@ impl Synthesize for SubprocessBackend {
         sink: &mut (dyn crate::tts_models::v1::SynthesisSink + Send),
     ) -> Result<()> {
         Self::synthesize(self, request, sink).await
+    }
+
+    async fn register_voice(
+        &self,
+        request: &crate::tts_models::v1::RegisterVoiceRequest<'_>,
+    ) -> Result<()> {
+        Self::register_voice(self, request).await
+    }
+
+    async fn unregister_voice(&self, voice: &str) -> Result<()> {
+        Self::unregister_voice(self, voice).await
     }
 
     /// Stop the `systemd-run --user` transient unit asynchronously and

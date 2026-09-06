@@ -13,6 +13,7 @@ pub const KNOWN_SCOPES: &[&str] = &[
     "speak",
     "settings",
     "secrets",
+    "voices",
     "status",
     "playback_events",
     "audio_visualization",
@@ -54,6 +55,13 @@ mod tests {
         for s in ["transcribe", "recording_events", "global_transcriptions"] {
             assert!(!is_known_scope(s), "{s} belongs to the STT build");
         }
+    }
+
+    /// Cloned-voice recordings are a person's voice, so they are gated apart
+    /// from the settings surface an app needs to pick a model.
+    #[test]
+    fn voices_is_its_own_scope() {
+        assert!(is_known_scope("voices"));
     }
 
     #[test]

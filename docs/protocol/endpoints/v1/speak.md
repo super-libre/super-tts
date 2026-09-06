@@ -46,7 +46,7 @@ Content-Type: application/json
 | Field          | Type     | Required | Meaning                                                                          |
 |----------------|----------|----------|----------------------------------------------------------------------------------|
 | `text`         | string   | yes      | What to speak. Empty or whitespace-only is `400 invalid_value`.                  |
-| `voice`        | string   | no       | A voice id the active model declares. Omitted → the model's `default_voice`.     |
+| `voice`        | string   | no       | A voice id the active model declares. Omitted → the model's `default_voice`. A cloned voice is named `voice:<uuid>` — see [`/voices`](./voices.md#speaking-in-a-cloned-voice). |
 | `language`     | string   | no       | BCP-47 override. Omitted → the configured language (see [`/language`](./language.md)). |
 | `speed`        | number   | no       | Rate multiplier, roughly 0.5–2.0. Backends that cannot vary rate ignore it.      |
 | `instructions` | string   | no       | Free-text delivery guidance, for models that accept it. Ignored otherwise.       |

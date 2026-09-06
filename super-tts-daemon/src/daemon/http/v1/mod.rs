@@ -7,10 +7,11 @@ pub(crate) mod registry;
 pub(crate) mod settings;
 pub(crate) mod speak;
 pub(crate) mod speak_stream;
+pub(crate) mod voices;
 
 use crate::daemon::http::internal::auth::middleware::{
     require_any_authenticated, require_rate_limit, require_secrets_scope, require_settings_scope,
-    require_speak_scope, require_status_scope,
+    require_speak_scope, require_status_scope, require_voices_scope,
 };
 use crate::daemon::http::state::AppState;
 use axum::Router;
@@ -26,6 +27,9 @@ use axum::routing::{get, post};
 /// - `status` scope: `GET /status`.
 /// - `speak` scope: synthesis and playback control.
 /// - `settings` scope: the configuration + registry surface.
+/// - `voices` scope: the cloned-voice library. Its own scope rather than part
+///   of `settings`: these are recordings of a person, and an app that manages
+///   models has no business reading them.
 ///
 /// All routes are bare (`/ping`, …); the `/v1` prefix is applied via `nest`.
 pub(crate) fn router(state: AppState) -> Router {
@@ -74,6 +78,16 @@ pub(crate) fn router(state: AppState) -> Router {
             require_settings_scope,
         ));
 
+    let voices_scope = voices::routes()
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_rate_limit,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_voices_scope,
+        ));
+
     let secrets_scope = backends::secrets::routes()
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -89,6 +103,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(status_scope)
         .merge(speak_scope)
         .merge(settings_scope)
+        .merge(voices_scope)
         .merge(secrets_scope)
         .route("/auth/request", post(auth::request::auth_request));
 

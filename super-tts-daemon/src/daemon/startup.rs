@@ -83,6 +83,9 @@ impl SuperTTSDaemon {
         // Built here rather than inline so the speech engine can publish onto the
         // same bus `/events` subscribers read from.
         let events = Arc::new(EventBus::new());
+        let voices = Arc::new(crate::voices::VoiceLibrary::new(
+            crate::voices::VoiceLibrary::default_dir(),
+        ));
 
         let daemon = SuperTTSDaemon {
             model: components.model,
@@ -103,8 +106,11 @@ impl SuperTTSDaemon {
             )),
             self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
             speech: Arc::new(
-                crate::daemon::speech::SpeechEngine::new().with_events(Arc::clone(&events)),
+                crate::daemon::speech::SpeechEngine::new()
+                    .with_events(Arc::clone(&events))
+                    .with_voices(Arc::clone(&voices)),
             ),
+            voices,
         };
 
         daemon.post_init().await;
@@ -237,10 +243,7 @@ impl SuperTTSDaemon {
         // current_device tracking) only update when `actual_device` is present.
         let actual_device = normalize_device(&instance.device());
         *daemon.actual_device.write().await = actual_device.clone();
-        *daemon.model.write().await = Some(LoadedModel {
-            definition,
-            instance,
-        });
+        *daemon.model.write().await = Some(LoadedModel::new(definition, instance));
 
         // Announce the active model the same way a user-initiated switch does
         // (`model_switched` + `ready`). The startup load formerly emitted only

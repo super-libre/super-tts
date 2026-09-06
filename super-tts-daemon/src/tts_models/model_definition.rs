@@ -55,6 +55,16 @@ pub struct ModelDefinition {
     /// The daemon refuses a shape the model did not opt into, so a backend
     /// never sees an id it cannot resolve.
     pub voice_kinds: Vec<VoiceKind>,
+    /// Longest reference audio a cloned voice may carry into this model, in
+    /// seconds. `None` unless `voice_kinds` contains `cloned`, which the
+    /// manifest parser guarantees. A stored clip longer than this is trimmed
+    /// to it at registration rather than refused — the library holds one clip
+    /// per voice and models disagree about how much of it they want.
+    pub clone_ref_seconds: Option<f32>,
+    /// Whether registering a cloned voice with this model also requires the
+    /// reference clip's transcript. See
+    /// [`ModelEntry::clone_needs_transcript`](super_tts_registry_types::manifest::ModelEntry::clone_needs_transcript).
+    pub clone_needs_transcript: bool,
     /// Ids of the preset voices the model declares in `[[models.voices]]`.
     ///
     /// Empty when it declares none, which the manifest allows for a model

@@ -28,6 +28,7 @@ need, and the user approves that set.
 | `status`              | Read the daemon's current model + device, and whether it is speaking        | [status](./scopes/status.md)                           |
 | `settings`            | Read / write every configuration value, backend options, and the registry   | [settings](./scopes/settings.md)                       |
 | `secrets`             | Store / check / clear backend credentials — **write-only**; never read back | [secrets](./scopes/secrets.md)                         |
+| `voices`              | Add, list, play back, rename, and delete cloned-voice recordings            | [voices](./scopes/voices.md)                           |
 | `playback_events`     | Subscribe to speaking-state and playback-progress events on `/events`       | [playback_events](./scopes/playback_events.md)         |
 | `audio_visualization` | Subscribe to frequency-band visualization data on `/events`                 | [audio_visualization](./scopes/audio_visualization.md) |
 | `daemon_status`       | Subscribe to model/device/download/registry status on `/events`             | [daemon_status](./scopes/daemon_status.md)             |
@@ -311,6 +312,7 @@ docs — those are the source of truth, not duplicated here:
 - `status` — `GET /status`; see [status.md](./scopes/status.md).
 - `settings` — the configuration + registry surface, including backend options; see [settings.md](./scopes/settings.md).
 - `secrets` — backend credential management: `GET/POST/DELETE /backends/{source}/secrets/*` (write-only; values never returned); see [secrets.md](./scopes/secrets.md).
+- `voices` — the cloned-voice library: `GET/POST/PATCH/DELETE /voices*`; see [voices.md](./scopes/voices.md).
 - `playback_events`, `audio_visualization`, `daemon_status` — topic sets on `GET /events`; see each scope doc and [`/events`](./endpoints/v1/events.md).
 
 Rules to remember:

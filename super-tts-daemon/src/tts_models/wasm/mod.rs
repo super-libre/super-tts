@@ -418,6 +418,52 @@ impl WasmBackend {
         Ok(())
     }
 
+    /// `POST /v1/voices` — hand the backend one cloned voice's reference
+    /// audio.
+    ///
+    /// # Errors
+    /// Returns an error if the component cannot be invoked or refuses the
+    /// clip.
+    pub async fn register_voice(
+        &self,
+        req: &crate::tts_models::v1::RegisterVoiceRequest<'_>,
+    ) -> Result<()> {
+        let body = crate::tts_models::v1::build_register_voice_body(req)?;
+        let (status, resp) = self
+            .invoke("POST", "/v1/voices", &self.voice_headers(), body)
+            .await?;
+        if (200..300).contains(&status) {
+            return Ok(());
+        }
+        Err(crate::tts_models::v1::voice_error(status, &resp))
+    }
+
+    /// `DELETE /v1/voices/{voice}` — drop a registered cloned voice. A `404`
+    /// is success: the goal is that the backend not hold the voice.
+    ///
+    /// # Errors
+    /// Returns an error if the component cannot be invoked or refuses.
+    pub async fn unregister_voice(&self, voice: &str) -> Result<()> {
+        let path = format!("/v1/voices/{}", urlencoding::encode(voice));
+        let (status, resp) = self
+            .invoke("DELETE", &path, &self.voice_headers(), Vec::new())
+            .await?;
+        if status == 404 || (200..300).contains(&status) {
+            return Ok(());
+        }
+        Err(crate::tts_models::v1::voice_error(status, &resp))
+    }
+
+    /// Headers for the voice routes: whatever the backend's configuration
+    /// injects, plus the model the voice is being registered against — a
+    /// backend serving several models cannot assume one embedding shape.
+    fn voice_headers(&self) -> Vec<(String, String)> {
+        let mut headers = self.request_headers.clone();
+        headers.push(("content-type".to_string(), "application/json".to_string()));
+        headers.push(("x-tts-model".to_string(), self.model_id.clone()));
+        headers
+    }
+
     /// `GET /v1/status` — readiness snapshot.
     ///
     /// # Errors
@@ -461,6 +507,17 @@ impl Synthesize for WasmBackend {
         sink: &mut (dyn crate::tts_models::v1::SynthesisSink + Send),
     ) -> Result<()> {
         Self::synthesize(self, request, sink).await
+    }
+
+    async fn register_voice(
+        &self,
+        request: &crate::tts_models::v1::RegisterVoiceRequest<'_>,
+    ) -> Result<()> {
+        Self::register_voice(self, request).await
+    }
+
+    async fn unregister_voice(&self, voice: &str) -> Result<()> {
+        Self::unregister_voice(self, voice).await
     }
 
     /// Run one consumer realtime session: instantiate the component and invoke

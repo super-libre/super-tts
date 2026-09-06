@@ -56,6 +56,74 @@ pub fn build_synthesize_body(req: &SynthesizeRequest<'_>) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&serde_json::Value::Object(map))?)
 }
 
+/// A `POST /v1/voices` request: one cloned voice's reference audio.
+///
+/// Sent once, when a voice is first used with a loaded model — not on every
+/// synthesis. The daemon splits long text into one `/v1/synthesize` call per
+/// sentence, so pushing the clip with the request would re-upload and
+/// re-encode it a dozen times for one paragraph. Registering instead lets a
+/// backend derive its speaker embedding (or reference codes) once and key them
+/// by `voice`.
+///
+/// The audio is base64 in JSON rather than a raw body: it rides the same
+/// content type as every other backend route, so a backend author needs no
+/// second parsing path for a call that happens once per voice.
+#[derive(Debug, Clone)]
+pub struct RegisterVoiceRequest<'a> {
+    /// The full wire id, `voice:<uuid>` — the same string a later
+    /// [`SynthesizeRequest::voice`] carries, so a backend can key its cache by
+    /// what it will be asked for.
+    pub voice: &'a str,
+    /// What the clip says, when the model declared `clone_needs_transcript`.
+    /// Absent otherwise; a backend that clones from a speaker embedding never
+    /// needs it.
+    pub transcript: Option<&'a str>,
+    /// Sample rate of `pcm`.
+    pub sample_rate: u32,
+    /// Channel count of `pcm`. Always 1 today.
+    pub channels: u16,
+    /// Sample format of `pcm`, in the `x-tts-format` vocabulary.
+    pub format: &'a str,
+    /// The reference audio, already downmixed, resampled, and trimmed to the
+    /// model's `clone_ref_seconds`.
+    pub pcm: &'a [u8],
+}
+
+/// Serialize a `/v1/voices` registration body.
+///
+/// # Errors
+/// Returns an error if JSON serialization fails (not expected for this shape).
+pub fn build_register_voice_body(req: &RegisterVoiceRequest<'_>) -> Result<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+
+    let mut map = serde_json::Map::new();
+    map.insert("voice".into(), req.voice.into());
+    if let Some(t) = req.transcript {
+        map.insert("transcript".into(), t.into());
+    }
+    map.insert("sample_rate".into(), req.sample_rate.into());
+    map.insert("channels".into(), req.channels.into());
+    map.insert("format".into(), req.format.into());
+    map.insert("audio".into(), B64.encode(req.pcm).into());
+    Ok(serde_json::to_vec(&serde_json::Value::Object(map))?)
+}
+
+/// Turn a non-2xx voice-registration response into an error, preferring the
+/// backend's own message.
+#[must_use]
+pub fn voice_error(status: u16, body: &[u8]) -> anyhow::Error {
+    let msg = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("detail")
+                .or_else(|| v.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "registering the voice failed".to_string());
+    anyhow!("backend returned {status}: {msg}")
+}
+
 /// Receives a synthesis response as it decodes.
 ///
 /// A sink rather than a returned stream because the wasm transport reads the

@@ -411,6 +411,7 @@ mod tests {
             default_voice: None,
             voice_kinds: vec![VoiceKind::Preset],
             clone_ref_seconds: None,
+            clone_needs_transcript: false,
             voices: vec![],
             provider: None,
         }

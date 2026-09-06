@@ -144,10 +144,8 @@ impl SuperTTSDaemon {
     ) -> String {
         let actual_device = normalize_device(&instance.device());
         *self.actual_device.write().await = actual_device.clone();
-        *self.model.write().await = Some(crate::daemon::types::LoadedModel {
-            definition,
-            instance,
-        });
+        *self.model.write().await =
+            Some(crate::daemon::types::LoadedModel::new(definition, instance));
         actual_device
     }
 

@@ -112,6 +112,15 @@ pub(crate) async fn require_settings_scope(
     require_scope("settings", state, headers, request, next).await
 }
 
+pub(crate) async fn require_voices_scope(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    require_scope("voices", state, headers, request, next).await
+}
+
 pub(crate) async fn require_secrets_scope(
     State(state): State<AppState>,
     headers: HeaderMap,

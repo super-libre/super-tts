@@ -16,6 +16,9 @@
 //! - `POST /v1/speak`                     — synthesize text and play it (`speak` scope)
 //! - `POST /v1/speak/stop`                — stop the current utterance (`speak` scope)
 //! - `GET  /v1/speak/stream`              — WebSocket: stream text in as it is generated
+//! - `GET/POST /v1/voices`                — the cloned-voice library (`voices` scope)
+//! - `GET/PATCH/DELETE /v1/voices/{id}`   — one cloned voice (`voices` scope)
+//! - `GET  /v1/voices/{id}/audio`         — its reference clip, as `audio/wav`
 //! - `GET  /v1/events?topics=…`           — Server-Sent Events stream (per-topic scope)
 //! - `GET  /v1/update`                    — last self-update check result (`settings` scope)
 //! - `POST /v1/update/check`              — force an immediate self-update check (`settings` scope)

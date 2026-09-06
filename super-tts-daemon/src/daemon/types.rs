@@ -52,6 +52,32 @@ fn contains_hip_token(label: &str) -> bool {
 pub struct LoadedModel {
     pub definition: crate::tts_models::ModelDefinition,
     pub instance: Box<dyn crate::tts_models::synthesize::Synthesize>,
+    /// Cloned voices already registered with `instance`, by wire id
+    /// (`voice:<uuid>`).
+    ///
+    /// Registration is per loaded instance — a backend derives a speaker
+    /// embedding from the reference clip and holds it in memory — so the set
+    /// belongs to the same struct as the instance and dies with it. Here
+    /// rather than inside each host so the two transports cannot disagree
+    /// about when a voice counts as registered, and behind a `Mutex` because
+    /// the speak path reaches it while holding only a read guard on the
+    /// model slot.
+    pub cloned_voices: parking_lot::Mutex<std::collections::HashSet<String>>,
+}
+
+impl LoadedModel {
+    /// A freshly loaded model, with nothing registered yet.
+    #[must_use]
+    pub fn new(
+        definition: crate::tts_models::ModelDefinition,
+        instance: Box<dyn crate::tts_models::synthesize::Synthesize>,
+    ) -> Self {
+        Self {
+            definition,
+            instance,
+            cloned_voices: parking_lot::Mutex::default(),
+        }
+    }
 }
 
 /// Shared handle to the currently-loaded model (or `None` while idle/loading).
@@ -90,6 +116,9 @@ pub struct SuperTTSDaemon {
     // The speak path: owns the output device (opened lazily, on first
     // utterance) and the in-flight utterance. See `crate::daemon::speech`.
     pub speech: Arc<crate::daemon::speech::SpeechEngine>,
+    // Reference clips for cloned voices. Shared with `speech`, which resolves
+    // a `voice:<uuid>` id against it. See `crate::voices`.
+    pub voices: Arc<crate::voices::VoiceLibrary>,
 }
 
 /// A daemon wired up with inert defaults: no model, no backends, nothing
@@ -126,6 +155,12 @@ pub(crate) async fn test_daemon() -> SuperTTSDaemon {
         )),
         self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
         // Detached: the test daemon must never claim a real output device.
+        // A path unique to this daemon, never created unless something
+        // writes to it: a shared one would let two tests see each other's
+        // voices, and the real library belongs to the user's data dir.
+        voices: Arc::new(crate::voices::VoiceLibrary::new(
+            std::env::temp_dir().join(format!("super-tts-test-voices-{}", uuid::Uuid::new_v4())),
+        )),
         speech: Arc::new(crate::daemon::speech::SpeechEngine::detached(
             crate::audio::playback::DeviceFormat {
                 sample_rate: 48000,

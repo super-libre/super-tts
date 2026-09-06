@@ -575,6 +575,8 @@ fn an_empty_source_resolves_nothing() {
                 processing_interval: StdDuration::from_secs(1),
                 supported_devices: vec![super_tts_registry_types::manifest::Device::Cpu],
                 voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+                clone_ref_seconds: None,
+                clone_needs_transcript: false,
                 voices: Vec::new(),
                 realtime: false,
                 provider: None,

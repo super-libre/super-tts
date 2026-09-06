@@ -75,6 +75,12 @@ a top-level `status` field of `"success"` or `"error"`.
 | GET    | `/v1/ping`       | Liveness.                                          |
 | POST   | `/v1/synthesize` | Synthesize speech; streams framed audio.           |
 | POST   | `/v1/cancel`     | Cancel an in-flight synthesis.                     |
+| POST   | `/v1/voices`     | Register a cloned voice's reference audio.†        |
+| DELETE | `/v1/voices/{voice}` | Release a registered cloned voice.†            |
+
+† Only for models declaring `cloned` in
+[`voice_kinds`](./config.md#voices). A backend whose models are all preset or
+described never receives these calls and need not implement them.
 
 ### Request headers
 
@@ -338,6 +344,82 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 
 { "status": "success", "message": "Cancelled" }
+```
+
+### `POST /v1/voices`
+
+Register a cloned voice's reference audio, so later syntheses can name it by id
+alone. Only reached for a model declaring `cloned` in
+[`voice_kinds`](./config.md#voices).
+
+**Called once per voice per load, not per synthesis.** Deriving a speaker
+embedding — or encoding reference codes — is real work, and the daemon issues
+one `/v1/synthesize` per sentence, so a per-request push would repeat it for
+every sentence of a paragraph. The backend derives what it needs once, keys it
+by `voice`, and holds it for the life of the loaded model. Nothing has to
+survive a restart: the daemon re-registers after every load.
+
+**Request:**
+
+```jsonc
+{
+  "voice":       "voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4", // required
+  "transcript":  "The quick brown fox…",                       // optional
+  "sample_rate": 24000,
+  "channels":    1,
+  "format":      "s16le",
+  "audio":       "<base64 PCM>"                                // required
+}
+```
+
+| Field         | Type   | Required | Notes                                                                                     |
+|---------------|--------|----------|-------------------------------------------------------------------------------------------|
+| `voice`       | string | yes      | The full wire id, prefix included. **The same string a later `/v1/synthesize` sends as `voice`** — key the cache by it and no mapping is needed. |
+| `transcript`  | string | no       | What the clip says. Present when the voice was stored with one; **guaranteed** present when the model declares `clone_needs_transcript`, because the daemon refuses to register a transcript-less clip against such a model. |
+| `sample_rate` | number | yes      | Always `24000` today; read it rather than assuming.                                        |
+| `channels`    | number | yes      | Always `1` today.                                                                          |
+| `format`      | string | yes      | Sample format in the `x-tts-format` vocabulary; always `s16le` today.                      |
+| `audio`       | string | yes      | Base64 of the raw PCM, already downmixed, resampled, and trimmed to the model's `clone_ref_seconds`. |
+
+The audio is base64 inside JSON rather than a raw body so this route parses
+like every other one on the contract — it happens once per voice, where the
+third of encoding overhead costs nothing and a second parsing path would cost a
+backend author real work.
+
+The clip has already been trimmed to `clone_ref_seconds`; a backend does not
+need to enforce its own bound, though refusing audio it genuinely cannot use is
+always allowed.
+
+**Response (200 or 201):**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "status": "success" }
+```
+
+Any other status is a failure, and its `message` or `detail` reaches the user
+as the reason speaking in that voice did not work.
+
+### `DELETE /v1/voices/{voice}`
+
+Release a registered cloned voice — sent when the user deletes one while the
+model holding it is still loaded. `{voice}` is the percent-encoded wire id, so
+the `voice:` prefix travels as one path segment whatever a router does with a
+raw colon.
+
+`404` is treated as success: the daemon's goal is that the backend not be
+holding the voice, and a backend that never registered it already satisfies
+that.
+
+**Response (200):**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "status": "success" }
 ```
 
 ## Realtime sessions (reserved)

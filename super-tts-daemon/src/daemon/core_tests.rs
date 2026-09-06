@@ -516,6 +516,8 @@ async fn list_backends_catalog_and_option_override() {
             processing_interval: Duration::from_secs(1),
             supported_devices: vec![super_tts_registry_types::manifest::Device::None],
             voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+            clone_ref_seconds: None,
+            clone_needs_transcript: false,
             voices: Vec::new(),
             realtime: false,
             provider: None,
@@ -684,6 +686,8 @@ fn fixture_backend_devices(
             processing_interval: Duration::from_secs(1),
             supported_devices,
             voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+            clone_ref_seconds: None,
+            clone_needs_transcript: false,
             voices: Vec::new(),
             realtime: false,
             provider: None,
@@ -932,15 +936,14 @@ async fn seed_loaded_model(daemon: &SuperTTSDaemon, name: &str, source: &str) {
         processing_interval: Duration::from_secs(1),
         supported_devices: vec![super_tts_registry_types::manifest::Device::None],
         voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+        clone_ref_seconds: None,
+        clone_needs_transcript: false,
         voices: Vec::new(),
         realtime: false,
         provider: None,
     };
     let info = ModelInfoData::new(name, source, true, true, Duration::from_secs(1));
-    *daemon.model.write().await = Some(LoadedModel {
-        definition,
-        instance: Box::new(MockModel { info }),
-    });
+    *daemon.model.write().await = Some(LoadedModel::new(definition, Box::new(MockModel { info })));
 }
 
 /// A backend option write for the *active* backend triggers a reload so the

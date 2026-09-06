@@ -16,6 +16,14 @@ pub(crate) fn usize_to_f32(x: usize) -> f32 {
     x as f32
 }
 
+/// `i32` → `f32` (PCM sample values; exact for the 24-bit and narrower widths
+/// a WAV can carry, and inconsequential at 32-bit where the low bits are below
+/// the noise floor of any recording).
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn i32_to_f32(x: i32) -> f32 {
+    x as f32
+}
+
 /// `u64` → `f64` (e.g. byte totals for progress %).
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn u64_to_f64(x: u64) -> f64 {

@@ -474,6 +474,18 @@ pub struct ModelEntry {
     /// Required when `voice_kinds` contains `cloned`, forbidden otherwise.
     #[serde(default)]
     pub clone_ref_seconds: Option<f32>,
+    /// Whether registering a cloned voice requires the reference clip's
+    /// transcript as well as its audio. Default `false`.
+    ///
+    /// In-context cloning conditions on the reference audio *and* the tokens
+    /// of what it says, so a backend taking that path cannot build a voice
+    /// from audio alone; speaker-embedding cloning needs no transcript and
+    /// leaves this unset. The daemon refuses to register a transcript-less
+    /// clip against a model that declares it, which turns a synthesis failure
+    /// on every later request into one refusal at the point the voice is
+    /// added. Only meaningful alongside `cloned` in `voice_kinds`.
+    #[serde(default)]
+    pub clone_needs_transcript: bool,
     /// Preset voices the model provides. Empty for models whose voices are
     /// entirely cloned or described.
     #[serde(default)]
@@ -798,6 +810,12 @@ pub enum ManifestError {
         /// The model with the bad bound.
         model: String,
     },
+    /// `clone_needs_transcript` was declared without `cloned` in `voice_kinds`.
+    #[error("model `{model}` declares `clone_needs_transcript` without `cloned` in `voice_kinds`")]
+    CloneTranscriptRequiresCloned {
+        /// The model with the stray flag.
+        model: String,
+    },
     /// `max_input_chars` was declared as zero, which would admit no text.
     #[error("model `{model}` declares `max_input_chars = 0`")]
     MaxInputCharsZero {
@@ -969,6 +987,9 @@ impl Manifest {
                 return Err(ManifestError::CloneRefSecondsInvalid { model: name() });
             }
             _ => {}
+        }
+        if model.clone_needs_transcript && !clones {
+            return Err(ManifestError::CloneTranscriptRequiresCloned { model: name() });
         }
 
         if model.max_input_chars == Some(0) {
@@ -1159,6 +1180,34 @@ mod tests {
                 "clone_ref_seconds = {bad} must be rejected, got {err:?}"
             );
         }
+    }
+
+    /// The transcript requirement rides on cloning: on its own it would
+    /// promise a rule the daemon has no cloned voice to apply it to.
+    #[test]
+    fn a_transcript_requirement_needs_cloning() {
+        let err = Manifest::parse(&with_model("clone_needs_transcript = true")).unwrap_err();
+        assert!(matches!(
+            err,
+            ManifestError::CloneTranscriptRequiresCloned { .. }
+        ));
+
+        let m = Manifest::parse(&with_model(
+            r#"
+            voice_kinds = ["cloned"]
+            clone_ref_seconds = 20.0
+            clone_needs_transcript = true
+            "#,
+        ))
+        .expect("cloning may require a transcript");
+        assert!(m.models[0].clone_needs_transcript);
+        assert!(
+            !Manifest::parse(&with_model(""))
+                .expect("defaults parse")
+                .models[0]
+                .clone_needs_transcript,
+            "a model that says nothing needs no transcript"
+        );
     }
 
     #[test]

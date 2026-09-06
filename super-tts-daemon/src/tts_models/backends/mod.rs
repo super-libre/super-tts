@@ -225,6 +225,8 @@ fn load_backend(dir: &Path) -> anyhow::Result<DiscoveredBackend> {
             processing_interval: interval,
             supported_devices,
             voice_kinds: entry.voice_kinds.clone(),
+            clone_ref_seconds: entry.clone_ref_seconds,
+            clone_needs_transcript: entry.clone_needs_transcript,
             voices: entry.voices.iter().map(|v| v.id.clone()).collect(),
             realtime: entry.realtime,
             provider: entry.provider.clone(),
