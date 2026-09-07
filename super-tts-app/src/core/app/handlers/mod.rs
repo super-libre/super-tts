@@ -11,3 +11,4 @@ mod shell;
 mod speech;
 pub(in crate::core::app) mod tasks;
 mod update;
+mod voices;

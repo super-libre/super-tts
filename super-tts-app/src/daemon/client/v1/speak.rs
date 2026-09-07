@@ -29,6 +29,30 @@ pub async fn speak_command(text: String) -> HttpResult<Option<String>> {
     .await
 }
 
+/// `POST /speak` — speak `text` in one specific voice.
+///
+/// The Voices page's preview: a cloned voice is only judgeable by ear, and the
+/// daemon already owns the output device, so hearing one is a normal utterance
+/// with `voice` set rather than anything the app plays itself.
+///
+/// The utterance id is discarded — a preview is not something the page later
+/// correlates or cancels, and the speaking badge is driven by events either
+/// way.
+pub async fn speak_in_voice(text: String, voice: String) -> HttpResult<()> {
+    with_settings_token(move |socket, token| {
+        let (text, voice) = (text.clone(), voice.clone());
+        async move {
+            let options = SpeakOptions {
+                voice: Some(voice),
+                ..SpeakOptions::default()
+            };
+            let resp = http_client::speak(socket, &token, &text, options).await?;
+            require_unit(resp, "speak_in_voice")
+        }
+    })
+    .await
+}
+
 /// `POST /speak/stop` — stop the current utterance and drop queued audio.
 pub async fn stop_speaking_command() -> HttpResult<()> {
     with_settings_token(|socket, token| async move {

@@ -12,13 +12,19 @@ use super_tts_shared::validation::get_http_socket_path;
 
 /// Scope set the settings app requests. One cached token covers
 /// everything the app does: config + registry (`settings`), the
-/// test-speech panel (`speak`), and the `/events` subscription
-/// (`playback_events` for the badge, `audio_visualization` for the
-/// meter, `daemon_status` for model-switch / download / install progress).
+/// test-speech panel (`speak`), the cloned-voice library (`voices`), and
+/// the `/events` subscription (`playback_events` for the badge,
+/// `audio_visualization` for the meter, `daemon_status` for model-switch /
+/// download / install progress).
+///
+/// `voices` is listed separately because the daemon gates it separately —
+/// these are recordings of a person, and the consent popup names them in
+/// those terms rather than folding them into "every daemon setting".
 pub(crate) const SETTINGS_SCOPES: &[&str] = &[
     "settings",
     "secrets",
     "speak",
+    "voices",
     "playback_events",
     "audio_visualization",
     "daemon_status",

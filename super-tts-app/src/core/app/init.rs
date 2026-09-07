@@ -38,6 +38,11 @@ fn build_nav() -> nav_bar::Model {
         .icon(icons::phosphor(icons::PLAY));
 
     nav.insert()
+        .text("Voices")
+        .data::<crate::state::Page>(crate::state::Page::Voices)
+        .icon(icons::phosphor(icons::MICROPHONE));
+
+    nav.insert()
         .text("Connection")
         .data::<crate::state::Page>(crate::state::Page::Connection)
         .icon(icons::phosphor(icons::PLUG));
@@ -147,6 +152,9 @@ impl AppModel {
 
             // Self-update state
             update: crate::state::update::UpdateState::default(),
+
+            // Cloned-voice library; read on connect, not at construction.
+            voices: crate::state::voices::VoicesState::default(),
 
             // No pending scoped action error at startup.
             action_error: None,

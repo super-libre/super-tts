@@ -29,6 +29,7 @@ pub enum Message {
     Language(LanguageMessage),
     Speech(SpeechMessage),
     Update(UpdateMessage),
+    Voices(VoicesMessage),
 
     /// A scoped settings/backend save failed. Stored in `AppModel::action_error`
     /// and rendered as an inline banner on the page named by `scope`, instead of
@@ -38,6 +39,67 @@ pub enum Message {
         scope: crate::state::ErrorScope,
         message: String,
     },
+}
+
+/// The Voices page: the cloned-voice library, and the recording or import that
+/// adds to it.
+#[derive(Debug, Clone)]
+pub enum VoicesMessage {
+    /// Fetch the library and the loaded model's cloning capability.
+    Refresh,
+    VoicesLoaded {
+        voices: Vec<super_tts_shared::models::voices::VoiceInfo>,
+        model: Option<super_tts_shared::models::voices::VoiceModelSupport>,
+    },
+    LoadFailed(String),
+
+    /// Open the microphone and start capturing.
+    StartRecording,
+    /// One tick of the level meter and elapsed readout while recording.
+    RecordingTick,
+    /// Stop capturing and keep what was recorded as the pending sample. Also
+    /// how a capture that ended by itself — the cap, or a device failure —
+    /// is collected, so there is one path out of recording.
+    StopRecording,
+
+    /// Open the file picker.
+    ImportFile,
+    /// A file was chosen and read. `None` when the user cancelled.
+    FileImported(Option<(String, Vec<u8>)>),
+    /// The chosen file could not be read.
+    ImportFailed(String),
+
+    LabelChanged(String),
+    TranscriptChanged(String),
+    /// Throw the pending sample away without saving it.
+    DiscardPending,
+    /// Upload the pending sample as a new voice.
+    Save,
+    Saved(super_tts_shared::models::voices::VoiceInfo),
+    SaveFailed(String),
+
+    /// Start editing one voice's label. Carries the id and the label to seed
+    /// the field with.
+    BeginRename {
+        id: String,
+        label: String,
+    },
+    RenameChanged(String),
+    CommitRename,
+    CancelRename,
+    Renamed(super_tts_shared::models::voices::VoiceInfo),
+    RenameFailed(String),
+
+    Delete(String),
+    Deleted(String),
+    DeleteFailed {
+        id: String,
+        message: String,
+    },
+
+    /// Speak a fixed sentence in this voice, so the user can hear it.
+    Preview(String),
+    PreviewFailed(String),
 }
 
 /// Template / shell-chrome messages.

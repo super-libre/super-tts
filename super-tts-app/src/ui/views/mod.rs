@@ -7,3 +7,4 @@ pub mod language_picker;
 pub mod models;
 pub mod speech;
 pub mod updates;
+pub mod voices;

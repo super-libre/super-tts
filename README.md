@@ -79,6 +79,18 @@ Long text is split on sentence boundaries so playback starts before the whole th
 
 An app generating text can stream it in as it arrives over a WebSocket, and the daemon speaks each sentence as it completes — so an LLM's opening line is heard while it is still writing the third. See [`/speak/stream`](./docs/protocol/endpoints/v1/speak/stream.md).
 
+## 🎙️ Cloned voices
+
+Models that support it can speak in a voice you supply. Open the app's **Voices** page, record a sample or import a WAV, name it, and it joins your library:
+
+```bash
+tts speak --voice voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4 "Read this in my voice."
+```
+
+A voice is stored once and independently of any model — each model takes as much of the recording as it declares it can use, so switching models never means recording again. Samples live in `~/.local/share/super-tts/voices`, readable only by you, and reach nothing but the loaded model. Apps ask for them under a scope of their own: an app allowed to change every setting still cannot read your recordings unless you approve that separately.
+
+See [`/voices`](./docs/protocol/endpoints/v1/voices.md) for the endpoints, and the [`voices` scope](./docs/protocol/scopes/voices.md) for what granting it means.
+
 ## 🤖 Models
 
 Models come from a **library** of backends you install on demand. Open the app, go to **Library → Browse**, install a backend, and it appears in the model selector. Some run **locally** (your text never leaves your machine); others are **online** providers you reach with your own API key, which is stored securely in your system keyring (GNOME Keyring, KWallet, …).

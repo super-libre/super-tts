@@ -7,6 +7,7 @@ pub mod models;
 pub mod models_page;
 pub mod registry;
 pub mod update;
+pub mod voices;
 
 // Re-export commonly used types
 pub use models::{

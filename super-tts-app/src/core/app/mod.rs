@@ -164,6 +164,9 @@ pub struct AppModel {
     // Self-update state (Updates page + header badge + apply flow).
     pub update: crate::state::update::UpdateState,
 
+    // The cloned-voice library, plus the recording or import in progress.
+    pub voices: crate::state::voices::VoicesState,
+
     /// Scope-tagged banner for a failed settings/backend save. Rendered inline
     /// on the owning page instead of hijacking the UI (Tier 1 #13) or being
     /// dropped to the log (Tier 1 #15). `None` when there is no pending error.
@@ -286,7 +289,13 @@ impl cosmic::Application for AppModel {
         // readout (and the staged-load fit warning) live.
         const GPU_POLL_INTERVAL_SECS: u64 = 3;
 
-        Subscription::batch(vec![
+        // The recording meter's refresh rate. Fast enough that a voice reads
+        // as live movement rather than a stepping bar, slow enough to cost
+        // nothing — and present only while the microphone is open, so an idle
+        // app is not waking ten times a second to redraw nothing.
+        const RECORDING_TICK_MS: u64 = 100;
+
+        let mut subscriptions = vec![
             // HTTP /events SSE subscription. Covers the playback /
             // audio-meter topics and the model/device/download status
             // topics — the settings app's token holds every scope these
@@ -302,7 +311,14 @@ impl cosmic::Application for AppModel {
             // handler, so it's a no-op while disconnected).
             cosmic::iced::time::every(std::time::Duration::from_secs(GPU_POLL_INTERVAL_SECS))
                 .map(|_| Message::ModelsPage(ModelsPageMessage::RefreshGpuInfo)),
-        ])
+        ];
+        if self.voices.is_recording() {
+            subscriptions.push(
+                cosmic::iced::time::every(std::time::Duration::from_millis(RECORDING_TICK_MS))
+                    .map(|_| Message::Voices(crate::ui::messages::VoicesMessage::RecordingTick)),
+            );
+        }
+        Subscription::batch(subscriptions)
     }
 
     /// Handles messages emitted by the application and its widgets.
@@ -338,6 +354,14 @@ impl cosmic::Application for AppModel {
             // client may have changed the beta-opt-in setting.
             Some(crate::state::Page::Updates) => Task::batch([
                 handlers::tasks::refresh_update_status(),
+                self.update_title(),
+            ]),
+            // The library and the loaded model's cloning capability are both
+            // read here rather than held from connect-time: a model switch
+            // since then changes what the page says it can do, and another
+            // client may have added or removed a voice.
+            Some(crate::state::Page::Voices) => Task::batch([
+                self.dispatch(Message::Voices(crate::ui::messages::VoicesMessage::Refresh)),
                 self.update_title(),
             ]),
             _ => self.update_title(),

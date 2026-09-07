@@ -172,6 +172,7 @@ impl AppModel {
             ),
             Page::Models => views::models::page(self),
             Page::Library => views::models::library_page(self),
+            Page::Voices => views::voices::page(self),
             Page::Updates => views::updates::page(&self.update),
             Page::Connection => views::connection::page(
                 &self.daemon_status,

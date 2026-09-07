@@ -25,6 +25,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
 use std::sync::Arc;
+use super_tts_shared::models::voices::{
+    VoiceDeletedResponse, VoiceInfo, VoiceListResponse, VoiceModelSupport, VoiceResponse,
+};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -74,30 +77,27 @@ async fn list(State(s): State<AppState>) -> Response {
         Ok(voices) => voices,
         Err(e) => return error(&e),
     };
-    let voices: Vec<serde_json::Value> = voices.iter().map(describe).collect();
-    ok(&serde_json::json!({
-        "status": "success",
-        "voices": voices,
-        "model": active_model_cloning(&s).await,
-    }))
+    let body = VoiceListResponse {
+        status: "success".into(),
+        voices: voices.iter().map(describe).collect(),
+        model: active_model_support(&s).await,
+    };
+    ok(&encode(&body))
 }
 
-/// What the loaded model can do with a cloned voice. `null` when nothing is
+/// What the loaded model can do with a cloned voice. `None` when nothing is
 /// loaded — the library is still readable, it just cannot be spoken with yet.
-async fn active_model_cloning(s: &AppState) -> serde_json::Value {
+async fn active_model_support(s: &AppState) -> Option<VoiceModelSupport> {
     use super_tts_registry_types::manifest::VoiceKind;
 
     let guard = s.daemon.model.read().await;
-    let Some(loaded) = guard.as_ref() else {
-        return serde_json::Value::Null;
-    };
-    let def = &loaded.definition;
-    serde_json::json!({
-        "name":              def.name,
-        "source":            def.source,
-        "clones":            def.voice_kinds.contains(&VoiceKind::Cloned),
-        "clone_ref_seconds": def.clone_ref_seconds,
-        "needs_transcript":  def.clone_needs_transcript,
+    let def = &guard.as_ref()?.definition;
+    Some(VoiceModelSupport {
+        name: def.name.clone(),
+        source: def.source.clone(),
+        clones: def.voice_kinds.contains(&VoiceKind::Cloned),
+        clone_ref_seconds: def.clone_ref_seconds,
+        needs_transcript: def.clone_needs_transcript,
     })
 }
 
@@ -133,7 +133,7 @@ async fn create(
         Ok(Ok(voice)) => (
             StatusCode::CREATED,
             [("content-type", "application/json")],
-            serde_json::json!({ "status": "success", "voice": describe(&voice) }).to_string(),
+            encode(&one(&voice)).to_string(),
         )
             .into_response(),
         Ok(Err(e)) => error(&e),
@@ -148,7 +148,7 @@ async fn create(
 /// `GET /voices/{id}` — one voice's metadata.
 async fn get_one(State(s): State<AppState>, Path(id): Path<String>) -> Response {
     match s.daemon.voices.get(&id) {
-        Ok(voice) => ok(&serde_json::json!({ "status": "success", "voice": describe(&voice) })),
+        Ok(voice) => ok(&encode(&one(&voice))),
         Err(e) => error(&e),
     }
 }
@@ -164,7 +164,7 @@ async fn rename(
     axum::Json(body): axum::Json<RenameVoice>,
 ) -> Response {
     match s.daemon.voices.rename(&id, &body.label) {
-        Ok(voice) => ok(&serde_json::json!({ "status": "success", "voice": describe(&voice) })),
+        Ok(voice) => ok(&encode(&one(&voice))),
         Err(e) => error(&e),
     }
 }
@@ -179,7 +179,10 @@ async fn remove(State(s): State<AppState>, Path(id): Path<String>) -> Response {
         return error(&e);
     }
     release_from_loaded_model(&s, &voice.voice_id()).await;
-    ok(&serde_json::json!({ "status": "success", "deleted": voice.voice_id() }))
+    ok(&encode(&VoiceDeletedResponse {
+        status: "success".into(),
+        deleted: voice.voice_id(),
+    }))
 }
 
 /// `GET /voices/{id}/audio` — the stored clip, so a client can play it back.
@@ -221,14 +224,42 @@ async fn release_from_loaded_model(s: &AppState, voice_id: &str) {
     }
 }
 
-/// One voice on the wire: its stored metadata plus the id clients actually
-/// pass to `/speak`, so nothing has to know how to build it.
-fn describe(voice: &crate::voices::Voice) -> serde_json::Value {
-    let mut value = serde_json::to_value(voice).unwrap_or_else(|_| serde_json::json!({}));
-    if let Some(map) = value.as_object_mut() {
-        map.insert("voice_id".into(), voice.voice_id().into());
+/// One stored voice as the wire type: its metadata plus the id clients pass to
+/// `/speak`, so nothing downstream has to know how to build it.
+///
+/// The library's own struct is the on-disk format and is converted rather than
+/// serialized directly — the file may gain fields the protocol does not want,
+/// and the protocol may gain fields the file has no business storing.
+fn describe(voice: &crate::voices::Voice) -> VoiceInfo {
+    VoiceInfo {
+        id: voice.id.clone(),
+        voice_id: voice.voice_id(),
+        label: voice.label.clone(),
+        transcript: voice.transcript.clone(),
+        created_at: voice.created_at.clone(),
+        duration_seconds: voice.duration_seconds,
+        sample_rate: voice.sample_rate,
+        channels: voice.channels,
     }
-    value
+}
+
+/// The single-voice response body.
+fn one(voice: &crate::voices::Voice) -> VoiceResponse {
+    VoiceResponse {
+        status: "success".into(),
+        voice: describe(voice),
+    }
+}
+
+/// Serialize a response body for the house `ok` envelope helper, which takes a
+/// `Value`. A failure here is not reachable for these shapes — every field is
+/// a string, number, bool, or `Vec` of the same — so it degrades to an empty
+/// object rather than propagating an error no caller could act on.
+fn encode<T: serde::Serialize>(body: &T) -> serde_json::Value {
+    serde_json::to_value(body).unwrap_or_else(|e| {
+        log::error!("serializing a voices response failed: {e}");
+        serde_json::json!({ "status": "error", "error_code": "internal" })
+    })
 }
 
 /// Map a library error onto the house error envelope.

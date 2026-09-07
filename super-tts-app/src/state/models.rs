@@ -43,6 +43,9 @@ pub enum Page {
     /// page's Installed / Browse tabs). No activation here — that lives on the
     /// Models page.
     Library,
+    /// The cloned-voice library: record or import a reference clip, and manage
+    /// the voices built from them.
+    Voices,
     /// Self-update: current/latest version, automatic-check and beta-opt-in
     /// settings, and the apply flow.
     Updates,
@@ -85,6 +88,8 @@ pub enum ErrorScope {
     ConfigureBackend,
     /// The Speech page: notification-method saves and the test utterance.
     Speech,
+    /// The Voices page: recording, upload, rename, and delete failures.
+    Voices,
 }
 
 /// A scope-tagged, transient action failure rendered as an inline banner on the

@@ -26,6 +26,7 @@ impl AppModel {
             Message::Language(m) => self.handle_language_messages(m),
             Message::Speech(m) => self.handle_speech_messages(m),
             Message::Update(m) => self.handle_update_messages(m),
+            Message::Voices(m) => self.handle_voices_messages(m),
 
             // Scoped action failure: park it in the per-page banner slot.
             Message::SettingActionFailed { scope, message } => {

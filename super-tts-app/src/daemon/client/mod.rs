@@ -10,7 +10,7 @@ pub(crate) mod internal;
 pub(crate) mod v1;
 
 pub use v1::health::{ping_daemon, test_daemon_connection};
-pub use v1::speak::{speak_command, stop_speaking_command};
+pub use v1::speak::{speak_command, speak_in_voice, stop_speaking_command};
 
 pub use v1::settings::active_device::{get_current_device, set_device};
 pub use v1::settings::active_model::{
@@ -35,3 +35,5 @@ pub use v1::settings::update_check_enabled::{get_update_check_enabled, set_updat
 pub use v1::settings::volume::{get_volume, set_volume};
 
 pub use v1::update::{check_update_now, get_update_status};
+
+pub use v1::voices::{create_voice, delete_voice, list_voices, rename_voice};

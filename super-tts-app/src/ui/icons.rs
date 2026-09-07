@@ -24,6 +24,7 @@ pub const PLAY: &[u8] = include_bytes!("../../resources/icons/phosphor/play.svg"
 pub const STOP: &[u8] = include_bytes!("../../resources/icons/phosphor/stop.svg");
 pub const GIT_BRANCH: &[u8] = include_bytes!("../../resources/icons/phosphor/git-branch.svg");
 pub const BOOKS: &[u8] = include_bytes!("../../resources/icons/phosphor/books.svg");
+pub const MICROPHONE: &[u8] = include_bytes!("../../resources/icons/phosphor/microphone.svg");
 
 /// The Super TTS app logo, full-color artwork. Not a Phosphor glyph, so it
 /// lives at the app resources root rather than the phosphor set; shown beside

@@ -111,7 +111,21 @@ impl AppModel {
                 self.model_operation_state = ModelOperationState::Ready;
                 // Fetch the per-model language block now that a model is loaded.
                 // Wire point 1: model loaded (ModelChanged).
-                self.load_model_language(source, model)
+                let language = self.load_model_language(source, model);
+                // The Voices page states what the loaded model can do with a
+                // cloned voice, so a switch that lands while it is open has to
+                // move it. Only while it is open — nothing else reads this,
+                // and every other entry to the page refetches anyway.
+                if matches!(
+                    self.nav.data::<crate::state::Page>(self.nav.active()),
+                    Some(crate::state::Page::Voices)
+                ) {
+                    return Task::batch([
+                        language,
+                        self.dispatch(Message::Voices(crate::ui::messages::VoicesMessage::Refresh)),
+                    ]);
+                }
+                language
             }
 
             ModelMessage::ModelError(err) => {

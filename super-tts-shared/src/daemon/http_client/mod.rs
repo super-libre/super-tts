@@ -29,8 +29,8 @@ pub use v1::speak::{SpeakOptions, speak, speak_stop};
 /// [`HttpError::InvalidSession`].
 pub mod transport {
     pub use super::internal::transport::{
-        delete_json, get_json, post_json, settings_delete, settings_get, settings_post,
-        settings_post_no_timeout,
+        delete_json, get_json, patch_json, post_bytes, post_json, settings_delete, settings_get,
+        settings_post, settings_post_no_timeout,
     };
 
     /// The single non-2xx-to-[`HttpError`] mapping, exported so the daemon's
