@@ -8,7 +8,8 @@ use crate::daemon::client::{
 use crate::state::ErrorScope;
 use crate::ui::messages::{BackendMessage, Message};
 use cosmic::prelude::*;
-use super_tts_shared::daemon::http_client::HttpError;
+use std::future::Future;
+use super_tts_shared::daemon::http_client::{HttpError, HttpResult};
 
 /// Build a Configure-sheet-scoped banner message for a failed secret/option save.
 fn configure_backend_error(e: &HttpError) -> Message {
@@ -16,6 +17,24 @@ fn configure_backend_error(e: &HttpError) -> Message {
         scope: ErrorScope::ConfigureBackend,
         message: e.to_string(),
     }
+}
+
+/// Run an option write and settle the sheet either way: reload the catalog so
+/// the row re-renders from what the daemon actually stored, or surface the
+/// failure in the sheet's banner.
+///
+/// Every option write ends here — Save, Reset, and the dropdown's pick — so
+/// that none of them can leave the sheet showing a value the daemon rejected.
+/// The daemon refuses a choice outside an option's declared list with a 400,
+/// and without the reload the dropdown would sit on the picked row as though
+/// the write had landed.
+fn option_write(
+    write: impl Future<Output = HttpResult<()>> + Send + 'static,
+) -> Task<cosmic::Action<Message>> {
+    Task::perform(write, |result| match result {
+        Ok(()) => cosmic::Action::App(Message::Backend(BackendMessage::BackendsReload)),
+        Err(e) => cosmic::Action::App(configure_backend_error(&e)),
+    })
 }
 
 impl AppModel {
@@ -27,6 +46,7 @@ impl AppModel {
     ) -> Task<cosmic::Action<Message>> {
         match message {
             BackendMessage::BackendsLoaded(_)
+            | BackendMessage::StageBackendsLoaded(_)
             | BackendMessage::BackendsError(_)
             | BackendMessage::BackendsReload
             | BackendMessage::BackendSecretsConfigured { .. } => {
@@ -39,6 +59,7 @@ impl AppModel {
             | BackendMessage::BackendSecretRemoved { .. }
             | BackendMessage::BackendOptionInputChanged { .. }
             | BackendMessage::BackendOptionSaved { .. }
+            | BackendMessage::BackendOptionChosen { .. }
             | BackendMessage::BackendOptionReset { .. } => self.handle_backend_config(message),
         }
     }
@@ -93,6 +114,15 @@ impl AppModel {
                 Task::batch(tasks)
             }
 
+            BackendMessage::StageBackendsLoaded(backends) => {
+                // Only the sheet that fills the stage draws from this. The
+                // Library's own cards keep using the full catalog, because
+                // managing a backend has nothing to do with whether this stage
+                // can run it.
+                self.stage_backends = backends;
+                Task::none()
+            }
+
             BackendMessage::BackendSecretsConfigured { source, items } => {
                 for (name, configured) in items {
                     self.backend_secret_configured
@@ -110,6 +140,22 @@ impl AppModel {
 
             _ => Task::none(),
         }
+    }
+
+    /// The `default` the named option declares, as the catalog reported it.
+    ///
+    /// Only the dropdown needs this. The text field decides between setting and
+    /// clearing by whether the box is empty, but a dropdown has no empty row —
+    /// every pick is a value — so it needs the default to recognise the one pick
+    /// that means "no override". Storing a copy of the default instead would
+    /// pin the option to today's value and silently keep it there when a backend
+    /// update changes what its default is.
+    fn option_default(&self, source: &str, name: &str) -> Option<String> {
+        self.backends
+            .iter()
+            .find(|b| b.source == source)
+            .and_then(|b| b.options.iter().find(|o| o.name == name))
+            .and_then(|o| o.default.clone())
     }
 
     /// Handle per-backend secret and option configuration messages.
@@ -191,22 +237,28 @@ impl AppModel {
                     .cloned()
                     .unwrap_or_default();
                 if value.is_empty() {
-                    Task::perform(clear_backend_option(source, name), |result| match result {
-                        Ok(()) => {
-                            cosmic::Action::App(Message::Backend(BackendMessage::BackendsReload))
-                        }
-                        Err(e) => cosmic::Action::App(configure_backend_error(&e)),
-                    })
+                    option_write(clear_backend_option(source, name))
                 } else {
-                    Task::perform(
-                        set_backend_option(source, name, value),
-                        |result| match result {
-                            Ok(()) => cosmic::Action::App(Message::Backend(
-                                BackendMessage::BackendsReload,
-                            )),
-                            Err(e) => cosmic::Action::App(configure_backend_error(&e)),
-                        },
-                    )
+                    option_write(set_backend_option(source, name, value))
+                }
+            }
+
+            // A dropdown pick is the save — there is no Save button beside it —
+            // so this writes straight through. Picking the value the backend
+            // already declares as its default clears the override rather than
+            // storing a copy of it, which is the dropdown's equivalent of
+            // emptying the text field: it puts the option back under the
+            // backend's control instead of freezing it at today's default.
+            BackendMessage::BackendOptionChosen {
+                source,
+                name,
+                value,
+            } => {
+                self.action_error = None;
+                if self.option_default(&source, &name).as_ref() == Some(&value) {
+                    option_write(clear_backend_option(source, name))
+                } else {
+                    option_write(set_backend_option(source, name, value))
                 }
             }
 
@@ -214,10 +266,7 @@ impl AppModel {
             // option reverts to its daemon default.
             BackendMessage::BackendOptionReset { source, name } => {
                 self.action_error = None;
-                Task::perform(clear_backend_option(source, name), |result| match result {
-                    Ok(()) => cosmic::Action::App(Message::Backend(BackendMessage::BackendsReload)),
-                    Err(e) => cosmic::Action::App(configure_backend_error(&e)),
-                })
+                option_write(clear_backend_option(source, name))
             }
 
             _ => Task::none(),

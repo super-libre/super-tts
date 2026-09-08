@@ -15,8 +15,7 @@ use crate::ui::messages::{
 
 use super::chips::{
     CloudEgress, backend_has_user_url, backend_is_online, backend_supports_cpu,
-    backend_supports_gpu, capability_chips, count_chip, model_is_online, offered_devices,
-    requirement_warning,
+    backend_supports_gpu, capability_chips, count_chip, model_is_online, requirement_warning,
 };
 use super::fmt::{no_viable_device_warning, vram_warning};
 use super::status::unmet_requirements;
@@ -273,8 +272,13 @@ pub(super) fn active_backend_card<'a>(
 
 /// Summary shown in the active-backend card when a model is currently
 /// loaded for this backend. Reads as e.g. "Active: kokoro-82m · cuda" with
-/// an Unload button on the right; the Unload click drops the model but
-/// keeps the active backend selected.
+/// an Unload button on the right; the Unload click frees the device memory but
+/// keeps both the backend and the model it was pointed at.
+///
+/// The device named here is the accelerator the load actually resolved to, not
+/// the `cpu`/`gpu` preference that asked for it — a `gpu` choice that fell back
+/// to the CPU would otherwise have this line tell the user they are on a GPU
+/// they are not on.
 pub(super) fn loaded_model_summary<'a>(
     backend: &'a BackendInfo,
     app: &'a AppModel,
@@ -295,6 +299,20 @@ pub(super) fn loaded_model_summary<'a>(
     if let Some(lang_button) = language_button(backend, &app.current_model, app) {
         summary = summary.push(lang_button);
     }
+    // Reload sits before Unload because it is the gentler of the two: it brings
+    // the same model back up on the same device, for the case the daemon cannot
+    // see — a secret edited by another tool, a model file replaced underneath
+    // it. Without it the only way to pick that change up is Unload, re-pick,
+    // Load. Disabled while a switch is in flight, so a second click cannot race
+    // the first.
+    summary = summary.push(
+        button::standard("Reload")
+            .leading_icon(icons::phosphor_handle(icons::ARROWS_CLOCKWISE))
+            .on_press_maybe(
+                app.is_model_ready()
+                    .then_some(Message::ModelsPage(ModelsPageMessage::ReloadActiveModel)),
+            ),
+    );
     // A leading stop glyph fronts the Unload label, mirroring the Load button's
     // play icon so load/unload read as a play/stop pair.
     summary
@@ -342,12 +360,22 @@ pub(super) fn staged_vram_shortfall(backend: &BackendInfo, app: &AppModel) -> Op
 }
 
 /// Model + device pickers and the Load button, shown in the active-backend
-/// card when no model is loaded for this backend. Picking a model stages it
-/// (no daemon call); picking a device stages it too; the Load button
-/// commits both via `set_device` then `set_model`. The device dropdown lists
-/// [`offered_devices`] — the model's declared devices narrowed by what the
-/// installed build can actually do — and is omitted whenever that list is
-/// empty: an online model, or a model with no viable device on this install.
+/// card when no model is loaded for this backend. Picking a model stages it and
+/// asks the daemon what that model's device and language are; picking a device
+/// stages it; the Load button writes the device against the model and then
+/// points the stage at it.
+///
+/// The device dropdown lists what the daemon offers *this model* — its declared
+/// devices narrowed to the accelerators the installed asset shipped and to what
+/// this host actually has — and that answer arrives a round-trip after the pick.
+/// Until it does the stage's own list stands in, which is the union over the
+/// backend's models and so never hides a device the model has; it can offer one
+/// the model lacks, which is why Load stays disabled until the narrow answer
+/// confirms the staged device.
+///
+/// An empty narrow list is the model's real answer and hides the dropdown: an
+/// online model, or one with no viable device on this install. The two are not
+/// the same state, and `model_is_online` is what tells them apart.
 pub(super) fn staged_model_picker<'a>(
     backend: &'a BackendInfo,
     app: &'a AppModel,
@@ -373,15 +401,22 @@ pub(super) fn staged_model_picker<'a>(
         .align_y(Alignment::Center)
         .width(Length::Fill);
 
-    // Device dropdown — only when a model is staged and this install can
-    // offer at least one device for it. `offered_devices` is already the
-    // model's `supported_devices` intersected with what the installed build
-    // can do, so an online model (offering nothing) and a GPU the install
-    // cannot use both fall out of the same check.
-    let staged_devices: Option<Vec<String>> = staged_model.map(|m| offered_devices(backend, m));
-    let show_device_picker = staged_devices.as_ref().is_some_and(|d| !d.is_empty());
-    if show_device_picker {
-        let devices: Vec<String> = staged_devices.clone().unwrap_or_default();
+    // The daemon's per-model device answer, once it has arrived for this exact
+    // pair. `None` is a distinct state from an empty list — it is the window
+    // between staging a model and the answer landing — and collapsing the two
+    // would flash "this model can't be loaded here" on every single pick.
+    let staged_online = staged_model.is_some_and(|m| model_is_online(backend, m));
+    let offered: Option<&[String]> =
+        staged_model.and_then(|m| app.model_devices(&backend.source, m));
+
+    // Device dropdown — the model's own list once known, the stage's broader
+    // one until then so the control doesn't appear a beat after the model
+    // dropdown it sits beside. An online model needs no device at all and gets
+    // no dropdown even while the answer is outstanding, since the catalog
+    // already settles that question.
+    let listed: &[String] = offered.unwrap_or(app.stage_devices.as_slice());
+    if !staged_online && !listed.is_empty() {
+        let devices: Vec<String> = listed.to_vec();
         let device_index = app
             .models_page
             .staged_device
@@ -406,19 +441,21 @@ pub(super) fn staged_model_picker<'a>(
         picker_row = picker_row.push(lang_button);
     }
 
-    // Load button — enabled only when a model is staged AND (the staged
-    // device is set OR the staged model is the online sentinel, which needs
-    // no device at all). `offered_devices` reports empty for that case too,
-    // but also for a local model this install cannot run on any device (e.g.
-    // a GPU-only model with only a CPU asset installed) — the same defect
-    // class as the reported bug, just with no accelerator to fall back to.
-    // `model_is_online` is what tells the two apart; conflating them would
-    // enable Load with nothing to stage it onto, and `set_model` would then
-    // be sent straight onto whatever device happens to already be current.
-    let staged_online = staged_model.is_some_and(|m| model_is_online(backend, m));
-    let no_viable_device = !staged_online && staged_devices.as_ref().is_some_and(Vec::is_empty);
-    let staged_ok = app.models_page.staged_model.is_some()
-        && (app.models_page.staged_device.is_some() || staged_online);
+    // Load button — enabled only when a model is staged AND (the online
+    // sentinel, which needs no device at all, OR the staged device is one the
+    // daemon has confirmed for *this* model). Waiting for that confirmation is
+    // what makes the broader stage-wide fallback above safe to offer: a device
+    // picked from it that this model cannot use never reaches the daemon.
+    //
+    // The daemon's list is empty for two different reasons — an online model,
+    // and a local model this install can run on no device (a GPU-only model
+    // with only a CPU asset, say). `model_is_online` is what tells them apart;
+    // conflating them would enable Load with nothing to stage it onto.
+    let no_viable_device = !staged_online && offered.is_some_and(<[String]>::is_empty);
+    let staged_device_confirmed = offered
+        .zip(app.models_page.staged_device.as_deref())
+        .is_some_and(|(devices, staged)| devices.iter().any(|d| d == staged));
+    let staged_ok = staged_model.is_some() && (staged_online || staged_device_confirmed);
     let load_button = button::suggested("Load model")
         .leading_icon(icons::phosphor_handle(icons::PLAY))
         .on_press_maybe(

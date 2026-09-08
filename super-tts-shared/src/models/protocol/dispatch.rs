@@ -26,6 +26,12 @@ impl TryFrom<DaemonRequest> for Command {
             "list_models" => Ok(Command::ListModels),
             "set_device" => cmd_set_device(&request),
             "get_device" => Ok(Command::GetDevice),
+            "set_model_device" => cmd_set_model_device(&request),
+            "get_model_device" => cmd_get_model_device(&request),
+            "list_model_devices" => Ok(Command::ListModelDevices {
+                model: model_device_target(&request, "list_model_devices")?,
+            }),
+            "list_active_backend_devices" => Ok(Command::ListActiveBackendDevices),
             "get_config" => Ok(Command::GetConfig),
             "cancel_download" => Ok(Command::CancelDownload),
             "get_download_status" => Ok(Command::GetDownloadStatus),
@@ -41,9 +47,11 @@ impl TryFrom<DaemonRequest> for Command {
             "set_primary_language" => cmd_set_primary_language(&request),
             "get_primary_language" => Ok(Command::GetPrimaryLanguage),
             "clear_primary_language" => Ok(Command::ClearPrimaryLanguage),
+            "list_primary_languages" => Ok(Command::ListPrimaryLanguages),
             "set_model_language" => cmd_set_model_language(&request),
             "get_model_language" => cmd_get_model_language(&request),
             "clear_model_language" => cmd_clear_model_language(&request),
+            "list_model_languages" => cmd_list_model_languages(&request),
             "set_allow_online_models" => cmd_set_allow_online_models(&request),
             "get_allow_online_models" => Ok(Command::GetAllowOnlineModels),
             "set_custom_models_dir" => Ok(cmd_set_custom_models_dir(&request)),
@@ -55,6 +63,7 @@ impl TryFrom<DaemonRequest> for Command {
             "set_active_backend" => cmd_set_active_backend(&request),
             "get_active_backend" => Ok(Command::GetActiveBackend),
             "clear_active_backend" => Ok(Command::ClearActiveBackend),
+            "get_pipeline" => Ok(Command::GetPipeline),
             "get_gpu_info" => Ok(Command::GetGpuInfo),
             _ => Err(format!("Unknown command: {}", request.command)),
         }
@@ -155,6 +164,63 @@ fn cmd_set_device(request: &DaemonRequest) -> Result<Command, String> {
     }
 
     Ok(Command::SetDevice { device })
+}
+
+/// The `model` a per-model device command addresses. Required and non-empty:
+/// a device belongs to a model, and there is deliberately no "the current one"
+/// fallback because the command must work for a model that is not loaded —
+/// staging a device before the first load is the main thing these verbs are
+/// for. Unlike the per-model *language* commands, `source` is not carried:
+/// the model is resolved against the active backend, which is the only backend
+/// whose model could be the loaded one.
+fn model_device_target(request: &DaemonRequest, command: &str) -> Result<String, String> {
+    let model = request
+        .data
+        .as_ref()
+        .and_then(|d| d.get("model"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if model.is_empty() {
+        return Err(format!("Missing model for {command} command"));
+    }
+    if let Err(e) =
+        validation::validate_string(&model, "model", validation::limits::MAX_NAME_LENGTH)
+    {
+        return Err(e.to_string());
+    }
+    Ok(model)
+}
+
+/// The `device` a per-model device setter carries. Only presence and length
+/// are checked here; the daemon validates the value itself (`cpu`/`gpu` and
+/// the deprecated spellings) so it can answer with the documented
+/// `invalid_device` code rather than a bare parse error.
+fn model_device_value(request: &DaemonRequest, command: &str) -> Result<String, String> {
+    let device = request
+        .data
+        .as_ref()
+        .and_then(|d| d.get("device"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("Missing device for {command} command"))?
+        .to_string();
+    if let Err(e) =
+        validation::validate_string(&device, "device", validation::limits::MAX_NAME_LENGTH)
+    {
+        return Err(e.to_string());
+    }
+    Ok(device)
+}
+
+fn cmd_set_model_device(request: &DaemonRequest) -> Result<Command, String> {
+    let model = model_device_target(request, "set_model_device")?;
+    let device = model_device_value(request, "set_model_device")?;
+    Ok(Command::SetModelDevice { model, device })
+}
+
+fn cmd_get_model_device(request: &DaemonRequest) -> Result<Command, String> {
+    let model = model_device_target(request, "get_model_device")?;
+    Ok(Command::GetModelDevice { model })
 }
 
 fn cmd_set_notification_method(request: &DaemonRequest) -> Result<Command, String> {
@@ -311,4 +377,15 @@ fn cmd_get_model_language(request: &DaemonRequest) -> Result<Command, String> {
 fn cmd_clear_model_language(request: &DaemonRequest) -> Result<Command, String> {
     let (source, model) = model_language_target(request, "clear_model_language")?;
     Ok(Command::ClearModelLanguage { source, model })
+}
+
+/// The listing verb carries the same `(source, model)` pair its three siblings
+/// do, extracted by the same helper. Sharing it is what stops the read verb
+/// from accepting a request the write verbs reject (or the reverse): a client
+/// that can fill a picker for a model must be able to write to that same
+/// model, and a divergence here would be visible only as a picker whose
+/// choices all fail on submit.
+fn cmd_list_model_languages(request: &DaemonRequest) -> Result<Command, String> {
+    let (source, model) = model_language_target(request, "list_model_languages")?;
+    Ok(Command::ListModelLanguages { source, model })
 }

@@ -1,4 +1,4 @@
-# GET /registry/backends
+# `GET /registry/backend/list`
 
 Lists installable backends from the registry. The daemon fetches the registry
 index from a hardcoded GitHub Pages URL (see
@@ -21,7 +21,7 @@ optional `index_stale` marker on a per-entry basis).
 ## Request
 
 ```
-GET /registry/backends?include_incompatible=false&kind=wasm&online=true&q=openai
+GET /registry/backend/list?include_incompatible=false&kind=wasm&online=true&q=openai
 ```
 
 | Query parameter | Type | Default | Notes |
@@ -82,7 +82,7 @@ independently: neither is derived from the other.
 
 The install directory is named by `backend_id`, falling back to `id` when
 `backend_id` is `null` — see
-[`POST /registry/install`](./install.md#request) for the full rule. A client
+[`POST /registry/backend/install`](./install.md#request) for the full rule. A client
 computing the path must apply that fallback rather than assume either field.
 
 `models[].provider` is always an empty string. It is emitted so clients that
@@ -92,7 +92,7 @@ identify a model by `(name, source)` instead. It will be removed.
 `models[].supported_devices` names the runtimes a model can use: `"cpu"`,
 `"gpu"`, or the `"none"` sentinel for a model that runs remotely. It is a
 property of the *model*, not of this host — see
-[`GET /backends`](../backends.md) for narrowing it to the devices the
+[`GET /backend/list`](../backends.md) for narrowing it to the devices the
 installed build actually provides.
 
 Per-entry fields beyond what `index.json` carries:
@@ -108,7 +108,7 @@ Per-entry fields beyond what `index.json` carries:
   host, regardless of its registry status. Read from the installed
   `backend.toml` on every request, so it reflects what is on disk now rather
   than what the daemon saw at startup. It is the same read that fills
-  [`version` on `GET /backends`](../backends.md), so the two never disagree.
+  [`version` on `GET /backend/list`](../backends.md), so the two never disagree.
 - `update_available` — whether `version` is newer than `installed_version`,
   compared as semver. The daemon decides this rather than leaving each client
   to re-derive it: the daemon is the side that reads the installed manifest and

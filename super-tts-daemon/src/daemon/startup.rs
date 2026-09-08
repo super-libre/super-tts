@@ -225,7 +225,10 @@ impl SuperTTSDaemon {
     ) -> Result<()> {
         daemon.broadcast_model_loading_status(&name);
 
-        let device_pref = daemon.preferred_device.read().await.clone();
+        // The persisted model comes back on the device it was persisted with —
+        // its own if it has one, else the global default. Reading the default
+        // alone would quietly undo a per-model choice on every restart.
+        let device_pref = daemon.config.read().await.effective_device(&source, &name);
         let (instance, definition) = daemon
             .instantiate_backend(&name, &source, &device_pref)
             .await?;

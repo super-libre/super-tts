@@ -141,7 +141,7 @@ impl AppModel {
                         // the new value.
                         let mut tasks = vec![self.load_primary_language()];
                         if let Some((source, model)) = self.language.model_language_for.clone() {
-                            tasks.push(self.load_model_language(source, model));
+                            tasks.push(self.load_model_language(&source, model));
                         }
                         Some(Task::batch(tasks))
                     }
@@ -249,7 +249,7 @@ impl AppModel {
             self.current_model, model
         );
         // A live identity change supersedes any in-flight reconnect snapshot: bump
-        // the epoch so a stale get_current_model response can't revert this.
+        // the epoch so a stale stage-view response can't revert this.
         self.current_model_epoch = self.current_model_epoch.wrapping_add(1);
         self.current_model.clone_from(&model);
         self.current_source.clone_from(&source);
@@ -261,7 +261,7 @@ impl AppModel {
         // learns the active model only via this broadcast — e.g. the settings app
         // reconnecting after a daemon restart, where the startup load now emits
         // model_switched — would otherwise leave model_language_for unset.
-        self.load_model_language(source, model)
+        self.load_model_language(&source, model)
     }
 
     pub(in crate::core::app) fn process_download_progress_event(

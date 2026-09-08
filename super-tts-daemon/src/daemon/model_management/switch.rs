@@ -7,11 +7,29 @@ use log::{error, info, warn};
 use super_tts_shared::models::protocol::{DaemonResponse, DaemonStatusEvent, ErrorCode};
 
 impl SuperTTSDaemon {
-    /// Handle get current model command.
+    /// Handle get current model command, and stage 1's model slot with it.
+    ///
+    /// `current_model` / `current_source` describe the *loaded* model and are
+    /// answered exactly as they always were — clients read them, and the idle
+    /// case still answers with the error envelope those clients have always
+    /// parsed (`GET /active_model` treats it as the normal idle state rather
+    /// than a failure). `stage_model` is added beside them and describes the
+    /// *selection*: which model the stage points at, whether it is up, on what
+    /// device, and what load is in flight.
+    ///
+    /// The slot is attached to the idle envelope too, deliberately. "Selected
+    /// but not loaded" is the one state the split exists to express, and it is
+    /// reachable only when nothing is loaded — omitting the slot there would
+    /// leave the case that motivates the field as the case no client can read.
     pub async fn handle_get_model(&self) -> DaemonResponse {
+        // Built before the read guard below, not inside it: `stage_model` takes
+        // the same `model` lock, and tokio's `RwLock` is not reentrant — a
+        // writer queued between the two acquisitions would deadlock this
+        // handler, and a model switch is exactly what queues one.
+        let stage_model = self.stage_model().await;
         let guard = self.model.read().await;
 
-        if let Some(loaded) = guard.as_ref() {
+        let response = if let Some(loaded) = guard.as_ref() {
             let name = loaded.definition.name.clone();
             info!("Current model requested: {name}");
             DaemonResponse::success()
@@ -21,6 +39,10 @@ impl SuperTTSDaemon {
         } else {
             warn!("No model is currently loaded");
             DaemonResponse::error("No model is currently loaded")
+        };
+        DaemonResponse {
+            stage_model: Some(stage_model),
+            ..response
         }
     }
 
@@ -247,7 +269,14 @@ impl SuperTTSDaemon {
 
         self.broadcast_model_loading_status(&model);
         self.unload_current_model().await;
-        let device_pref = self.preferred_device.read().await.clone();
+        // The model's own device if it has one, else the global default —
+        // never the raw default, or a model the user pinned to the CPU would
+        // be dragged onto the GPU by the next switch to it.
+        let device_pref = self
+            .config
+            .read()
+            .await
+            .effective_device(&backend_source, &model);
 
         match self
             .instantiate_backend(&model, &backend_source, &device_pref)

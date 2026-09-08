@@ -6,6 +6,7 @@ use crate::ui::messages::{DownloadMessage, Message};
 use cosmic::prelude::*;
 use log::info;
 use log::warn;
+use super_tts_shared::models::protocol::SYNTHESIS_STAGE;
 
 impl AppModel {
     /// Handle download progress messages
@@ -39,8 +40,11 @@ impl AppModel {
             }
 
             DownloadMessage::CancelDownload => {
-                Task::perform(cancel_download(), |result| match result {
-                    Ok(_) => cosmic::Action::App(Message::Download(
+                // Addressed to the stage, not the daemon: stages provision
+                // independently, and a Cancel under one stage's progress bar
+                // must not abandon another stage's download.
+                Task::perform(cancel_download(SYNTHESIS_STAGE), |result| match result {
+                    Ok(()) => cosmic::Action::App(Message::Download(
                         DownloadMessage::DownloadCancelled(String::new()),
                     )),
                     Err(e) => {
@@ -60,19 +64,22 @@ impl AppModel {
                     self.model_operation_state,
                     ModelOperationState::Loading { .. } | ModelOperationState::Downloading { .. }
                 ) {
-                    Task::perform(get_download_status(), |result| match result {
-                        Ok(Some(progress)) => {
-                            // Download is actually happening
-                            cosmic::Action::App(Message::Download(
-                                DownloadMessage::DownloadProgressUpdate(progress),
-                            ))
-                        }
-                        // No download in progress (loaded from cache, or the
-                        // switch failed): fall through to NoDownloadInProgress.
-                        Ok(None) | Err(_) => cosmic::Action::App(Message::Download(
-                            DownloadMessage::NoDownloadInProgress,
-                        )),
-                    })
+                    Task::perform(
+                        get_download_status(SYNTHESIS_STAGE),
+                        |result| match result {
+                            Ok(Some(progress)) => {
+                                // Download is actually happening
+                                cosmic::Action::App(Message::Download(
+                                    DownloadMessage::DownloadProgressUpdate(progress),
+                                ))
+                            }
+                            // No download in progress (loaded from cache, or the
+                            // switch failed): fall through to NoDownloadInProgress.
+                            Ok(None) | Err(_) => cosmic::Action::App(Message::Download(
+                                DownloadMessage::NoDownloadInProgress,
+                            )),
+                        },
+                    )
                 } else {
                     Task::none()
                 }
@@ -80,13 +87,13 @@ impl AppModel {
 
             DownloadMessage::NoDownloadInProgress => {
                 // Only clear a `Downloading` state. A `Loading` state means
-                // the daemon's `set_model` HTTP call is still in flight (the
-                // subprocess might still be spawning, or the WASM component
-                // might still be initialising) — its `ModelChanged` /
+                // the `POST /pipeline/{stage}/model` call is still in flight
+                // (the subprocess might still be spawning, or the WASM
+                // component might still be initialising) — its `ModelChanged` /
                 // `ModelError` will land later and is the only message
                 // authorised to flip Loading off. Flipping it here used to
                 // re-enable the Load button mid-load, so a second click
-                // fired another `set_model`, which then collided with the
+                // fired another model switch, which then collided with the
                 // first one in `systemd-run` ("Unit already loaded").
                 //
                 // The Error branch is preserved untouched — that's its own
@@ -120,8 +127,8 @@ impl AppModel {
                 info!("Model {model_name} download was cancelled");
                 // The daemon already unloaded the previous model before
                 // the failed instantiate, so it's now idle (with the
-                // active backend still selected). Reflect that locally
-                // — no further set_model: an empty `previous_*` would
+                // stage's backend still selected). Reflect that locally —
+                // no follow-up model switch: an empty `previous_*` would
                 // resolve to "no installed backend serves ''" and surface
                 // as a UI error.
                 self.model_operation_state = ModelOperationState::Ready;

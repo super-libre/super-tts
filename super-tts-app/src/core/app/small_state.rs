@@ -29,6 +29,22 @@ impl AppModel {
         self.current_source.clear();
     }
 
+    /// Drop the staged pick together with the per-model device answer it was
+    /// drawn from.
+    ///
+    /// The two go together because the answer is only meaningful for the model
+    /// it describes. Clearing the pick alone leaves a device list and a stored
+    /// preference behind, and the next model staged from a different backend
+    /// would be offered them for as long as its own answer took to arrive —
+    /// with nothing on screen to say the picker was showing another model's
+    /// devices.
+    pub(in crate::core::app) fn clear_staged_model(&mut self) {
+        self.models_page.staged_model = None;
+        self.models_page.staged_device = None;
+        self.model_device = None;
+        self.model_device_for = None;
+    }
+
     /// Set model to downloading state
     pub(in crate::core::app) fn set_model_downloading(
         &mut self,

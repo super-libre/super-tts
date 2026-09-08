@@ -22,6 +22,41 @@ impl SuperTTSDaemon {
         DaemonResponse::success().with_language(value)
     }
 
+    /// The tags the global language setting offers — what
+    /// `GET /settings/language/list` answers.
+    ///
+    /// `auto` leads the list because it is a real choice the setting takes and
+    /// no curated table declares it: it means "let each model decide", and a
+    /// client building its picker from the tags alone would silently drop the
+    /// one entry that works on every model, multilingual or not.
+    ///
+    /// Note that this is the offer, not a validator: `set_primary_language`
+    /// still stores whatever tag it is handed. A tag from outside this list is
+    /// not lost — it is simply resolved per model like any other, and reaches
+    /// the model only when that model declares it (or its base language). What
+    /// the list promises is that everything *in* it is a tag this daemon means
+    /// to support, which is what a picker needs and could not previously ask
+    /// for.
+    ///
+    /// An associated function rather than a method: the list is the daemon's
+    /// published vocabulary, not a property of any one running daemon, and
+    /// taking `&self` would imply a per-instance answer that a caller might
+    /// then feel obliged to re-fetch after every state change.
+    #[must_use]
+    pub fn handle_list_primary_languages() -> DaemonResponse {
+        let languages: Vec<String> = std::iter::once("auto".to_string())
+            .chain(
+                crate::daemon::language::GLOBAL_LANGUAGES
+                    .iter()
+                    .map(|tag| (*tag).to_string()),
+            )
+            .collect();
+        DaemonResponse {
+            available_languages: Some(languages),
+            ..DaemonResponse::success().with_message("Global languages listed".to_string())
+        }
+    }
+
     pub async fn handle_set_primary_language(&self, language: String) -> DaemonResponse {
         {
             let mut config = self.config.write().await;
@@ -68,6 +103,9 @@ impl SuperTTSDaemon {
             Command::ClearModelLanguage { source, model } => {
                 self.handle_clear_model_language(source, model).await
             }
+            Command::ListModelLanguages { source, model } => {
+                self.handle_list_model_languages(source, model).await
+            }
             _ => unreachable!("handle_model_language received a non-language command"),
         }
     }
@@ -90,6 +128,14 @@ impl SuperTTSDaemon {
     /// Build the resolution block for `(source, model)`. Returns `Err` when the
     /// model is not served by any discovered backend (mapped to 404
     /// `unknown_model` by the HTTP layer).
+    ///
+    /// Says which language is in effect and why, and deliberately not which
+    /// ones could be chosen instead. That list is
+    /// `GET /pipeline/{stage}/model/{model}/language/list`, because the two
+    /// answer different questions and a picker needs the second one exactly
+    /// once, where this block is re-read on every change. Emitting it here as
+    /// well is what let a client fill its dropdown from a field the HTTP layer
+    /// does not publish, and get an empty dropdown for its trouble.
     async fn model_language_block(
         &self,
         source: &str,
@@ -110,8 +156,54 @@ impl SuperTTSDaemon {
             "effective": resolved.wire,
             "override": over,
             "primary": def.primary_language,
-            "supported": def.supported_languages,
         }))
+    }
+
+    /// The languages `(source, model)` can be pinned to — what
+    /// `GET /pipeline/{stage}/model/{model}/language/list` answers.
+    ///
+    /// Built from the same rule
+    /// [`handle_set_model_language`](Self::handle_set_model_language) enforces,
+    /// not from the manifest's `supported_languages` directly. Those two differ
+    /// in both directions: `auto` is accepted and no manifest declares it, and
+    /// a monolingual model is refused every tag however many it lists (its
+    /// language is fixed, so there is nothing to choose). A picker filled
+    /// straight from the manifest would offer values the setter answers
+    /// `unsupported_language` to, and hide the one value that always works.
+    ///
+    /// A monolingual model gets an empty list rather than an error, the way an
+    /// online model reports no available devices: it is a real model with
+    /// nothing to choose, and a client can hide the control on an empty list
+    /// without having to special-case a status code first.
+    pub async fn handle_list_model_languages(
+        &self,
+        source: String,
+        model: String,
+    ) -> DaemonResponse {
+        let Some(def) = self.find_model_definition(&source, &model).await else {
+            return DaemonResponse::error_with_code(ErrorCode::InvalidModel, "unknown_model");
+        };
+        let languages: Vec<String> = if def.is_multilingual {
+            std::iter::once("auto".to_string())
+                .chain(
+                    def.supported_languages
+                        .iter()
+                        // A manifest that lists `auto` among its languages must
+                        // not put it in the list twice; the entry above is the
+                        // canonical one, and a duplicated option in a picker
+                        // reads as two different choices.
+                        .filter(|tag| !tag.eq_ignore_ascii_case("auto"))
+                        .cloned(),
+                )
+                .collect()
+        } else {
+            Vec::new()
+        };
+        DaemonResponse {
+            available_languages: Some(languages),
+            ..DaemonResponse::success()
+                .with_message(format!("Languages available to {model} listed"))
+        }
     }
 
     pub async fn handle_get_model_language(&self, source: String, model: String) -> DaemonResponse {

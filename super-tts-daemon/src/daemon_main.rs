@@ -111,7 +111,7 @@ pub async fn run() -> Result<()> {
 
     info!("Starting Super TTS Daemon");
     info!("Model: {}", config.synthesis.preferred_model);
-    info!("Device: {}", config.device.preferred_device);
+    info!("Default device: {}", config.device.preferred_device);
     info!("Audio theme: {}", config.audio.theme);
 
     let daemon = SuperTTSDaemon::new().await?;

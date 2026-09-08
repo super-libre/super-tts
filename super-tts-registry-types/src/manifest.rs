@@ -114,13 +114,73 @@ impl fmt::Display for Kind {
     }
 }
 
-/// Backend-protocol contract version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Backend-protocol contract version: the one thing a manifest declares about
+/// what it implements.
+///
+/// A contract generation names a set of manifest fields and backend routes.
+/// Each generation is additive over the one before, so a backend declares the
+/// *lowest* generation whose fields it uses, and a daemon supports every
+/// generation up to the one it was built with.
+///
+/// This is a closed enum on purpose. A daemon that predates a generation
+/// cannot parse a manifest declaring it, which is what stops such a daemon
+/// from installing a backend it cannot drive: the refusal needs no field the
+/// old daemon would have to know about, because it is the *absence* of
+/// knowledge that refuses. Every generation added here therefore also gates
+/// itself against every daemon released before it.
+///
+/// Variant order is generation order; the derived `Ord` relies on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
 pub enum Contract {
     /// The v1 contract (`docs/protocol/backend/contract.md`).
-    #[serde(rename = "v1")]
     V1,
+}
+
+impl Contract {
+    /// The newest generation this crate understands. A manifest may not
+    /// declare anything above it, because the closed enum refuses to parse it.
+    pub const LATEST: Self = Self::V1;
+
+    /// Every generation, oldest first.
+    pub const ALL: &'static [Self] = &[Self::V1];
+
+    /// The generation immediately before this one; `None` for the first.
+    #[must_use]
+    pub fn previous(self) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .rev()
+            .copied()
+            .find(|candidate| *candidate < self)
+    }
+
+    /// The Super TTS release that first understood this generation — the
+    /// floor below which a daemon cannot install a backend declaring it.
+    ///
+    /// The indexer stamps this onto each index entry as `min_client`, so a
+    /// daemon that does not know the generation can still tell the user what
+    /// to update to. A backend author never writes a Super TTS version: they
+    /// declare the contract, and this table is what it means.
+    ///
+    /// Reported, never compared: the daemon decides compatibility by whether
+    /// it can parse the generation at all, so a prerelease of the version
+    /// named here (`0.2.0-beta.1`, which semver orders *below* `0.2.0`) is not
+    /// wrongly locked out. It is a string for the user, not a gate.
+    ///
+    /// A new row is a forecast until its release ships, and nothing can check
+    /// it: the version that introduces a generation is by definition not yet
+    /// tagged when the row is written. Renumbering that release means
+    /// renumbering here.
+    #[must_use]
+    pub const fn min_client(self) -> &'static str {
+        match self {
+            // The manifest and its `[backend].contract` field both date from
+            // the first Super TTS release; there is no earlier daemon to gate.
+            Self::V1 => "0.1.0",
+        }
+    }
 }
 
 impl fmt::Display for Contract {
@@ -130,6 +190,126 @@ impl fmt::Display for Contract {
         }
     }
 }
+
+impl std::str::FromStr for Contract {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|c| c.to_string() == s)
+            .ok_or_else(|| {
+                let known: Vec<String> = Self::ALL.iter().map(ToString::to_string).collect();
+                format!(
+                    "unknown contract `{s}`; this build knows {}",
+                    known.join(", ")
+                )
+            })
+    }
+}
+
+/// Routed through `FromStr` so one table — `ALL` plus `Display` — is the only
+/// place a generation is spelled, and so the error names what this build does
+/// know. That message is what a user sees when a daemon meets a backend from a
+/// newer generation, so it is worth more than serde's "unknown variant".
+impl<'de> Deserialize<'de> for Contract {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = String::deserialize(d)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// What a generation does to a field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldRule {
+    /// The field does not exist below `since`. Declaring it under an older
+    /// generation is an error, because that generation's schema has no such
+    /// key — an author validating against it would be told the field is
+    /// unknown while the daemon quietly honored it.
+    Added,
+    /// The field exists in every generation, but from `since` on a manifest
+    /// must declare it. Used to close an optionality that only survived for
+    /// backward compatibility: the new generation is a clean break, so it can
+    /// demand what older ones could only recommend.
+    RequiredFrom,
+}
+
+/// A manifest field and what a contract generation does to it.
+///
+/// The one table behind both enforcement points: [`Manifest::parse`] holds a
+/// manifest to the rules of the contract it declares, and the generated schema
+/// encodes the same rules, so an editor flags a violation before anything is
+/// published. Adding a field to a new generation means adding a row here, and
+/// nothing else has to be taught.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractField {
+    /// The generation the rule takes effect in.
+    pub since: Contract,
+    /// Which rule this row expresses.
+    pub rule: FieldRule,
+    /// The top-level table the field lives in: `backend` for `[backend]`,
+    /// `models` for each `[[models]]` entry, and so on.
+    pub table: &'static str,
+    /// The field's key within that table.
+    pub key: &'static str,
+}
+
+impl ContractField {
+    /// How the field is spelled in a manifest and in error messages, e.g.
+    /// `[[models]].role`.
+    #[must_use]
+    pub fn path(&self) -> String {
+        if self.is_array_table() {
+            format!("[[{}]].{}", self.table, self.key)
+        } else {
+            format!("[{}].{}", self.table, self.key)
+        }
+    }
+
+    /// Whether the field's table is an array of tables (`[[models]]`) rather
+    /// than a plain one (`[backend]`).
+    ///
+    /// The single answer for every consumer: the manifest spelling above, the
+    /// raw-document audit, and the schema rule (which must attach to `items`
+    /// for an array). Adding a row for a table not listed here fails the
+    /// schema's own test rather than silently generating a rule that matches
+    /// nothing.
+    #[must_use]
+    pub fn is_array_table(&self) -> bool {
+        matches!(self.table, "models" | "secrets" | "options")
+    }
+
+    /// The name of this table's type in the generated JSON schema, or `None`
+    /// for a table the schema builder has no mapping for.
+    #[must_use]
+    pub fn schema_definition(&self) -> Option<&'static str> {
+        match self.table {
+            "backend" => Some("BackendMeta"),
+            "models" => Some("ModelEntry"),
+            "secrets" => Some("Secret"),
+            "options" => Some("Opt"),
+            _ => None,
+        }
+    }
+}
+
+/// Every field rule a generation after v1 introduces.
+///
+/// Empty while v1 is the only generation: there is no earlier contract for a
+/// field to be withheld from. It is the extension point rather than dead
+/// weight — adding a field to a v2 means adding a row here, and both
+/// [`Manifest::parse`] and the published JSON Schema learn the rule from it
+/// without being taught separately.
+///
+/// Field **names** only. A generation that widens an existing field's value
+/// set instead — a new `VoiceKind`, a new `Device` — cannot be expressed here,
+/// and a manifest using such a value under an older `contract` is caught by
+/// that field's own `FromStr` rather than by this table.
+pub const CONTRACT_FIELDS: &[ContractField] = &[];
 
 /// `[network]` — outbound network policy.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -352,10 +532,29 @@ pub struct Opt {
     /// Value used when the user sets none. Should match `type`.
     #[serde(default)]
     pub default: Option<OptionDefault>,
+    /// The values this option accepts, when it accepts a closed set. Empty
+    /// means any value of the declared `type`.
+    ///
+    /// Declaring them is what turns a free-text field into a dropdown, and
+    /// what lets the daemon refuse a value the backend would not understand.
+    /// An option whose allowed values were only ever written into its
+    /// `description` accepted anything the user typed, and shipped it.
+    #[serde(default)]
+    pub choices: Vec<OptionDefault>,
     /// Whether a value must be set before the backend can load. Default
     /// `false`.
     #[serde(default)]
     pub required: bool,
+}
+
+impl Opt {
+    /// Whether `value`, in the string form the daemon stores and injects, is
+    /// one this option accepts. An option declaring no choices accepts
+    /// anything, so this is the check itself, not a precondition for it.
+    #[must_use]
+    pub fn accepts(&self, value: &str) -> bool {
+        self.choices.is_empty() || self.choices.iter().any(|c| c.to_string() == value)
+    }
 }
 
 /// The input type of an option.
@@ -833,6 +1032,101 @@ pub enum ManifestError {
     /// `[capabilities] streaming_input` is reserved and not yet implemented.
     #[error("`[capabilities] streaming_input` is reserved and not yet supported")]
     StreamingInputReserved,
+    /// A field was declared that the manifest's `contract` does not include.
+    ///
+    /// Both fixes are named because they are not equivalent: raising the
+    /// contract is right for a manifest that means to use the field, but it
+    /// also raises the release floor for every client. An author who wrote the
+    /// field's default value by hand wants the other one.
+    #[error(
+        "`{field}` requires `contract = \"{since}\"`, but this manifest declares \
+         `contract = \"{declared}\"` — raise the contract to use the field, or \
+         remove the field to stay on `{declared}`"
+    )]
+    FieldRequiresContract {
+        /// The field, spelled as in the manifest (e.g. `[[models]].role`).
+        field: String,
+        /// The generation that introduced it.
+        since: Contract,
+        /// The generation the manifest declares.
+        declared: Contract,
+    },
+    /// A field the manifest's `contract` requires was not declared.
+    #[error(
+        "`contract = \"{declared}\"` requires `{field}`, which this manifest does not \
+         declare — add it, or drop to `contract = \"{previous}\"` where it is optional"
+    )]
+    FieldRequiredByContract {
+        /// The field, spelled as in the manifest (e.g. `[backend].id`).
+        field: String,
+        /// The generation the manifest declares.
+        declared: Contract,
+        /// The newest generation that does not require it.
+        previous: Contract,
+    },
+}
+
+/// Whether [`Manifest::parse_inner`] holds the document to its declared
+/// contract's field rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContractFields {
+    /// A manifest being admitted: the rules apply.
+    Enforced,
+    /// A manifest already installed here: they do not. See
+    /// [`Manifest::parse_installed`].
+    Ignored,
+}
+
+/// Whether any [`CONTRACT_FIELDS`] rule can bite at `declared`. When none can
+/// — which for a manifest declaring the latest generation with no required
+/// fields is the common case — the raw document never has to be parsed.
+fn applies_to(declared: Contract) -> bool {
+    CONTRACT_FIELDS.iter().any(|field| match field.rule {
+        FieldRule::Added => field.since > declared,
+        FieldRule::RequiredFrom => declared >= field.since,
+    })
+}
+
+/// Whether the raw document declares a field, anywhere its table allows it.
+///
+/// Reads the raw document rather than the typed struct so an explicitly
+/// written default still counts as declared, and an absent field is absent
+/// rather than defaulted. A table that is an array (`[[models]]`) counts a
+/// field declared if *any* entry declares it; a plain table (`[backend]`) is
+/// checked once.
+fn declares(raw: &toml::Table, field: &ContractField) -> bool {
+    match raw.get(field.table) {
+        Some(toml::Value::Array(entries)) if field.is_array_table() => entries
+            .iter()
+            .any(|entry| entry.as_table().is_some_and(|t| t.contains_key(field.key))),
+        Some(toml::Value::Table(table)) if !field.is_array_table() => table.contains_key(field.key),
+        _ => false,
+    }
+}
+
+/// The first [`CONTRACT_FIELDS`] rule the document breaks, in table order, as
+/// the error it should be reported as. `None` when the manifest stays within
+/// its contract.
+fn contract_violation(raw: &toml::Table, declared: Contract) -> Option<ManifestError> {
+    CONTRACT_FIELDS.iter().find_map(|field| match field.rule {
+        // A field from a later generation, spelled under an earlier one.
+        FieldRule::Added if field.since > declared && declares(raw, field) => {
+            Some(ManifestError::FieldRequiresContract {
+                field: field.path(),
+                since: field.since,
+                declared,
+            })
+        }
+        // A field this generation requires, left out.
+        FieldRule::RequiredFrom if declared >= field.since && !declares(raw, field) => {
+            Some(ManifestError::FieldRequiredByContract {
+                field: field.path(),
+                declared,
+                previous: field.since.previous().unwrap_or(field.since),
+            })
+        }
+        _ => None,
+    })
 }
 
 impl Manifest {
@@ -843,9 +1137,52 @@ impl Manifest {
     /// lives in the single canonical parser so every consumer inherits it.
     ///
     /// # Errors
-    /// Returns a [`ManifestError`] on TOML errors or an unsafe entrypoint.
+    /// Returns a [`ManifestError`] on TOML errors, an unsafe entrypoint or
+    /// file destination, a malformed `[backend].id`, a malformed
+    /// `[[assets.subprocess]]` entry, or a field the declared
+    /// [`contract`](Contract) does not include
+    /// ([`FieldRequiresContract`](ManifestError::FieldRequiresContract)).
     pub fn parse(text: &str) -> Result<Self, ManifestError> {
+        Self::parse_inner(text, ContractFields::Enforced)
+    }
+
+    /// Parse a manifest that is **already installed** on this machine.
+    ///
+    /// Identical to [`parse`](Self::parse) except that the contract-field rule
+    /// does not apply. That rule's job is to stop a manifest getting in, and
+    /// this one is already in: enforcing it at discovery would make a backend
+    /// that installed cleanly under an earlier build disappear from the
+    /// catalog — taking its downloaded models out of reach — over a manifest
+    /// the user cannot edit and did not write.
+    ///
+    /// Only discovery of the installed backends directory uses this. Every
+    /// path that admits a *new* manifest — registry install, custom repo,
+    /// import-from-directory, and the indexer — goes through
+    /// [`parse`](Self::parse).
+    ///
+    /// # Errors
+    /// As [`parse`](Self::parse), less `FieldRequiresContract`.
+    pub fn parse_installed(text: &str) -> Result<Self, ManifestError> {
+        Self::parse_inner(text, ContractFields::Ignored)
+    }
+
+    fn parse_inner(text: &str, fields: ContractFields) -> Result<Self, ManifestError> {
         let mut m: Self = toml::from_str(text)?;
+        // Every field defaults when absent, so the typed struct cannot tell
+        // "declared the field" from "left it out". The raw document can, and
+        // the rule is about what was written: an older manifest may not spell
+        // a newer generation's field at all, not even with its default value,
+        // because that generation's schema does not have it. Parsed from the
+        // text a second time rather than converted from one `Table`, so the
+        // typed parse above keeps its line/column spans in error messages —
+        // and only when some field could actually be in breach, which for a
+        // manifest declaring the latest generation is never.
+        if fields == ContractFields::Enforced && applies_to(m.backend.contract) {
+            let raw: toml::Table = toml::from_str(text)?;
+            if let Some(violation) = contract_violation(&raw, m.backend.contract) {
+                return Err(violation);
+            }
+        }
         if !crate::is_safe_relative_path(&m.backend.entrypoint) {
             return Err(ManifestError::UnsafeEntrypoint(m.backend.entrypoint));
         }
@@ -1014,12 +1351,30 @@ impl Manifest {
     /// Returns a [`ManifestError`] if the file is missing, unreadable, or
     /// fails [`Manifest::parse`].
     pub fn load(dir: &Path) -> Result<Self, ManifestError> {
+        Self::load_with(dir, Self::parse)
+    }
+
+    /// [`load`](Self::load) for a backend already installed here — see
+    /// [`parse_installed`](Self::parse_installed) for why the contract-field
+    /// rule is not applied.
+    ///
+    /// # Errors
+    /// As [`load`](Self::load), less `FieldRequiresContract`.
+    pub fn load_installed(dir: &Path) -> Result<Self, ManifestError> {
+        Self::load_with(dir, Self::parse_installed)
+    }
+
+    /// Read `<dir>/backend.toml` and hand its text to `parse`.
+    fn load_with(
+        dir: &Path,
+        parse: fn(&str) -> Result<Self, ManifestError>,
+    ) -> Result<Self, ManifestError> {
         let path = dir.join("backend.toml");
         let text = std::fs::read_to_string(&path).map_err(|err| ManifestError::Io {
             path: path.display().to_string(),
             err,
         })?;
-        Self::parse(&text).map_err(|err| ManifestError::Parse {
+        parse(&text).map_err(|err| ManifestError::Parse {
             path: path.display().to_string(),
             err: Box::new(err),
         })
@@ -1042,6 +1397,77 @@ mod tests {
         contract = "v1"
         description = "Test backend."
         "#;
+
+    /// Generations are ordered, and each names the release that first
+    /// understood it.
+    ///
+    /// The order is what every `CONTRACT_FIELDS` rule is evaluated against, and
+    /// it comes from variant declaration order alone — a generation inserted in
+    /// the wrong place would silently invert every rule that mentions it.
+    /// `min_client` is a forecast written before the release it names is
+    /// tagged, so the only thing that can be checked here is that every
+    /// generation has one and that it parses as a version.
+    #[test]
+    fn contracts_order_by_generation_and_each_names_its_floor() {
+        assert_eq!(
+            Contract::ALL.last().copied(),
+            Some(Contract::LATEST),
+            "LATEST must be the newest generation in ALL"
+        );
+        assert!(
+            Contract::ALL.windows(2).all(|pair| pair[0] < pair[1]),
+            "ALL must be in generation order; the derived Ord follows it"
+        );
+        assert_eq!(Contract::V1.previous(), None, "v1 is the first generation");
+        for contract in Contract::ALL {
+            assert!(
+                !contract.min_client().is_empty(),
+                "{contract} names no client floor"
+            );
+        }
+    }
+
+    /// A manifest from a generation this build does not know is refused, and
+    /// the refusal says what this build *does* know.
+    ///
+    /// This is the whole gating mechanism: a daemon predating a generation
+    /// cannot parse a manifest declaring it, so it cannot install a backend it
+    /// could not drive. Serde's own "unknown variant" message would name Rust
+    /// variants (`V1`), not the spelling a manifest author wrote, which is why
+    /// the deserializer is routed through `FromStr`.
+    #[test]
+    fn a_contract_this_build_does_not_know_is_refused_by_name() {
+        let text = VALID.replace(r#"contract = "v1""#, r#"contract = "v99""#);
+        let err = Manifest::parse(&text).expect_err("an unknown generation must not parse");
+        let message = err.to_string();
+        assert!(
+            message.contains("v99") && message.contains("v1"),
+            "the error must name both the unknown generation and the known ones: {message}"
+        );
+    }
+
+    /// The contract-field rule applies to a manifest being admitted and not to
+    /// one already installed.
+    ///
+    /// Both parsers exist so an installed backend never disappears from the
+    /// catalog over a rule tightened after it was installed. With
+    /// `CONTRACT_FIELDS` still empty the two agree on every input, so this
+    /// pins the split itself: `parse_installed` must remain a real second
+    /// entry point that runs every other guard, or the first v2 field will
+    /// find it collapsed back into `parse`.
+    #[test]
+    fn an_installed_manifest_skips_only_the_contract_field_rule() {
+        Manifest::parse(VALID).expect("a well-formed manifest parses");
+        Manifest::parse_installed(VALID).expect("and so does an installed one");
+
+        // Every non-contract guard still runs on the installed path.
+        let unsafe_entrypoint =
+            VALID.replace(r#"entrypoint = "y.wasm""#, r#"entrypoint = "/y.wasm""#);
+        assert!(
+            Manifest::parse_installed(&unsafe_entrypoint).is_err(),
+            "parse_installed must still refuse an entrypoint that escapes the backend dir"
+        );
+    }
 
     /// `VALID` plus one `[[models]]` entry, so the voice rules have something
     /// to attach to. `body` is appended inside the model table.

@@ -142,6 +142,14 @@ fn inject_definition_rules(defs: &mut serde_json::Map<String, Value>) {
         }),
     );
 
+    // A value offered twice is a dropdown with two identical rows, one of
+    // which cannot be chosen. The indexer refuses to publish it; the schema
+    // says so where the author is typing.
+    opt["properties"]["choices"]
+        .as_object_mut()
+        .expect("choices property")
+        .insert("uniqueItems".into(), json!(true));
+
     // `supported_devices` must be non-empty (discovery rejects an empty
     // list); serde can't express minItems, so inject it here.
     let model = defs.get_mut("ModelEntry").expect("ModelEntry def");
@@ -248,6 +256,15 @@ pub fn backend_schema() -> Value {
         }),
     );
 
+    // Contract generations: a manifest may only use the fields its declared
+    // `contract` includes. One rule per generation below the latest, each
+    // disallowing every field a later generation introduced. Built from the
+    // same table the parser enforces (`CONTRACT_FIELDS`), so an editor bound
+    // to this schema flags exactly what `Manifest::parse` would refuse.
+    for rule in contract_rules() {
+        push_all_of(&mut root, rule);
+    }
+
     // Per-definition conditionals.
     inject_definition_rules(
         root.get_mut("definitions")
@@ -257,6 +274,74 @@ pub fn backend_schema() -> Value {
 
     close_objects(&mut root);
     root
+}
+
+/// One `if`/`then` per contract generation, encoding the same
+/// [`CONTRACT_FIELDS`](crate::manifest::CONTRACT_FIELDS) rules the parser
+/// enforces: fields a later generation introduced are disallowed, and fields
+/// this generation requires are required.
+///
+/// Empty while v1 is the only generation, for the same reason the table it
+/// reads is: there is nothing for an earlier contract to be held back from.
+///
+/// A `[[models]]`-style table is an array of objects, so the rule goes on
+/// `items`; a plain table gets it directly. `false` as a property schema is
+/// what the other conditionals here use for "not under this condition" (see
+/// `cuda_major`), so an editor reports it the same way.
+fn contract_rules() -> Vec<Value> {
+    use crate::manifest::{CONTRACT_FIELDS, Contract, FieldRule};
+    Contract::ALL
+        .iter()
+        .filter_map(|declared| {
+            let mut then = json!({});
+            for field in CONTRACT_FIELDS {
+                // Indexed only inside the arms: `then[table]` auto-vivifies a
+                // JSON null, and a null is not a subschema — a table touched
+                // without a rule to add would emit `{"backend": null}`.
+                match field.rule {
+                    FieldRule::Added if field.since > *declared => {
+                        let table = &mut then[field.table];
+                        if field.is_array_table() {
+                            table["items"]["properties"][field.key] = json!(false);
+                        } else {
+                            table["properties"][field.key] = json!(false);
+                        }
+                    }
+                    FieldRule::RequiredFrom if *declared >= field.since => {
+                        let table = &mut then[field.table];
+                        // `required` is a list, so push rather than assign —
+                        // one generation may require several fields of a table.
+                        let required = if field.is_array_table() {
+                            &mut table["items"]["required"]
+                        } else {
+                            &mut table["required"]
+                        };
+                        if !required.is_array() {
+                            *required = json!([]);
+                        }
+                        required
+                            .as_array_mut()
+                            .expect("required list")
+                            .push(json!(field.key));
+                    }
+                    _ => {}
+                }
+            }
+            let has_rules = then.as_object().is_some_and(|m| !m.is_empty());
+            has_rules.then(|| {
+                json!({
+                    "if": {
+                        "required": ["backend"],
+                        "properties": { "backend": {
+                            "required": ["contract"],
+                            "properties": { "contract": { "const": declared.to_string() } }
+                        } }
+                    },
+                    "then": { "properties": then }
+                })
+            })
+        })
+        .collect()
 }
 
 /// The full `registry.toml` schema: a map of backend-id → entry.

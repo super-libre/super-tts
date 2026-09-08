@@ -1,26 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Language tags for the pickers plus human-friendly names. The wire form is
-//! always the BCP-47 tag; names are display-only and composed at render time
-//! from a base-language table and a region table, so there is a single source
-//! of truth. The global Primary Language picker offers the curated,
-//! region-qualified [`GLOBAL_LANGUAGES`]; per-model pickers reuse
-//! [`friendly_name`] for each model's own `supported_languages`, which are
-//! usually base ISO 639-1 codes (e.g. `es`).
-
-/// Tags offered by the global Primary Language picker. Region-qualified, with
-/// one exception: Chinese uses the ISO 15924 script subtags `zh-Hans` /
-/// `zh-Hant`, since script — not region — is what distinguishes Simplified from
-/// Traditional. A region is a country code, or UN M.49 for a multi-country
-/// region (`es-419`). Display order is alphabetical by name and is applied by
-/// the picker; every subtag here resolves through the tables below.
-pub const GLOBAL_LANGUAGES: &[&str] = &[
-    "af-ZA", "ar-EG", "ar-SA", "bn-BD", "bg-BG", "ca-ES", "zh-Hans", "zh-Hant", "hr-HR", "cs-CZ",
-    "da-DK", "nl-NL", "en-AU", "en-CA", "en-IN", "en-GB", "en-US", "et-EE", "fi-FI", "fr-BE",
-    "fr-CA", "fr-FR", "de-AT", "de-DE", "de-CH", "el-GR", "he-IL", "hi-IN", "hu-HU", "id-ID",
-    "it-IT", "ja-JP", "ko-KR", "ms-MY", "no-NO", "fa-IR", "pl-PL", "pt-BR", "pt-PT", "ro-RO",
-    "ru-RU", "sk-SK", "es-419", "es-MX", "es-ES", "es-US", "sw-KE", "sv-SE", "tl-PH", "ta-IN",
-    "te-IN", "th-TH", "tr-TR", "uk-UA", "ur-PK", "vi-VN", "cy-GB",
-];
+//! Human-friendly names for BCP-47 language tags.
+//!
+//! Display only. The wire form is always the tag itself, and *which* tags exist
+//! is never decided here: both pickers list what the daemon says they may offer
+//! — the global setting's own vocabulary, and a model's own tags — because that
+//! set changes as backends are installed and removed, and which of `en` and
+//! `en-US` a model answers to is a rule only the daemon's resolver knows. A
+//! curated table once filled the global picker and is gone for exactly that
+//! reason: it offered tags no installed model served, and silently never
+//! learned the ones a new backend brought.
+//!
+//! Names are composed at render time from a base-language table, a script table
+//! and a region table, so any tag either endpoint returns renders — including
+//! ones no table anticipated, which keep their raw subtags rather than
+//! disappearing.
 
 /// Script subtag (ISO 15924) → display name. Names the `Hans` / `Hant` Chinese
 /// distinction (a script, not a region) and the Latin / Cyrillic / Arabic

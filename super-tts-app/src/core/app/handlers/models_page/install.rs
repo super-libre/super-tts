@@ -186,7 +186,21 @@ impl AppModel {
                 // does nothing when clicked. No index refresh: the annotation
                 // is computed from local install state, so the cached index is
                 // enough and a network round-trip would only slow this down.
-                crate::core::app::handlers::tasks::reload_backend_catalogs()
+                let mut tasks = vec![crate::core::app::handlers::tasks::reload_backend_catalogs()];
+                // An update to the backend the card is staging from can change
+                // which devices its model may be loaded onto: the Update chip
+                // sits on that very card, and the install that chip runs picks
+                // an asset for this host afresh, so a CPU-only build can become
+                // a CUDA one between staging a model and pressing Load. Only
+                // the offered list is re-read — the preference is untouched by
+                // an install and re-reading it would discard a device the user
+                // staged a moment ago.
+                if let Some(model) = self.models_page.staged_model.clone()
+                    && self.models_page.active_backend.as_deref() == Some(source.as_str())
+                {
+                    tasks.push(self.refresh_model_devices(&source, model));
+                }
+                Task::batch(tasks)
             }
 
             ModelsPageMessage::InstallFailed {

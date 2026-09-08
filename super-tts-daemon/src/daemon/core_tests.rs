@@ -1236,3 +1236,750 @@ async fn broadcast_model_active_carries_full_identity() {
     assert_eq!(ready["model_loaded"], true);
     assert_eq!(ready["model_name"], "piper-mini");
 }
+
+/// A device belongs to a model, and setting it for a model that is not
+/// loaded only records the choice — it does not error, and it loads nothing.
+/// The model's next load picks it up. This is what lets the device picker
+/// work before Load is pressed, rather than forcing a load on the wrong
+/// device just to move the model off it.
+#[tokio::test]
+async fn set_model_device_when_not_loaded_only_records_the_preference() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_devices(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+        vec![
+            super_tts_registry_types::manifest::Device::Cpu,
+            super_tts_registry_types::manifest::Device::Gpu,
+        ],
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+    assert!(daemon.model.read().await.is_none());
+    assert_eq!(
+        daemon
+            .config
+            .read()
+            .await
+            .effective_device(source, "kokoro-82m"),
+        "cpu"
+    );
+
+    // "cuda" is the deprecated spelling, accepted and normalized to "gpu".
+    let response = daemon
+        .handle_set_model_device("kokoro-82m".to_string(), "cuda".to_string())
+        .await;
+    assert_eq!(
+        response.status, "success",
+        "setting a device for an unloaded model must succeed; got error: {:?}",
+        response.message,
+    );
+    assert_eq!(response.device.as_deref(), Some("gpu"));
+    assert_eq!(
+        response.resolved_accel,
+        Some(None),
+        "a gpu choice has resolved to nothing before a load confirms it"
+    );
+    assert!(
+        response
+            .available_devices
+            .as_ref()
+            .is_some_and(|d| d.iter().any(|d| d == "cpu")),
+        "the model declares the CPU and every host has one: {:?}",
+        response.available_devices
+    );
+    assert!(daemon.model.read().await.is_none(), "nothing was loaded");
+    assert_eq!(
+        daemon
+            .config
+            .read()
+            .await
+            .model_device(source, "kokoro-82m"),
+        Some("gpu"),
+        "the choice is the model's own now"
+    );
+    assert_eq!(
+        daemon.config.read().await.device.preferred_device,
+        "cpu",
+        "the global default is not what a per-model setter writes"
+    );
+
+    // The getter answers from the same state.
+    let response = daemon
+        .handle_get_model_device("kokoro-82m".to_string())
+        .await;
+    assert_eq!(response.status, "success");
+    assert_eq!(response.device.as_deref(), Some("gpu"));
+}
+
+/// An invalid device value is rejected before anything is looked up or
+/// stored, with the documented `invalid_device` code. `none` parses as a
+/// device but is a per-model manifest sentinel, not a preference a client
+/// may set.
+#[tokio::test]
+async fn set_model_device_rejects_invalid_device() {
+    let daemon = test_daemon().await;
+
+    for device in ["xpu", "none"] {
+        let response = daemon
+            .handle_set_model_device("kokoro-82m".to_string(), device.to_string())
+            .await;
+        assert_eq!(response.status, "error", "{device}");
+        assert_eq!(
+            response.error_code,
+            Some(ErrorCode::InvalidDevice),
+            "the documented 400 invalid_device carries its code, or an uncoded \
+             error would map to 500 instead ({device})"
+        );
+    }
+    assert!(daemon.config.read().await.backends.models.is_empty());
+}
+
+/// A device command names a model, not a `(source, model)` pair, so the model
+/// resolves against the active backend — and with none selected there is
+/// nothing to resolve against.
+#[tokio::test]
+async fn model_device_needs_an_active_backend() {
+    let daemon = test_daemon().await;
+
+    let response = daemon
+        .handle_get_model_device("kokoro-82m".to_string())
+        .await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidBackend));
+
+    let response = daemon
+        .handle_set_model_device("kokoro-82m".to_string(), "cpu".to_string())
+        .await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidBackend));
+
+    let response = daemon.handle_list_active_backend_devices().await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidBackend));
+}
+
+/// A model the active backend does not serve is `invalid_model` — the device
+/// verbs never fall through to some other installed backend that happens to
+/// serve the name.
+#[tokio::test]
+async fn model_device_refuses_a_model_the_backend_does_not_serve() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let response = daemon.handle_get_model_device("absent".to_string()).await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidModel));
+
+    let response = daemon
+        .handle_get_model_device("kokoro-82m".to_string())
+        .await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+}
+
+/// An online model runs remotely: it has no device to set, and reading one
+/// reports the manifest's own `none` with nothing offered.
+#[tokio::test]
+async fn an_online_model_has_no_device() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/openai";
+    *daemon.backends.write().await =
+        vec![fixture_backend("openai", source, "OpenAI", "gpt-4o-tts")];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+    seed_loaded_model(&daemon, "gpt-4o-tts", source).await;
+
+    let response = daemon
+        .handle_set_model_device("gpt-4o-tts".to_string(), "cuda".to_string())
+        .await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidDevice));
+    assert!(
+        daemon.model.read().await.is_some(),
+        "an online model must not be unloaded by a device request"
+    );
+
+    let response = daemon
+        .handle_get_model_device("gpt-4o-tts".to_string())
+        .await;
+    assert_eq!(response.status, "success");
+    assert_eq!(response.device.as_deref(), Some("none"));
+    assert_eq!(response.resolved_accel, Some(None));
+    assert_eq!(response.available_devices, Some(Vec::new()));
+}
+
+/// The manifest rules: a model declaring only the CPU cannot be sent to the
+/// GPU, and the refusal leaves nothing stored.
+#[tokio::test]
+async fn set_model_device_refuses_a_device_the_model_does_not_declare() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/piper";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "piper",
+        source,
+        "Piper",
+        "piper-mini",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let response = daemon
+        .handle_set_model_device("piper-mini".to_string(), "gpu".to_string())
+        .await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidDevice));
+    assert_eq!(
+        daemon
+            .config
+            .read()
+            .await
+            .model_device(source, "piper-mini"),
+        None
+    );
+}
+
+/// Asking the loaded model for the device it is already on reloads nothing
+/// — but still makes the device the model's own, since it may have been on
+/// it only through the global default, and a later change to that default
+/// would then move it.
+#[tokio::test]
+async fn set_model_device_on_the_device_in_use_reloads_nothing() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+    // `seed_loaded_model` seeds an online definition; this model is local and
+    // reports `cpu` from its instance.
+    seed_loaded_model(&daemon, "kokoro-82m", source).await;
+    daemon
+        .model
+        .write()
+        .await
+        .as_mut()
+        .expect("seeded")
+        .definition
+        .supported_devices = vec![super_tts_registry_types::manifest::Device::Cpu];
+
+    let response = daemon
+        .handle_set_model_device("kokoro-82m".to_string(), "cpu".to_string())
+        .await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+    assert_eq!(response.device.as_deref(), Some("cpu"));
+    assert_eq!(
+        response.resolved_accel,
+        Some(Some("cpu".to_string())),
+        "a loaded model reports the device it is on"
+    );
+    assert!(daemon.model.read().await.is_some(), "not unloaded");
+    assert_eq!(
+        daemon
+            .config
+            .read()
+            .await
+            .model_device(source, "kokoro-82m"),
+        Some("cpu")
+    );
+}
+
+/// The list verbs answer from the same narrowing the device verb reports as
+/// `available_devices`: per model, its own list; per backend, the union over
+/// the models it serves — so an online model beside a local one contributes
+/// nothing.
+#[tokio::test]
+async fn device_lists_answer_per_model_and_per_backend() {
+    use super_tts_registry_types::manifest::Device;
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/mixed";
+    let mut backend = fixture_backend_devices("mixed", source, "Mixed", "local", vec![Device::Cpu]);
+    let mut online = backend.models[0].clone();
+    online.name = "online".to_string();
+    online.supported_devices = vec![Device::None];
+    let mut accelerated = backend.models[0].clone();
+    accelerated.name = "accelerated".to_string();
+    accelerated.supported_devices = vec![Device::Cpu, Device::Gpu];
+    backend.models.extend([online, accelerated]);
+    *daemon.backends.write().await = vec![backend];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let response = daemon.handle_list_model_devices("local".to_string()).await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+    assert_eq!(response.available_devices, Some(vec!["cpu".to_string()]));
+
+    let response = daemon.handle_list_model_devices("online".to_string()).await;
+    assert_eq!(
+        response.available_devices,
+        Some(Vec::new()),
+        "a remote model runs on nothing local"
+    );
+
+    let response = daemon.handle_list_model_devices("absent".to_string()).await;
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidModel));
+
+    // The backend's list is the union: the CPU everywhere, and the GPU only
+    // where this host actually has one.
+    let response = daemon.handle_list_active_backend_devices().await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+    let devices = response.available_devices.expect("a list");
+    assert_eq!(devices.first().map(String::as_str), Some("cpu"));
+    assert!(devices.iter().all(|d| d == "cpu" || d == "gpu"));
+}
+
+/// The per-model device verbs dispatch through `handle_command`, exercising
+/// the shared protocol parse → core dispatch → handler chain end-to-end. The
+/// command names are wire contract: the HTTP layer calls them by name.
+#[tokio::test]
+async fn model_device_commands_dispatch_through_handle_command() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let mut request = make_request("set_model_device");
+    request.data = Some(serde_json::json!({ "model": "kokoro-82m", "device": "cpu" }));
+    let response = daemon.handle_command(request).await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+    assert_eq!(response.device.as_deref(), Some("cpu"));
+
+    let mut request = make_request("get_model_device");
+    request.data = Some(serde_json::json!({ "model": "kokoro-82m" }));
+    let response = daemon.handle_command(request).await;
+    assert_eq!(response.status, "success");
+    assert_eq!(response.device.as_deref(), Some("cpu"));
+
+    let mut request = make_request("list_model_devices");
+    request.data = Some(serde_json::json!({ "model": "kokoro-82m" }));
+    let response = daemon.handle_command(request).await;
+    assert_eq!(response.available_devices, Some(vec!["cpu".to_string()]));
+
+    let response = daemon
+        .handle_command(make_request("list_active_backend_devices"))
+        .await;
+    assert_eq!(response.available_devices, Some(vec!["cpu".to_string()]));
+}
+
+/// The global default and a model's own device are separate settings, and
+/// the load path reads the model's. Changing the default must not move a
+/// model that was pinned, or the per-model choice would silently expire the
+/// next time anyone touched the global toggle.
+#[tokio::test]
+async fn the_global_default_does_not_override_a_models_own_device() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_devices(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+        vec![
+            super_tts_registry_types::manifest::Device::Cpu,
+            super_tts_registry_types::manifest::Device::Gpu,
+        ],
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let response = daemon
+        .handle_set_model_device("kokoro-82m".to_string(), "cpu".to_string())
+        .await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+
+    // The global setter still works and still writes the global default.
+    let response = daemon.handle_set_device("gpu".to_string()).await;
+    assert_eq!(response.status, "success", "{:?}", response.message);
+    assert_eq!(daemon.config.read().await.device.preferred_device, "gpu");
+
+    let config = daemon.config.read().await;
+    assert_eq!(
+        config.model_device(source, "kokoro-82m"),
+        Some("cpu"),
+        "the model keeps its own choice"
+    );
+    assert_eq!(
+        config.effective_device(source, "kokoro-82m"),
+        "cpu",
+        "and loads on it"
+    );
+    assert_eq!(
+        config.effective_device(source, "some-other-model"),
+        "gpu",
+        "a model with no choice of its own follows the new default"
+    );
+}
+
+// --- The pipeline report ----------------------------------------------------
+
+/// `get_pipeline` answers with a list, not a bare stage, even though super-tts
+/// has exactly one. Clients walk the array and match on `stage`, so the shape
+/// has to be the plural one from the start — the alternative is that adding a
+/// text-normalizer stage in front of synthesis breaks every reader at once.
+#[tokio::test]
+async fn get_pipeline_reports_one_synthesis_stage() {
+    use super_tts_shared::models::protocol::{SYNTHESIS_STAGE, StageRole};
+
+    let daemon = test_daemon().await;
+
+    let response = daemon.handle_get_pipeline().await;
+    assert_eq!(response.status, "success");
+    let stages = response.pipeline.expect("a pipeline report");
+    assert_eq!(stages.len(), 1, "super-tts synthesizes and nothing else");
+    assert_eq!(stages[0].stage, SYNTHESIS_STAGE);
+    assert_eq!(stages[0].role, StageRole::Synthesis);
+}
+
+/// An idle daemon reports the stage as empty and switched off; selecting a
+/// backend fills it and switches it on.
+///
+/// `enabled` is derived from the backend selection because that is the only
+/// on/off state super-tts persists — see `synthesis_stage`. This pins that
+/// derivation: a stage that reported `enabled: true` while nothing was
+/// selected would have a client render a working pipeline over a daemon that
+/// refuses every `speak`.
+#[tokio::test]
+async fn a_stage_is_enabled_exactly_when_a_backend_fills_it() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+
+    let stages = daemon
+        .handle_get_pipeline()
+        .await
+        .pipeline
+        .expect("a pipeline report");
+    assert!(stages[0].source.is_none(), "nothing is selected yet");
+    assert!(stages[0].name.is_none());
+    assert!(!stages[0].enabled, "an empty stage is not switched on");
+
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let stages = daemon
+        .handle_get_pipeline()
+        .await
+        .pipeline
+        .expect("a pipeline report");
+    assert_eq!(stages[0].source.as_deref(), Some(source));
+    assert_eq!(
+        stages[0].name.as_deref(),
+        Some("Kokoro"),
+        "the stage names the backend's display name, not its repo id"
+    );
+    assert!(stages[0].enabled);
+
+    // Clearing the backend idles the daemon, which is what switching the stage
+    // off means here.
+    let _ = daemon.handle_clear_active_backend().await;
+    let stages = daemon
+        .handle_get_pipeline()
+        .await
+        .pipeline
+        .expect("a pipeline report");
+    assert!(stages[0].source.is_none());
+    assert!(!stages[0].enabled);
+}
+
+/// A stage reports its backend and never its model. The two have different
+/// lifetimes — a backend selection cannot fail, a model load can — and the
+/// model slot is `get_model`'s answer. This is the same claim the shared
+/// crate's serialization test makes, pinned here against the state the daemon
+/// actually builds the report from.
+#[tokio::test]
+async fn a_stage_names_a_backend_that_serves_no_loaded_model() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let stages = daemon
+        .handle_get_pipeline()
+        .await
+        .pipeline
+        .expect("a pipeline report");
+    assert!(stages[0].enabled, "the backend fills the stage");
+    assert!(
+        daemon.model.read().await.is_none(),
+        "and nothing is loaded in it"
+    );
+    let slot = daemon.handle_get_model().await.stage_model.expect("a slot");
+    assert!(
+        !slot.loaded,
+        "the model slot is what says nothing is running"
+    );
+}
+
+// --- Stage 1's model slot ---------------------------------------------------
+
+/// `get_model` keeps every field it always answered with — including the error
+/// envelope for the idle case, which `GET /active_model` reads as the normal
+/// "no model loaded" state rather than a failure — and gains the stage-1 model
+/// slot beside them.
+///
+/// The slot is attached to that idle envelope on purpose. "Selected but not
+/// loaded" is only reachable while nothing is loaded, so omitting it there
+/// would leave the very state the field exists for unreadable.
+#[tokio::test]
+async fn get_model_answers_the_stage_slot_even_when_nothing_is_loaded() {
+    use super_tts_shared::models::protocol::SYNTHESIS_STAGE;
+
+    let daemon = test_daemon().await;
+
+    let response = daemon.handle_get_model().await;
+    assert_eq!(
+        response.status, "error",
+        "the idle envelope is unchanged; clients parse it"
+    );
+    assert!(response.current_model.is_none());
+    let slot = response.stage_model.expect("the slot rides along anyway");
+    assert_eq!(slot.stage, SYNTHESIS_STAGE);
+    assert!(slot.model.is_none(), "nothing is selected");
+    assert!(!slot.loaded);
+    assert!(slot.device.is_none(), "and nothing has a device");
+    assert!(slot.switch.is_none(), "nothing is being fetched");
+}
+
+/// A selection with nothing loaded reports the model, `loaded: false`, and the
+/// device it *would* load on.
+///
+/// This is the state a card renders after an unload, and the one that makes
+/// re-loading onto another device a single choice rather than a re-selection
+/// the user has to make from scratch. Reading `model` off the loaded instance
+/// instead of off the persisted preference is what once made this state
+/// indistinguishable from "nothing was ever chosen".
+#[tokio::test]
+async fn the_stage_slot_reports_a_selection_that_is_not_loaded() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    // Selecting the backend clears any model preference, so record the
+    // selection after it — the order a real switch uses.
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+    daemon.config.write().await.update_preferred_model(
+        "kokoro-82m".to_string(),
+        source.to_string(),
+        None,
+    );
+
+    let slot = daemon.handle_get_model().await.stage_model.expect("a slot");
+    assert_eq!(slot.model.as_deref(), Some("kokoro-82m"));
+    assert!(!slot.loaded, "nothing was ever loaded");
+    let device = slot.device.expect("a selected model has a device");
+    assert_eq!(device.preference, "cpu");
+    assert_eq!(
+        device.resolved_accel.as_deref(),
+        Some("cpu"),
+        "`cpu` needs no resolution, so it is reported without a load"
+    );
+}
+
+/// The loaded model's `(name, source)` is what flips `loaded`, not merely the
+/// fact that *something* is loaded.
+///
+/// Mid-switch those differ, and a client that was just told which model the
+/// stage points at has to be told whether *that* model is running — otherwise
+/// a switch from one backend's model to another's reads as "already up" for
+/// the whole of the load.
+#[tokio::test]
+async fn the_stage_slot_reports_a_loaded_selection() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+    daemon.config.write().await.update_preferred_model(
+        "kokoro-82m".to_string(),
+        source.to_string(),
+        None,
+    );
+    seed_loaded_model(&daemon, "kokoro-82m", source).await;
+
+    let response = daemon.handle_get_model().await;
+    assert_eq!(response.status, "success");
+    assert_eq!(response.current_model.as_deref(), Some("kokoro-82m"));
+    let slot = response.stage_model.expect("a slot");
+    assert!(slot.loaded, "the selection is the instance that is up");
+    assert_eq!(
+        slot.device.expect("a device").resolved_accel.as_deref(),
+        Some("cpu"),
+        "resolved from the running instance, not from the preference"
+    );
+
+    // A different model loaded under the same selection is not this selection.
+    seed_loaded_model(&daemon, "some-other-model", source).await;
+    let slot = daemon.handle_get_model().await.stage_model.expect("a slot");
+    assert_eq!(slot.model.as_deref(), Some("kokoro-82m"));
+    assert!(
+        !slot.loaded,
+        "`loaded` answers about the selected model, not about the slot being full"
+    );
+}
+
+/// An in-flight download reaches the slot as `switch`, with the model being
+/// fetched and the backend it is being fetched from.
+///
+/// The tracker records only the model name, so the source comes from the
+/// active backend — which the switch path records *before* the download
+/// starts, precisely so it is the target's backend and not the previous one.
+/// Leaving it empty would make the target unidentifiable whenever two
+/// installed backends serve the same model name.
+#[tokio::test]
+async fn an_in_flight_download_reaches_the_stage_slot() {
+    use crate::download_progress::DownloadProgressTracker;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+    let _ = daemon.handle_set_active_backend(source.to_string()).await;
+
+    let tracker = Arc::new(DownloadProgressTracker::new(
+        "kokoro-82m".to_string(),
+        3,
+        Arc::new(AtomicBool::new(false)),
+    ));
+    daemon
+        .download_manager
+        .start_download(tracker)
+        .expect("nothing else is downloading");
+
+    let slot = daemon.handle_get_model().await.stage_model.expect("a slot");
+    let switch = slot.switch.expect("the download is in flight");
+    assert_eq!(
+        switch.phase, "downloading",
+        "`phase` is the tracker's own status, renamed and not re-derived"
+    );
+    assert_eq!(switch.target.model, "kokoro-82m");
+    assert_eq!(
+        switch.target.source, source,
+        "the backend being fetched from is the one the switch already selected"
+    );
+    assert_eq!(switch.download.total_files, 3);
+}
+
+// --- The language lists -----------------------------------------------------
+
+/// The global list leads with `auto` and then the curated tags.
+///
+/// `auto` is a real choice the setting takes and no tag table declares it, so a
+/// client building its picker from the tags alone would drop the one entry that
+/// works on every model. The tags themselves are region-qualified because the
+/// daemon strips a region down to a model's base language and never the
+/// reverse — offering bare `pt` would throw away the distinction for the models
+/// that carry both `pt-BR` and `pt-PT`.
+#[test]
+fn list_primary_languages_leads_with_auto() {
+    let response = SuperTTSDaemon::handle_list_primary_languages();
+    assert_eq!(response.status, "success");
+    let languages = response.available_languages.expect("a language list");
+    assert_eq!(languages.first().map(String::as_str), Some("auto"));
+    assert!(
+        languages.iter().any(|tag| tag == "en-US"),
+        "a region-qualified tag must be offered: {languages:?}"
+    );
+    assert_eq!(
+        languages.iter().filter(|tag| *tag == "auto").count(),
+        1,
+        "a duplicated `auto` renders as two different choices"
+    );
+}
+
+/// A multilingual model offers `auto` plus exactly what its manifest declares,
+/// and a monolingual one offers nothing at all.
+///
+/// The list is built from the rule `set_model_language` enforces rather than
+/// from `supported_languages` directly, because the two differ in both
+/// directions. A picker filled from the manifest would offer a monolingual
+/// model's tags — every one of which the setter answers `unsupported_language`
+/// to — and would hide `auto`, which the setter always takes.
+#[tokio::test]
+async fn list_model_languages_follows_what_the_setter_accepts() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    *daemon.backends.write().await = vec![fixture_backend_local(
+        "kokoro",
+        source,
+        "Kokoro",
+        "kokoro-82m",
+    )];
+
+    let response = daemon
+        .handle_list_model_languages(source.to_string(), "kokoro-82m".to_string())
+        .await;
+    assert_eq!(response.status, "success");
+    assert_eq!(
+        response.available_languages,
+        Some(vec!["auto".to_string(), "en".to_string()]),
+        "the manifest's tags, with `auto` in front"
+    );
+
+    // And every offered tag is one the setter takes.
+    for tag in ["auto", "en"] {
+        let response = daemon
+            .handle_set_model_language(
+                source.to_string(),
+                "kokoro-82m".to_string(),
+                tag.to_string(),
+            )
+            .await;
+        assert_eq!(
+            response.status, "success",
+            "the list offered `{tag}` but the setter refused it"
+        );
+    }
+
+    // A monolingual model has nothing to choose: an empty list, not an error,
+    // so a client can hide the control without special-casing a status code.
+    daemon.backends.write().await[0].models[0].is_multilingual = false;
+    let response = daemon
+        .handle_list_model_languages(source.to_string(), "kokoro-82m".to_string())
+        .await;
+    assert_eq!(response.status, "success");
+    assert_eq!(response.available_languages, Some(Vec::new()));
+}
+
+/// Listing the languages of a model no backend serves is `unknown_model`, the
+/// same classified 404 its sibling verbs answer with — an empty list would say
+/// "this model has no languages", which is a different and wrong claim.
+#[tokio::test]
+async fn list_model_languages_refuses_an_unknown_model() {
+    let daemon = test_daemon().await;
+
+    let response = daemon
+        .handle_list_model_languages("github.com/x/absent".to_string(), "nope".to_string())
+        .await;
+    assert_eq!(response.status, "error");
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidModel));
+    assert!(response.available_languages.is_none());
+}

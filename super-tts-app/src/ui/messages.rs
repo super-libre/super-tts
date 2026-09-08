@@ -145,14 +145,20 @@ pub enum DaemonMessage {
     DaemonEventsReceived(Vec<super_tts_shared::models::protocol::NotificationEvent>),
 }
 
-/// Model identity: startup load, catalog, and the current/loaded model.
+/// Model identity: startup load, catalog, and the synthesis stage's selection.
 #[derive(Debug, Clone)]
 pub enum ModelMessage {
-    LoadInitialData, // Load models + device info at startup
+    LoadInitialData, // Load the stage view, its models, and its devices at startup
     AvailableModelsLoaded(Vec<(String, String)>),
-    CurrentModelLoaded {
-        model: String,
-        source: String,
+    /// A point-in-time read of the whole synthesis stage: the backend filling
+    /// it, the model it is pointed at, whether that model is up, and the
+    /// accelerator it is actually on.
+    ///
+    /// One message rather than a backend one and a model one, because the two
+    /// are read together and a card that applied half of them would draw a
+    /// backend name over a model row from before the switch.
+    StageViewLoaded {
+        view: crate::daemon::client::StageState,
         /// `current_model_epoch` captured when this snapshot was requested.
         /// The handler applies the snapshot only if the epoch is unchanged —
         /// otherwise a live `model_switched` superseded it and wins.
@@ -163,13 +169,13 @@ pub enum ModelMessage {
         source: String,
     },
     ModelError(String),
-    /// A `fetch_current_model` snapshot query failed. Carries the
-    /// `current_model_epoch` captured when the fetch was issued: the handler
-    /// clears the loaded model only if the epoch is unchanged. If a live
-    /// `model_switched` advanced the epoch since, the failure is stale and is
-    /// logged-and-dropped rather than clobbering the fresher state — the same
-    /// guard `CurrentModelLoaded` applies to its success path (audit 2 Tier 1 #8).
-    CurrentModelFetchFailed {
+    /// A stage-view snapshot query failed. Carries the `current_model_epoch`
+    /// captured when the fetch was issued: the handler clears the loaded model
+    /// only if the epoch is unchanged. If a live `model_switched` advanced the
+    /// epoch since, the failure is stale and is logged-and-dropped rather than
+    /// clobbering the fresher state — the same guard `StageViewLoaded` applies
+    /// to its success path (audit 2 Tier 1 #8).
+    StageViewFetchFailed {
         epoch: u64,
         error: String,
     },
@@ -182,19 +188,32 @@ pub enum ModelsPageMessage {
     /// Activate a Models-page tab (Installed / Download) in the tab bar.
     ModelsTabActivated(segmented_button::Entity),
     /// User picked a model in the active-backend card's model dropdown.
-    /// Stages it for the Load button — does *not* call the daemon. Resets
-    /// the staged device to the model's first supported device.
+    /// Stages it for the Load button — the only daemon calls it makes are the
+    /// reads that fetch that model's device and language, since both are
+    /// per-model answers the card cannot draw without asking.
     StageActiveModel(String),
     /// User picked a device in the active-backend card's device dropdown.
     /// Stages it for the Load button — does *not* call the daemon.
     StageActiveDevice(String),
-    /// User clicked the Load button. Fires `set_device(staged_device)` then
-    /// `set_model(staged_model)` for the active backend. No-op when nothing
-    /// is staged or a load is already in progress.
+    /// User clicked the Load button. Writes the staged device against the
+    /// staged *model* when it differs from what the daemon already holds for
+    /// it, then points the stage at that model. No-op when nothing is staged
+    /// or a load is already in progress.
     LoadStagedModel,
-    /// User clicked the Unload button. `DELETE /active_model` drops the
-    /// model but keeps the active backend selected.
+    /// User clicked the Unload button. `DELETE /pipeline/{stage}/model` frees
+    /// the device memory but keeps both the backend and the model it was
+    /// pointed at, so loading it again — onto another device, say — is one
+    /// click rather than a re-pick.
     UnloadActiveModel,
+    /// User clicked Reload. Re-instantiates the same model on the same device
+    /// (`POST /pipeline/{stage}/model/reload`), downloading nothing.
+    ///
+    /// Rarely the right button, and deliberately not the only route: writing a
+    /// backend option or secret already reloads every stage running that
+    /// backend. This is for what the daemon cannot see change — a keyring entry
+    /// edited by another tool, a model file replaced underneath it — where the
+    /// alternative is Unload, re-pick, Load.
+    ReloadActiveModel,
     /// Open the per-backend configuration sub-view for `source`.
     OpenBackendConfig(String),
     /// Leave the configuration sub-view and return to the backend list.
@@ -206,12 +225,6 @@ pub enum ModelsPageMessage {
     /// backend and surface the model-card error (audit Tier 3 #37).
     BackendSelectFailed {
         prev_active: Option<String>,
-        message: String,
-    },
-    /// A `LoadStagedModel` switch failed: restore the previously-current device
-    /// and surface the model-card error (audit Tier 3 #37).
-    StagedModelLoadFailed {
-        prev_device: String,
         message: String,
     },
     /// Deselect the active backend (unload its model → daemon idle).
@@ -285,10 +298,48 @@ pub enum ModelsPageMessage {
 }
 
 /// Device inventory + device-switch errors.
+///
+/// Two loads rather than one because the daemon answers two different
+/// questions: what the stage's backend can run on at all, and what one
+/// particular model can run on. The narrow answer is the accurate one, but it
+/// cannot be asked until a model is picked, so the broad one is what a device
+/// control has to draw itself from until then.
 #[derive(Debug, Clone)]
 pub enum DeviceMessage {
-    DeviceInfoLoaded(String, Vec<String>), // Current device, available devices
-    DeviceError(String),                   // Device switching error
+    /// `GET /pipeline/{stage}/device/list` — the union over the models the
+    /// stage's backend serves. Re-read whenever that backend changes, since it
+    /// is that backend's answer and not the host's.
+    StageDevicesLoaded(Vec<String>),
+    /// `GET /pipeline/{stage}/model/{model}/device` for one model: its stored
+    /// preference, what that resolved to, and the devices this host can offer
+    /// it. Tagged with the `(source, model)` it describes so a late answer for
+    /// a model the user has already moved on from is dropped rather than
+    /// applied to whatever is staged now.
+    ModelDeviceLoaded {
+        source: String,
+        model: String,
+        device: crate::daemon::client::v1::pipeline::device::ModelDevice,
+    },
+    /// `GET /pipeline/{stage}/model/{model}/device/list` — only the offered
+    /// devices, for the case where what a model *may* run on has changed while
+    /// what it is *set to* has not: a backend update can swap a CPU-only asset
+    /// for an accelerated one. Re-reading the whole block there would overwrite
+    /// a preference nothing touched.
+    ModelDevicesListed {
+        source: String,
+        model: String,
+        devices: Vec<String>,
+    },
+    /// The accelerator the stage's model actually came up on, read back from
+    /// its slot once a load reports success.
+    ///
+    /// A `gpu` preference is only ever a request — it can fall back to the CPU
+    /// — so nothing may claim an accelerator until a load has confirmed one.
+    /// The `ready` broadcast carries the same fact, but this read is ordered
+    /// against the load that produced it, where the broadcast may arrive before
+    /// or after the switch's own reply.
+    RunningDeviceLoaded(Option<String>),
+    DeviceError(String), // Device switching error
 }
 
 /// Model-download progress lifecycle.
@@ -317,6 +368,17 @@ pub enum NotificationMethodMessage {
 #[derive(Debug, Clone)]
 pub enum BackendMessage {
     BackendsLoaded(Vec<BackendInfo>),
+    /// The backends `GET /pipeline/{stage}/backend/list` says can fill the
+    /// synthesis stage — the subset of the catalog above that serves this
+    /// stage's role.
+    ///
+    /// Read separately because `POST /pipeline/{stage}` refuses a backend that
+    /// serves nothing the stage can run: a picker built from the general
+    /// catalog offers choices the daemon then rejects, and the user only finds
+    /// out by making one. The two lists hold the same backends while synthesis
+    /// is the only role, which is exactly why the wrong one is easy to reach
+    /// for and would go unnoticed until a second stage exists.
+    StageBackendsLoaded(Vec<BackendInfo>),
     /// Re-fetch the backend catalog (e.g. after a secret/option save) so the
     /// UI reflects the new effective values.
     BackendsReload,
@@ -355,6 +417,14 @@ pub enum BackendMessage {
         source: String,
         name: String,
     },
+    /// A value was picked from an option's dropdown. Unlike the text field,
+    /// which stages keystrokes and waits for Save, a dropdown has nothing to
+    /// press afterwards, so choosing writes.
+    BackendOptionChosen {
+        source: String,
+        name: String,
+        value: String,
+    },
     BackendOptionReset {
         source: String,
         name: String,
@@ -374,14 +444,35 @@ pub enum LanguageMessage {
     LanguagePickerQueryChanged(String),
     /// Global Primary Language loaded from the daemon (None = unset).
     PrimaryLanguageLoaded(Option<String>),
+    /// The tags `GET /settings/language/list` says the global setting accepts.
+    ///
+    /// The daemon's own vocabulary rather than a list this app curates: it is
+    /// the union of what the installed models can speak, so it grows and
+    /// shrinks with the installed backends and a hard-coded copy would offer
+    /// tags no model serves — and, worse, quietly stop offering ones a newly
+    /// installed backend does.
+    PrimaryLanguagesListed(Vec<String>),
     /// User picked a global language (None = clear → DELETE).
     PrimaryLanguageSelected(Option<String>),
-    /// Per-model resolution block (`/backends/{source}/models/{model}/language`)
-    /// loaded from the daemon for `(source, model)`.
+    /// Per-model resolution block
+    /// (`/pipeline/{stage}/model/{model}/language`) loaded from the daemon for
+    /// `(source, model)`.
     ModelLanguageLoaded {
         source: String,
         model: String,
         block: crate::state::LanguageResolution,
+    },
+    /// The tags `GET /pipeline/{stage}/model/{model}/language/list` says this
+    /// model can be pinned to.
+    ///
+    /// A separate message from the resolution block because they change on
+    /// different occasions: pinning a language rewrites the block and leaves
+    /// this list exactly as it was, so folding the two would either re-request
+    /// what cannot have changed or blank the picker on every pick.
+    ModelLanguagesListed {
+        source: String,
+        model: String,
+        languages: Vec<String>,
     },
     /// User picked a per-model override.
     /// `choice = None` → Follow global (DELETE override);

@@ -64,6 +64,31 @@ macro_rules! wire_enum_strings {
                 s.parse().map_err(::serde::de::Error::custom)
             }
         }
+
+        // The OpenAPI schema comes off the same table as `Serialize` and
+        // `FromStr`, for the same reason those do. `#[derive(ToSchema)]` reads
+        // the *Rust* variant names, so it would publish `SciFi` as an accepted
+        // value of a field that only ever accepts `sci_fi` — a spec that
+        // disagrees with the endpoint it documents, and silently, since nothing
+        // type-checks a schema against a hand-written `Serialize`.
+        #[cfg(feature = "openapi")]
+        impl ::utoipa::PartialSchema for $ty {
+            fn schema() -> ::utoipa::openapi::RefOr<::utoipa::openapi::schema::Schema> {
+                ::utoipa::openapi::ObjectBuilder::new()
+                    .schema_type(::utoipa::openapi::Type::String)
+                    .enum_values(::std::option::Option::Some(
+                        Self::WIRE_VARIANTS.iter().copied(),
+                    ))
+                    .into()
+            }
+        }
+
+        #[cfg(feature = "openapi")]
+        impl ::utoipa::ToSchema for $ty {
+            fn name() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(::std::stringify!($ty))
+            }
+        }
     };
 }
 

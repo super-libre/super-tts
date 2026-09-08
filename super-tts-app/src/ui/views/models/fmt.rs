@@ -121,11 +121,12 @@ pub(super) fn vram_warning<'a>(needed: u64, available: u64) -> Element<'a, Messa
 }
 
 /// The advisory shown under the staged picker in place of a viable device: a
-/// local model whose `offered_devices` came back empty because this specific
-/// install cannot run it on any device (e.g. a GPU-only model with only a
-/// CPU asset installed), not because it needs none. Unlike [`vram_warning`]
-/// this one is blocking — the Load button is disabled while it shows, so a
-/// silently inert button doesn't ship with no explanation.
+/// local model for which the daemon offered no device at all, because this
+/// specific install cannot run it on any (e.g. a GPU-only model with only a CPU
+/// asset installed) — not because it needs none, which is the online sentinel's
+/// separately-detected case. Unlike [`vram_warning`] this one is blocking — the
+/// Load button is disabled while it shows, so a silently inert button doesn't
+/// ship with no explanation.
 pub(super) fn no_viable_device_warning<'a>(model: &str) -> Element<'a, Message> {
     use crate::ui::icons;
     use cosmic::iced::Alignment;

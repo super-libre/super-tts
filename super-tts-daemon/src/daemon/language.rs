@@ -31,6 +31,34 @@ pub struct ResolvedLanguage {
     pub source: LanguageSource,
 }
 
+/// The tags the global synthesis-language setting offers.
+///
+/// Region-qualified throughout, with one exception: Chinese uses the ISO 15924
+/// script subtags `zh-Hans` / `zh-Hant`, because script — not region — is what
+/// separates Simplified from Traditional. A region is a country code, or a UN
+/// M.49 code for a multi-country region (`es-419`).
+///
+/// Region-qualified deliberately, even though most models declare bare
+/// language codes: the region-stripping rule below reduces a chosen tag to the
+/// base language a model does list, so offering `pt-BR` costs a model that only
+/// knows `pt` nothing, while offering bare `pt` would throw away the
+/// distinction for the models that *do* carry both. The stripping only works in
+/// that direction, so the published list has to be the specific one.
+///
+/// The desktop app has shipped an identical hand-maintained copy of this list
+/// in its own picker. That is what this constant exists to end: every client
+/// but that one had no way to know what the setting takes, and the two copies
+/// could only drift apart silently — a tag added here and not there is a
+/// language the daemon supports and the user cannot reach.
+pub const GLOBAL_LANGUAGES: &[&str] = &[
+    "af-ZA", "ar-EG", "ar-SA", "bn-BD", "bg-BG", "ca-ES", "zh-Hans", "zh-Hant", "hr-HR", "cs-CZ",
+    "da-DK", "nl-NL", "en-AU", "en-CA", "en-IN", "en-GB", "en-US", "et-EE", "fi-FI", "fr-BE",
+    "fr-CA", "fr-FR", "de-AT", "de-DE", "de-CH", "el-GR", "he-IL", "hi-IN", "hu-HU", "id-ID",
+    "it-IT", "ja-JP", "ko-KR", "ms-MY", "no-NO", "fa-IR", "pl-PL", "pt-BR", "pt-PT", "ro-RO",
+    "ru-RU", "sk-SK", "es-419", "es-MX", "es-ES", "es-US", "sw-KE", "sv-SE", "tl-PH", "ta-IN",
+    "te-IN", "th-TH", "tr-TR", "uk-UA", "ur-PK", "vi-VN", "cy-GB",
+];
+
 fn has_region(tag: &str) -> bool {
     tag.contains('-')
 }

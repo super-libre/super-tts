@@ -11,8 +11,9 @@ leaks nothing about other apps' activity. It pairs naturally with
 
 For the richer operator views — in-flight model switches, GPU memory, device
 introspection — use the [`settings`](./settings.md) scope's
-[`GET /active_model`](../endpoints/v1/active_model.md) and
-[`GET /active_device`](../endpoints/v1/active_device.md).
+[`GET /pipeline/1`](../endpoints/v1/pipeline/stage.md),
+[`GET /pipeline/1/model`](../endpoints/v1/pipeline/model.md) and
+[`GET /pipeline/{stage}/model/{model}/device`](../endpoints/v1/pipeline/device.md).
 
 ## Endpoint reference
 

@@ -1,18 +1,131 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `POST /v1/speak` and `POST /v1/speak/stop` — synthesize text and play it.
 //!
+//! Contract: `docs/protocol/endpoints/v1/speak.md` and
+//! `docs/protocol/endpoints/v1/speak/stop.md`.
+//!
 //! The endpoint is deliberately thin: it validates the envelope, hands the body
 //! to the command dispatcher, and maps the result. Everything that decides how
 //! speech happens lives in [`crate::daemon::speech`].
+//!
+//! Text that is still being written — an LLM reply spoken as it arrives — goes
+//! to [`super::speak_stream`] instead; this pair takes complete text.
 
-use crate::daemon::http::internal::helpers::dispatch::{build_request, dispatch, json_response};
+use crate::daemon::http::internal::helpers::dispatch::{
+    build_request, dispatch, json_response, narrowed,
+};
 use crate::daemon::http::state::AppState;
+use crate::daemon::http::wire::{ErrorEnvelope, ReasonEnvelope};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use super_tts_shared::models::protocol::{DaemonResponse, ErrorCode};
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
+/// The body of `POST /speak`.
+///
+/// The handler parses a bare [`Value`] rather than this type, because the
+/// dispatcher re-reads the same object and going through a typed struct would
+/// mean maintaining two spellings of the same fields. This is what that body's
+/// shape *is*, published in the `OpenAPI` document and kept beside the handler
+/// that validates it.
+#[derive(Deserialize, ToSchema)]
+#[allow(dead_code)]
+pub(crate) struct SpeakBody {
+    /// What to speak. Empty or whitespace-only is `400 invalid_value`, and the
+    /// daemon caps it at 50 000 characters — a model may declare a lower cap of
+    /// its own in its manifest.
+    #[schema(example = "The kettle is boiling.")]
+    pub(crate) text: String,
+    /// A voice the loaded model declares. Omitted means the model's
+    /// `default_voice`. A cloned voice is named `voice:<uuid>` — see
+    /// `GET /voice/list`.
+    #[serde(default)]
+    #[schema(example = "af_bella")]
+    pub(crate) voice: Option<String>,
+    /// BCP-47 tag overriding `/settings/language` for this utterance only.
+    #[serde(default)]
+    #[schema(example = "en")]
+    pub(crate) language: Option<String>,
+    /// Rate multiplier, roughly 0.5–2.0. Backends that cannot vary rate ignore
+    /// it rather than failing.
+    #[serde(default)]
+    #[schema(example = 1.0)]
+    pub(crate) speed: Option<f32>,
+    /// Free-text delivery guidance, for models that accept it. Ignored
+    /// otherwise.
+    #[serde(default)]
+    #[schema(example = "Read this calmly.")]
+    pub(crate) instructions: Option<String>,
+}
+
+/// `POST /speak` — the utterance was accepted and is being played out.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct UtteranceAccepted {
+    /// Always `success`.
+    #[schema(example = "success")]
+    status: &'static str,
+    /// Names this utterance on the `speaking_state` and `speech_progress`
+    /// event topics, and is what `POST /speak/stop` reports having cancelled.
+    #[schema(example = "utt_9f2c1e40")]
+    utterance_id: String,
+}
+
+/// `POST /speak/stop` — what, if anything, was stopped.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct UtteranceStopped {
+    /// Always `success`, whether or not anything was speaking.
+    #[schema(example = "success")]
+    status: &'static str,
+    /// The utterance that was cancelled. **Absent when nothing was speaking** —
+    /// use its presence, not the status, to tell the two apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "utt_9f2c1e40")]
+    utterance_id: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/speak",
+    tag = "speak",
+    summary = "Speak a piece of text",
+    description = "\
+Synthesizes `text` with the loaded model and plays it on the daemon's output \
+device.
+
+`202`, not `200`: the call returns once the audio is *queued*, and the device is \
+still playing it out when you read the response. To follow the utterance to its \
+end, subscribe to `speaking_state` and `speech_progress` on `GET /events` with the \
+`playback_events` scope — those outlive any one request, which is what a status \
+widget actually needs.
+
+**One utterance at a time, newest wins.** Speaking while something is already \
+playing interrupts it: that is what \"speak this instead\" means, and it is why \
+this endpoint is not refused while the daemon is busy. Only swapping the model out \
+from under live synthesis is refused, by `POST /pipeline/{stage}/model`.
+
+The daemon normalizes `text` first — markup that would otherwise be read out \
+literally is stripped, and long text is split on sentence boundaries so playback \
+starts before the whole thing is synthesized. Numbers, dates and currency are \
+passed through untouched, because a wrong number-to-words is worse than none.
+
+For text that is still being generated, use `GET /speak/stream` instead.",
+    request_body(content = SpeakBody, description = "`text` is required; everything else falls back to the daemon's configured defaults."),
+    security(("session_token" = ["speak"])),
+    responses(
+        (status = 202, description = "Queued, and playing out. `utterance_id` names it.", body = UtteranceAccepted),
+        (status = 400, description = "`text` missing, empty, or over the cap; a `voice` the model does not declare or whose shape it did not opt into; or a malformed field.", body = ErrorEnvelope),
+        (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
+        (status = 403, description = "The token lacks the `speak` scope.", body = ErrorEnvelope),
+        (status = 409, description = "No model is loaded (`model_not_loaded`). Load one with `POST /pipeline/1/model` and retry.", body = ErrorEnvelope),
+        (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
+        (status = 500, description = "The backend failed, or the output device could not be opened. `message` carries the reason.", body = ErrorEnvelope),
+    ),
+)]
 /// `POST /v1/speak` — synthesize `text` with the active model and play it.
 ///
 /// Answers `202 Accepted` with the utterance id: the request returns once the
@@ -43,23 +156,61 @@ pub(crate) async fn speak(
 
     let request = build_request("speak", Some(body));
     let response = dispatch(&state.daemon, request).await;
-    if response.status == "success" {
-        return (StatusCode::ACCEPTED, axum::Json(response)).into_response();
+    if response.status != "success" {
+        return json_response(&response).into_response();
     }
-    json_response(&response).into_response()
+    // `handle_speak` sets `utterance_id` on every success; the fallback keeps
+    // the endpoint answering its own shape rather than a partial one if a
+    // future command path ever forgets.
+    let accepted = UtteranceAccepted {
+        status: "success",
+        utterance_id: response.utterance_id.unwrap_or_default(),
+    };
+    (StatusCode::ACCEPTED, axum::Json(accepted)).into_response()
 }
 
+#[utoipa::path(
+    post,
+    path = "/speak/stop",
+    tag = "speak",
+    summary = "Stop the utterance now playing",
+    description = "\
+Cancels in-flight synthesis, drops whatever audio is queued behind it, and flushes \
+the output ring. The daemon then publishes `speaking_state` with \
+`is_speaking: false` to `GET /events` subscribers.
+
+**Idempotent, and never an error.** Stopping when nothing is speaking succeeds: a \
+client cancelling on a keypress should not have to win a race to get a clean \
+result, nor distinguish \"I stopped it\" from \"it had already finished\" to avoid \
+showing the user an error. `utterance_id` is present only in the first case.
+
+Unlike closing a connection, this works regardless of who started the utterance. \
+`POST /speak` returns as soon as the audio is queued, so by the time a user reaches \
+for a stop button there is no connection left to close — which is the whole reason \
+this endpoint exists.",
+    security(("session_token" = ["speak"])),
+    responses(
+        (status = 200, description = "Stopped, or nothing was speaking.", body = UtteranceStopped),
+        (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
+        (status = 403, description = "The token lacks the `speak` scope.", body = ErrorEnvelope),
+        (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
+    ),
+)]
 /// `POST /v1/speak/stop` — stop the current utterance and drop queued audio.
 ///
 /// Succeeds whether or not anything was speaking: a client cancelling on a
 /// keypress should not have to know whether it won the race.
-pub(crate) async fn speak_stop(State(state): State<AppState>) -> impl IntoResponse {
+pub(crate) async fn speak_stop(State(state): State<AppState>) -> Response {
     let request = build_request("stop_speaking", None);
-    json_response(&dispatch(&state.daemon, request).await)
+    let response = dispatch(&state.daemon, request).await;
+    narrowed(response, |r| UtteranceStopped {
+        status: "success",
+        utterance_id: r.utterance_id,
+    })
 }
 
-pub(crate) fn routes() -> axum::Router<AppState> {
-    axum::Router::new()
-        .route("/speak", axum::routing::post(speak))
-        .route("/speak/stop", axum::routing::post(speak_stop))
+pub(crate) fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(speak))
+        .routes(routes!(speak_stop))
 }

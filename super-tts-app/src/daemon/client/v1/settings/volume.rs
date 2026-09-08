@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `/volume` — audio-cue master volume (0–100).
+//! `/settings/volume` — audio-cue master volume (0–100).
+//!
+//! The loudness of the start/stop tones, not of the speech: turning this to `0`
+//! silences the cues and leaves synthesis at full volume. Which cues play is
+//! [`super::audio_theme`], kept separate because a user who wants quieter cues
+//! usually does not want different ones.
 
 settings_getter!(
-    get_volume -> u8, "/volume", "get_volume",
+    get_volume -> u8, "/settings/volume", "get_volume",
     |resp| parse_volume(resp.message.as_deref())
 );
-settings_setter!(set_volume, volume: u8, "/volume", "volume", "set_volume");
+settings_setter!(set_volume, volume: u8, "/settings/volume", "volume", "set_volume");
 
 /// Parse the daemon's `message` field ("Volume is 75") into a 0–100 level,
 /// falling back to 100 when the field is absent or does not end in a valid

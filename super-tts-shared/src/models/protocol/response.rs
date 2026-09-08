@@ -129,13 +129,39 @@ pub struct DaemonResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_models_dir: Option<Option<String>>,
 
-    // Synthesis language: for GET /language a string|null; for
-    // GET /backends/{source}/models/{model}/language the resolution block. See
-    // docs/protocol/endpoints/v1/{language,backends/model-language}.md.
+    // Synthesis language: for GET /settings/language a string|null; for
+    // GET /pipeline/{stage}/model/{model}/language the resolution block. See
+    // docs/protocol/endpoints/v1/settings/language.md and
+    // docs/protocol/endpoints/v1/pipeline/language.md.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<Value>,
+
+    /// The BCP-47 tags a language setting will accept, plus the reserved
+    /// `auto`. Answers both `/settings/language/list` (what the global setting
+    /// takes) and `/pipeline/{stage}/model/{model}/language/list` (what one
+    /// model takes, which may be narrower).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_languages: Option<Vec<String>>,
+
+    /// Every pipeline stage, in order — the body of `GET /pipeline`.
+    ///
+    /// A typed report rather than a `Value`: the stage shape is published in
+    /// the `OpenAPI` document, and a schema cannot be generated from arbitrary
+    /// JSON. See [`StageReport`](super::StageReport).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<Vec<super::StageReport>>,
+
+    /// One stage's model slot — the body of `GET /pipeline/{stage}/model`.
+    ///
+    /// Separate from `pipeline` because it has a different lifetime: a stage is
+    /// a durable selection and its model has a runtime. Reporting the model
+    /// inside the stage is what once let a client read "backend chosen" as
+    /// "model running".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_model: Option<super::StageModelReport>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DownloadProgress {
     pub model_name: String,
@@ -155,6 +181,7 @@ pub struct DownloadProgress {
     pub error: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NotificationEvent {
     #[serde(rename = "type")]
@@ -406,6 +433,7 @@ impl DaemonResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 /// One GPU as reported by [`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md).
 /// `vendor` is a lowercase `snake_case` tag (`nvidia` / `amd` / `intel` /
 /// `apple` / `unknown`). `total_bytes` is dedicated VRAM for discrete GPUs and
@@ -428,6 +456,7 @@ pub struct GpuInfo {
     pub arch_target: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 /// Host-wide GPU toolchain/driver versions reported on
 /// [`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md), independent
 /// of any one GPU. Each field is `null` when that accelerator's runtime isn't
@@ -443,12 +472,14 @@ pub struct GpuHostInfo {
     pub vulkan: Option<VulkanHostInfo>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 /// The installed NVIDIA driver's CUDA version, e.g. `"13.3"`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CudaHostInfo {
     pub driver_version: String,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 /// The installed `ROCm` userspace release, e.g. `"6.2.4"`. Advisory only — see
 /// `docs/protocol/endpoints/v1/gpu_info.md`; `arch_target` is what a build must
 /// actually match.
@@ -457,6 +488,7 @@ pub struct RocmHostInfo {
     pub version: String,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 /// The highest Vulkan API version any installed driver advertises, e.g.
 /// `"1.3.280"`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

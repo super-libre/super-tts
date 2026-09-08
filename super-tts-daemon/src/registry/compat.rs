@@ -300,6 +300,7 @@ mod tests {
             license: "Apache-2.0".into(),
             kind: kind.into(),
             contract: "v1".into(),
+            min_client: None,
             entrypoint: "t".into(),
             allowed_hosts: vec![],
             online: false,

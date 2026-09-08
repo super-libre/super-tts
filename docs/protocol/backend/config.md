@@ -65,7 +65,7 @@ description = "Local Kokoro text-to-speech."
 | `version`    | string | yes             | Backend version (semver).                                            |
 | `kind`       | string | yes             | `subprocess` or `wasm` — selects the transport.                       |
 | `entrypoint` | string | yes             | Path, relative to the backend directory, to the executable (`subprocess`) or the `.wasm` component (`wasm`). |
-| `contract`   | string | yes             | The contract version the backend implements. Must be `v1`; unknown versions are rejected. |
+| `contract`   | string | yes             | The [contract generation](#contract-generations) the backend implements. `v1` is the only one so far. Declare the lowest generation whose fields you use; a generation this build does not know is rejected. |
 | `license`    | string | for publication | SPDX identifier of a current OSI-approved or FSF Free/Libre license (e.g. `Apache-2.0`, `MIT`, `GPL-3.0-only`), or the literal `other` for a license outside that set. Required for registry publication; optional for locally installed backends. |
 | `description`| string | yes             | One-line, human-readable summary shown in the registry/Browse listing. |
 
@@ -91,6 +91,99 @@ controls, so two unrelated authors may both publish a backend named
 
 `id` names the install directory. It is not part of model identity, which is
 the `(name, source)` pair described in [contract.md](./contract.md).
+
+### Contract generations
+
+`contract` is the one thing a manifest says about what it needs from Super
+TTS. A generation names a set of manifest fields and backend routes, and each
+generation **extends** the one before rather than replacing it: a later
+generation is everything the earlier one defines, plus what it adds. Declare
+the lowest generation whose fields you use.
+
+| Generation | Covers                                                                                                                                             | First supported by |
+|------------|------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| `v1`       | The contract as this document describes it: discovery from `backend.toml`, `POST /v1/load`, `POST /v1/synthesize`, `POST /v1/cancel`, and the cloned-voice registration routes for models that declare them. | Super TTS 0.1.0    |
+
+`v1` is currently the only generation, so every manifest declares it and there
+is no second row to choose between. The machinery below is described anyway,
+because its whole value is that it is already in place: it is what will let a
+`v2` be introduced without every Super TTS released before it having to be
+taught something first.
+
+Extending the contract does not oblige a backend to serve all of it. Which
+routes a backend must implement is decided by the models it declares, not by
+its generation: a backend whose models are all `preset` or `described` never
+receives [`POST /v1/voices`](./contract.md#post-v1voices) and need not
+implement it.
+The generation says what the daemon may *expect to find*; the models say what
+it will actually call.
+
+You never write a Super TTS version. The generation implies one, and the
+registry carries it: the indexer stamps every index entry with `min_client`,
+the release that first understood that entry's generation. It is **reported,
+never compared** — a daemon decides compatibility by whether it can parse the
+generation at all, so a prerelease of the release named there (`0.2.0-beta.1`,
+which semver orders *below* `0.2.0`) is not wrongly locked out. It is there so
+that a client meeting a backend it cannot install can name the version to
+update to, instead of showing only a failure to parse.
+
+The refusal itself needs no field. `contract` is a closed set on the reading
+side, so a build that predates a generation cannot parse a manifest declaring
+it, and says which ones it does know:
+
+```
+unknown contract `v2`; this build knows v1
+```
+
+It is the *absence* of knowledge that refuses. That is what makes every
+generation added in future gate itself against every Super TTS already
+released — this one included — with no `min_version` field anyone had to think
+to add first.
+
+Which generation introduced, or began requiring, each manifest field lives in
+one table (`CONTRACT_FIELDS`, in `super-tts-registry-types`). It is empty while
+`v1` is the only generation: there is no earlier contract for a field to be
+withheld from. It is the extension point rather than dead weight — adding a
+field to a `v2` means adding a row, and both the manifest parser and the
+published `backend.schema.json` learn the rule from that row without being
+taught separately, so an editor bound to the schema flags exactly what the
+parser would refuse, before anything is released.
+
+A row expresses one of two rules. A field **added** in a generation may not be
+spelled under an older one:
+
+```
+`[[models]].example_field` requires `contract = "v2"`, but this manifest declares
+`contract = "v1"` — raise the contract to use the field, or remove the field to
+stay on `v1`
+```
+
+Both fixes are named because they are not equivalent. Raising the contract is
+right for a manifest that means to use the field, but it also raises the
+release floor for everyone installing the backend; an author who wrote the
+field's *default* value out by hand wants the other fix. Spelling a newer
+field with its default value still counts as declaring it — the rule is about
+what the document says, not about what the parsed struct ends up holding.
+
+A field a generation **requires** is the mirror image, for closing an
+optionality that only survived for backward compatibility:
+
+```
+`contract = "v2"` requires `[backend].example_field`, which this manifest does not
+declare — add it, or drop to `contract = "v1"` where it is optional
+```
+
+Only field *names* are versioned this way. A generation that widens an
+existing field's value set instead — a new `voice_kinds` entry, a new device —
+cannot be expressed in that table, and is caught by that field's own parser.
+
+These rules apply to a manifest being **admitted**: a registry install, a
+custom repo, an import from a directory, and the indexer itself. A backend
+already installed on this machine is parsed with them switched off. Their job
+is to stop a manifest getting in, and that one is already in — enforcing them
+at discovery would make a backend that installed cleanly under an earlier
+build vanish from the catalog, taking its downloaded models out of reach, over
+a file the user did not write and cannot be expected to edit.
 
 ## `[network]`
 
@@ -158,15 +251,51 @@ label       = "Request timeout"
 description = "Per-request timeout in seconds."
 type        = "integer"
 default     = 30
+
+[[options]]
+name        = "output_format"
+label       = "Output format"
+description = "Container the provider returns audio in."
+type        = "string"
+default     = "wav"
+choices     = ["wav", "mp3", "opus"]
 ```
+
+A `bool` option is a switch: its two values are named by its type, so there is
+nothing else to offer. Every other option is a free-text field unless it says
+otherwise.
+
+`choices` is how it says otherwise. Declaring it means the option accepts a
+closed set, and the client renders a dropdown over that set instead of a text
+box. Declare it whenever the option has one. Writing the allowed values into
+the `description` instead leaves the user a text field, and a value that is
+merely close enough — `mp3 ` with a trailing space, or an `ogg` the backend
+never had — is stored and injected into the load headers as though the backend
+knew it.
+
+The daemon refuses a write of any value the list does not offer, so `choices`
+is a contract and not only a hint:
+`POST /v1/backend/{backend_id}/option/{name}` answers `400 invalid_value`,
+naming what is on offer. The settings dropdown is not the only thing that
+writes there, and the stored value has to stay one the backend understands.
+Clearing an override is still `DELETE`, whatever the option's shape.
+
+A stored value that is no longer offered — a backend that dropped a choice its
+user had picked — selects nothing rather than the nearest row, so the user
+picks again knowingly instead of being silently moved.
+
+Omitting `choices` is the open-ended option, which is what every manifest
+written before the field, and every genuinely free-form option like
+`base_url`, already is.
 
 | Field         | Type           | Required | Notes                                                  |
 |---------------|----------------|----------|--------------------------------------------------------|
 | `name`        | string         | yes      | snake_case identifier the backend reads the value by. `[a-z][a-z0-9_]*`, unique within the table. |
 | `label`       | string         | no       | Human-readable label shown in the settings UI. Falls back to `name` when absent. |
 | `description` | string         | yes      | Help text shown beside the input in the settings UI.   |
-| `type`        | string         | no       | `string`, `integer`, or `bool`. Drives the input the UI renders. Default `string`. |
-| `default`     | matches `type` | no       | Value used when the user sets none. Forbidden on `base_url` — see below. |
+| `type`        | string         | no       | `string`, `integer`, or `bool`. Drives the input the UI renders: `bool` gets a switch, an option with `choices` a dropdown, everything else a text field. Default `string`. |
+| `default`     | matches `type` | no       | Value used when the user sets none. Forbidden on `base_url` — see below. When `choices` is present, must be one of them. |
+| `choices`     | array of `type` | no      | The values this option accepts. Renders a dropdown, and the daemon refuses to store anything else. Omit it for an open-ended option. Entries must be unique, and a `bool` must not declare any. |
 | `required`    | bool           | no       | Whether a value must be set before the backend can load. Default `false`. |
 
 #### `base_url` and egress
@@ -698,6 +827,13 @@ language = "en"
   loaded with defaults.
 - Whether a model is online/remote is decided solely by `supported_devices`
   (the `none` sentinel).
+- An option's `choices`, when declared, must be unique, must contain the
+  option's `default` if it declares one, and must not appear on a `bool` — a
+  switch already names its two values. The registry indexer refuses to publish
+  a manifest breaking any of these, and the daemon refuses to store a value
+  the list does not offer (`400 invalid_value`). Enforced on both sides of
+  publication because the indexer only sees what is published, and the write
+  can come from anything holding a `settings` token.
 - Secret and option `name`s are **snake_case** identifiers matching
   `[a-z][a-z0-9_]*` (e.g. `openai_api_key`, `base_url`), unique within their
   table. The `name` is the wire identifier the backend reads the value by;

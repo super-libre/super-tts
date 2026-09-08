@@ -9,6 +9,10 @@
 //! When the user interrupts a half-generated reply the daemon has to cancel
 //! in-flight synthesis, drop the queue, flush the ring **and** tell the client
 //! to stop generating. A one-way append API makes that last part awkward.
+//!
+//! Contract: `docs/protocol/endpoints/v1/speak/stream.md`, which is where the
+//! frame protocol is written down — a WebSocket's messages are not describable
+//! in `OpenAPI`, so the published operation documents only the upgrade.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,12 +20,13 @@ use std::time::Duration;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use futures::{SinkExt, StreamExt};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::http::state::AppState;
+use crate::daemon::http::wire::{ErrorEnvelope, ReasonEnvelope};
 use crate::daemon::speech::{SpeakError, SpeakOptions, SpeakSession, SpeechEvent};
 use crate::daemon::types::SuperTTSDaemon;
 
@@ -84,6 +89,39 @@ enum ServerFrame {
     Error { message: String },
 }
 
+#[utoipa::path(
+    get,
+    path = "/speak/stream",
+    tag = "speak",
+    summary = "Speak text as it is produced (WebSocket)",
+    description = "\
+An HTTP/1.1 upgrade to a WebSocket. The client sends text deltas as they arrive; \
+the daemon synthesizes each sentence as it completes, so speech starts long before \
+generation finishes. This is the LLM case — with `POST /speak` you must hold the \
+whole reply before the first word is heard.
+
+The first frame must be `start`, carrying the same options `POST /speak` takes; \
+every later frame needs them, and guessing would produce a wrong voice rather than \
+an error. Then `text` frames carry deltas, `end` plays out what remains, and \
+`cancel` stops immediately and drops the queue. The daemon answers with `utterance`, \
+`mark`, `progress`, and a terminal `done` or `error`.
+
+Deltas are appended to a streaming normalizer, so a delta may split a markup \
+construct in half without the markers being spoken.
+
+Being a WebSocket, the frame protocol is not describable in OpenAPI — the message \
+shapes are in `docs/protocol/endpoints/v1/speak/stream.md`. Four concurrent sessions \
+are allowed; beyond that the upgrade is refused rather than queued, and a session \
+that sends no frame for two minutes is treated as dead and torn down.",
+    security(("session_token" = ["speak"])),
+    responses(
+        (status = 101, description = "Upgraded; the streaming session is open."),
+        (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
+        (status = 403, description = "The token lacks the `speak` scope.", body = ErrorEnvelope),
+        (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
+        (status = 503, description = "Too many concurrent streaming sessions (`speak_sessions_busy`).", body = ErrorEnvelope),
+    ),
+)]
 /// `GET /v1/speak/stream` — upgrade and stream text in, audio out.
 pub(crate) async fn speak_stream_handler(
     ws: WebSocketUpgrade,
@@ -91,9 +129,19 @@ pub(crate) async fn speak_stream_handler(
 ) -> Response {
     // Claim the permit before upgrading, so an over-cap client gets a clean
     // `503` rather than a socket that is immediately closed.
+    //
+    // The refusal carries the house JSON envelope rather than a bare string.
+    // It used to send `speak_sessions_busy` as `text/plain`, which is the one
+    // shape a client here cannot read: this is the only response on the
+    // endpoint that is not a protocol upgrade, so a caller has no other reason
+    // to have a body parser attached, and `transport.md` promises `error_code`
+    // on every error. It also disagreed with what this operation publishes.
     let Ok(permit) = SESSIONS.try_acquire() else {
         warn!("speak stream rejected: {MAX_SESSIONS} sessions already active");
-        return (StatusCode::SERVICE_UNAVAILABLE, "speak_sessions_busy").into_response();
+        return crate::daemon::http::v1::backends::json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "speak_sessions_busy",
+        );
     };
     let daemon = Arc::clone(&state.daemon);
     ws.on_upgrade(move |socket| run(socket, daemon, permit))
@@ -303,8 +351,8 @@ async fn send(
     sink.send(Message::Text(json.into())).await.map_err(|_| ())
 }
 
-pub(crate) fn routes() -> axum::Router<AppState> {
-    axum::Router::new().route("/speak/stream", axum::routing::get(speak_stream_handler))
+pub(crate) fn routes() -> utoipa_axum::router::OpenApiRouter<AppState> {
+    utoipa_axum::router::OpenApiRouter::new().routes(utoipa_axum::routes!(speak_stream_handler))
 }
 
 #[cfg(test)]

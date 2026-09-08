@@ -92,6 +92,7 @@ mod unmet_requirements_tests {
             description: String::new(),
             r#type: None,
             default: None,
+            choices: Vec::new(),
             required,
             value: value.map(str::to_string),
         }
@@ -331,8 +332,9 @@ mod model_status_tests {
 
     /// Active backend with an unmet required secret → red, even if a model
     /// from another backend happens to be loaded (which shouldn't really
-    /// happen after `set_active_backend` unloads on switch, but the dot
-    /// should still reflect the current backend's state).
+    /// happen — `POST /pipeline/{stage}` unloads a foreign model when the
+    /// stage's backend changes — but the dot should still reflect the current
+    /// backend's state).
     #[test]
     fn unmet_requirement_is_blocked() {
         let backends = vec![backend_with_required_secret()];

@@ -102,10 +102,17 @@ pub struct ActionError {
 }
 
 /// The per-model language resolution block returned by
-/// `GET /backends/{source}/models/{model}/language`, deserialized once at the
+/// `GET /pipeline/{stage}/model/{model}/language`, deserialized once at the
 /// client boundary instead of being poked field-by-field as a
 /// `serde_json::Value` in the views. Unknown/absent fields default so a partial
 /// or null block yields an empty, harmless resolution.
+///
+/// It says which language is in effect and why — not which languages *could*
+/// be. That list is a separate call (`.../language/list`), because the two
+/// change on different occasions: pinning a language rewrites this block and
+/// leaves the offered set untouched. A `supported` field once rode along here
+/// and was dropped from the wire; anything that reads one from this block is
+/// reading a list that is always empty.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct LanguageResolution {
     /// The effective BCP-47 tag in use, if any (`None` when unresolved).
@@ -117,9 +124,6 @@ pub struct LanguageResolution {
     /// The global Primary Language tag used as the default fallback.
     #[serde(default)]
     pub primary: String,
-    /// The languages this model supports.
-    #[serde(default)]
-    pub supported: Vec<String>,
 }
 
 /// Which tab of the Models page is active.

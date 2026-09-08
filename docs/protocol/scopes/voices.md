@@ -9,7 +9,8 @@ delete one. That is the whole surface: the library holds recordings and the
 metadata describing them, and nothing else.
 
 Speaking *in* a cloned voice needs [`speak`](./speak.md), not this scope — a
-client passes the `voice:<uuid>` id on `POST /speak` and never touches the
+client passes the `voice:<uuid>` id on [`POST /speak`](../endpoints/v1/speak.md)
+and never touches the
 audio. The two are separate deliberately: an app that reads text aloud in a
 voice the user already cloned has no reason to hold the recordings.
 
@@ -34,10 +35,15 @@ local unless the user selected an online model.
 
 | Endpoint                                                          | Methods                | Notes                                                     |
 |-------------------------------------------------------------------|------------------------|-----------------------------------------------------------|
-| [`/voices`](../endpoints/v1/voices.md#get-voices)                 | GET, POST              | List the library; add a voice from a WAV upload.          |
-| [`/voices/{id}`](../endpoints/v1/voices.md#get-voicesid)          | GET, PATCH, DELETE     | Read, rename, or delete one voice.                        |
-| [`/voices/{id}/audio`](../endpoints/v1/voices.md#get-voicesidaudio) | GET                  | The stored clip, as `audio/wav`.                          |
+| [`/voice/list`](../endpoints/v1/voice.md)                         | GET                    | List the library.                                          |
+| [`/voice`](../endpoints/v1/voice.md)                              | POST                   | Add a voice from a WAV upload.                             |
+| [`/voice/{id}`](../endpoints/v1/voice.md)                         | GET, PATCH, DELETE     | Read, rename, or delete one voice.                        |
+| [`/voice/{id}/audio`](../endpoints/v1/voice.md)                   | GET                    | The stored clip, as `audio/wav`.                          |
 
-See [voices.md](../endpoints/v1/voices.md) for the full request/response shapes
+The library is the `/list` sub-resource of the singular noun, the same shape
+every collection in the API takes: `/voice/{id}` is one voice, so `/voice/list`
+is all of them, and there is no path that means both.
+
+See [voice.md](../endpoints/v1/voice.md) for the full request/response shapes
 and error model. Transport and framing are in [transport.md](../transport.md);
 how scopes compose and how a token is obtained are in [auth.md](../auth.md).

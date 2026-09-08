@@ -27,13 +27,13 @@ impl AppModel {
 
             DaemonMessage::EventStreamConnected => {
                 // Same connection-status handling as DaemonConnected, plus a
-                // current-model re-fetch: the live event stream is now
-                // subscribed, so re-read the daemon's authoritative model state
-                // to capture anything that changed before this point (e.g. a
-                // startup-load broadcast that fired before we subscribed). The
-                // fetch is epoch-guarded, so it can't clobber a live event that
-                // arrives while it's in flight.
-                Task::batch([self.handle_daemon_connected(), self.fetch_current_model()])
+                // stage re-read: the live event stream is now subscribed, so
+                // re-read the daemon's authoritative state to capture anything
+                // that changed before this point (e.g. a startup-load broadcast
+                // that fired before we subscribed). The fetch is epoch-guarded,
+                // so it can't clobber a live event that arrives while it's in
+                // flight.
+                Task::batch([self.handle_daemon_connected(), self.fetch_stage_view()])
             }
 
             DaemonMessage::DaemonError(_)

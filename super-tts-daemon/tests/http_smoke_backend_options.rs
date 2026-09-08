@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Options-scope HTTP smoke test: `/backends/{source}/options/...`
+//! Options-scope HTTP smoke test: `/backend/{backend_id}/option/...`
 //!
 //! Three test cases:
 //! 1. Round-trip: read default → set override → reset to default.
@@ -11,8 +11,9 @@
 //!
 //! The fixture backend (`fixture-openai/backend.toml`) is written into the
 //! isolated `XDG_DATA_HOME/super-tts/backends/` tree so the daemon discovers
-//! it on startup. It declares one option (`base_url`) with default
-//! `"https://api.openai.com"`.
+//! it on startup. It declares three options: `base_url` and `region` are
+//! open-ended, and `styling` offers a closed set, so both sides of the
+//! `choices` gate are exercisable.
 
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -96,6 +97,14 @@ label = "Region"
 description = "Upstream region."
 type = "string"
 default = "us-east-1"
+
+[[options]]
+name = "styling"
+label = "Styling"
+description = "The register."
+type = "string"
+default = "formal"
+choices = ["casual", "formal"]
 
 [[models]]
 name = "kokoro-1"
@@ -226,7 +235,7 @@ async fn delete_req(p: &PathBuf, path: &str, token: &str) -> (StatusCode, serde_
 #[tokio::test]
 async fn option_set_get_and_reset_to_default() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let opt_path = format!("/backends/{FIXTURE_SOURCE_ENC}/options/region");
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/region");
 
     // Default before any override.
     let (s, body) = get(&sock, &opt_path, &token).await;
@@ -265,7 +274,7 @@ async fn option_set_get_and_reset_to_default() {
 #[tokio::test]
 async fn base_url_round_trips_through_unset() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let opt_path = format!("/backends/{FIXTURE_SOURCE_ENC}/options/base_url");
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/base_url");
 
     let (s, body) = get(&sock, &opt_path, &token).await;
     assert_eq!(s, StatusCode::OK, "GET base_url before set: {body}");
@@ -302,7 +311,7 @@ async fn base_url_round_trips_through_unset() {
 #[tokio::test]
 async fn base_url_is_stored_canonical() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let opt_path = format!("/backends/{FIXTURE_SOURCE_ENC}/options/base_url");
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/base_url");
 
     for (posted, want) in [
         // A private gateway named without a scheme is plaintext.
@@ -348,13 +357,13 @@ async fn base_url_is_stored_canonical() {
 #[tokio::test]
 async fn option_list_returns_declared_options() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let list_path = format!("/backends/{FIXTURE_SOURCE_ENC}/options/list");
+    let list_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/list");
 
     let (s, body) = get(&sock, &list_path, &token).await;
-    assert_eq!(s, StatusCode::OK, "GET options/list: {body}");
+    assert_eq!(s, StatusCode::OK, "GET option/list: {body}");
     assert_eq!(body["status"], "success", "list status: {body}");
     let options = body["options"].as_array().expect("options array");
-    assert_eq!(options.len(), 2, "two declared options: {body}");
+    assert_eq!(options.len(), 3, "three declared options: {body}");
     let o0 = &options[0];
     assert_eq!(o0["name"], "base_url", "option name: {body}");
     assert!(
@@ -364,13 +373,124 @@ async fn option_list_returns_declared_options() {
     let o1 = &options[1];
     assert_eq!(o1["name"], "region", "option name: {body}");
     assert_eq!(o1["value"], "us-east-1", "default value in list: {body}");
+    assert_eq!(
+        o1["choices"],
+        serde_json::json!([]),
+        "an open-ended option offers no list, which is what a client renders \
+         a text field from: {body}"
+    );
+    let o2 = &options[2];
+    assert_eq!(o2["name"], "styling", "option name: {body}");
+    assert_eq!(
+        o2["choices"],
+        serde_json::json!(["casual", "formal"]),
+        "the values the option accepts, in manifest order: {body}"
+    );
+}
+
+/// An option that declares `choices` accepts those and nothing else. The
+/// settings app renders a dropdown that cannot offer anything else, so this is
+/// the guard for every other client — and for the stored value staying one the
+/// backend understands, since it is injected into the load headers verbatim.
+#[tokio::test]
+async fn a_value_the_option_does_not_offer_is_refused() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/styling");
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "casual" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "an offered value stores: {body}");
+    assert_eq!(body["value"], "casual", "body: {body}");
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "formalish" }),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "a value off the list must be refused: {body}"
+    );
+    assert_eq!(body["error_code"], "invalid_value", "body: {body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("casual, formal"),
+        "the refusal names what is on offer: {body}"
+    );
+
+    // Refused, so the earlier value is still what is in effect.
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["value"], "casual",
+        "a refused write changes nothing: {body}"
+    );
+
+    // An option declaring no list still takes anything.
+    let region = format!("/backend/{FIXTURE_SOURCE_ENC}/option/region");
+    let (s, body) = post_req(
+        &sock,
+        &region,
+        &token,
+        serde_json::json!({ "value": "eu-west-9" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "an open-ended option is ungated: {body}");
+}
+
+/// Clearing a `choices` option returns it to the manifest default rather than
+/// to nothing, which is how a client returns a dropdown to its declared value:
+/// storing a copy of today's default instead would pin the user to it and stop
+/// a later manifest from moving it.
+#[tokio::test]
+async fn clearing_a_choices_option_returns_it_to_the_declared_default() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/styling");
+
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["value"], "formal",
+        "it starts on the manifest default: {body}"
+    );
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "casual" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(body["value"], "casual", "body: {body}");
+
+    let (s, body) = delete_req(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["value"], "formal",
+        "DELETE reverts to the declared default, not to unset: {body}"
+    );
+    assert_eq!(
+        body["default"], "formal",
+        "and says what clearing reverted to: {body}"
+    );
 }
 
 /// GET on an undeclared option name returns 404 `unknown_option`.
 #[tokio::test]
 async fn undeclared_option_is_404() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let path = format!("/backends/{FIXTURE_SOURCE_ENC}/options/not_a_real_option");
+    let path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/not_a_real_option");
 
     let (s, body) = get(&sock, &path, &token).await;
     assert_eq!(
@@ -388,7 +508,7 @@ async fn undeclared_option_is_404() {
 #[tokio::test]
 async fn set_empty_value_is_400() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let opt_path = format!("/backends/{FIXTURE_SOURCE_ENC}/options/base_url");
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/base_url");
 
     let (s, body) = post_req(&sock, &opt_path, &token, serde_json::json!({ "value": "" })).await;
     assert_eq!(
@@ -406,7 +526,7 @@ async fn set_empty_value_is_400() {
 #[tokio::test]
 async fn unknown_backend_is_404() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
-    let path = "/backends/github.com%2Fnot%2Finstalled/options/base_url";
+    let path = "/backend/github.com%2Fnot%2Finstalled/option/base_url";
 
     let (s, body) = get(&sock, path, &token).await;
     assert_eq!(
@@ -420,7 +540,7 @@ async fn unknown_backend_is_404() {
     );
 }
 
-/// `GET /backends` reports the version on disk now, not the one the daemon
+/// `GET /backend/list` reports the version on disk now, not the one the daemon
 /// scanned at startup.
 ///
 /// A client shows this beside an update badge judged from `installed_version`
@@ -437,8 +557,8 @@ async fn backend_version_is_read_from_disk_per_request() {
         .join("fixture-openai")
         .join("backend.toml");
 
-    let (s, body) = get(&sock, "/backends", &token).await;
-    assert_eq!(s, StatusCode::OK, "GET /backends: {body}");
+    let (s, body) = get(&sock, "/backend/list", &token).await;
+    assert_eq!(s, StatusCode::OK, "GET /backend/list: {body}");
     assert_eq!(body["backends"][0]["version"], "1.0.0", "seeded: {body}");
 
     // Change it underneath the running daemon; nothing rescans.
@@ -447,8 +567,8 @@ async fn backend_version_is_read_from_disk_per_request() {
         .replace("version = \"1.0.0\"", "version = \"2.5.0\"");
     std::fs::write(&manifest, edited).expect("write fixture manifest");
 
-    let (s, body) = get(&sock, "/backends", &token).await;
-    assert_eq!(s, StatusCode::OK, "GET /backends after edit: {body}");
+    let (s, body) = get(&sock, "/backend/list", &token).await;
+    assert_eq!(s, StatusCode::OK, "GET /backend/list after edit: {body}");
     assert_eq!(
         body["backends"][0]["version"], "2.5.0",
         "version follows the manifest without a rescan: {body}"
@@ -473,8 +593,8 @@ async fn backend_version_falls_back_to_the_scan_when_the_manifest_is_gone() {
 
     std::fs::remove_file(&manifest).expect("remove fixture manifest");
 
-    let (s, body) = get(&sock, "/backends", &token).await;
-    assert_eq!(s, StatusCode::OK, "GET /backends: {body}");
+    let (s, body) = get(&sock, "/backend/list", &token).await;
+    assert_eq!(s, StatusCode::OK, "GET /backend/list: {body}");
     assert_eq!(
         body["backends"][0]["version"], "1.0.0",
         "the scanned version stands in when the manifest cannot be read: {body}"

@@ -45,6 +45,7 @@ pub(crate) fn openai_backend(
             description: "Base URL".to_string(),
             r#type: Some(OptionType::String),
             default: base_url_default.map(|d| OptionDefault::String(d.to_string())),
+            choices: Vec::new(),
             required: false,
         }],
         models,

@@ -9,6 +9,7 @@ pub mod http;
 pub(crate) mod language;
 pub mod language_handlers;
 pub mod model_management;
+pub mod pipeline_handlers;
 pub mod self_update_handlers;
 pub mod settings_handlers;
 pub mod speech;

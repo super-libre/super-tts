@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod events;
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryListResponse {
     pub schema_version: u32,
@@ -15,6 +16,7 @@ pub struct RegistryListResponse {
 // A flat mirror of the `/registry/backends` JSON. The lint wants related flags
 // grouped into a sub-struct, which here would reshape the wire payload to suit
 // an internal API guideline.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryBackend {
@@ -66,6 +68,7 @@ pub use super_tts_registry_types::index::{
     IndexModel as RegistryModel, IndexOption as RegistryOption, IndexSecret as RegistrySecret,
 };
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Compatibility {
     pub compatible: bool,
@@ -75,6 +78,7 @@ pub struct Compatibility {
     pub reason: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectedAsset {
     pub target: String,
@@ -97,6 +101,7 @@ pub struct SelectedAsset {
 
 pub use super_tts_registry_types::index::IndexStale;
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum InstallRequest {
@@ -105,6 +110,7 @@ pub enum InstallRequest {
     ByLocalPath { local_path: String },
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallAccepted {
     pub install_id: String,
@@ -115,11 +121,13 @@ pub struct InstallAccepted {
     pub warning: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateRequest {
     pub source: String,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +137,7 @@ pub struct UpdateResponse {
     pub noop: bool,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshResponse {
     pub schema_version: u32,
@@ -136,6 +145,7 @@ pub struct RefreshResponse {
     pub backend_count: usize,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UninstallResponse {
     pub uninstalled: bool,

@@ -11,6 +11,7 @@ mod view;
 use subscription::{UdpSubscriptionId, audio_events_subscription};
 
 use crate::daemon::backends::BackendInfo;
+use crate::daemon::client::v1::pipeline::device::ModelDevice;
 use crate::state::{AudioTheme, ContextPage, DaemonStatus, MenuAction, SpeakingStatus};
 use crate::ui::messages::{DaemonMessage, Message, ModelsPageMessage, ShellMessage};
 use cosmic::app::context_drawer;
@@ -39,7 +40,14 @@ pub enum ModelOperationState {
     Error { message: String },
 }
 
-/// Device switching state
+/// Whether a device change is in flight for the model the stage is running.
+///
+/// Only a change to the *loaded* model's device reloads anything; a change to
+/// any other model is a note for its next load and passes through this state
+/// untouched. The daemon narrates the reload over `/events`
+/// (`switching_device`, then `loading_model_for_device`, then `ready`), and
+/// this is what lets those arrive in any order without the app deciding a
+/// switch finished before it started.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeviceState {
     Ready,
@@ -47,7 +55,6 @@ pub enum DeviceState {
         target_device: String,
         status_message: String,
     },
-    Cooldown, // Brief period after switching to avoid premature device requests
 }
 
 /// The application model stores app-specific state used to describe its interface and
@@ -101,19 +108,53 @@ pub struct AppModel {
     /// Source (serving backend repo id) of the currently loaded model
     pub current_source: String,
     /// Monotonic counter bumped every time a live daemon event (e.g.
-    /// `model_switched`) updates the model identity. A point-in-time
-    /// `get_current_model` snapshot captures this at issue time and is
-    /// discarded on arrival if the counter has since advanced — so a slow,
-    /// stale reconnect query can never clobber a fresher live event.
+    /// `model_switched`) updates the model identity. A point-in-time stage-view
+    /// snapshot captures this at issue time and is discarded on arrival if the
+    /// counter has since advanced — so a slow, stale reconnect query can never
+    /// clobber a fresher live event.
     pub current_model_epoch: u64,
     /// Model operation state (downloading, loading, or ready)
     pub model_operation_state: ModelOperationState,
 
-    // Device management state
-    /// Current device (cpu/cuda) from daemon
+    // Device management state.
+    //
+    // The device preference belongs to a *model*, not to the daemon. A small
+    // preset-voice model runs fine on the CPU while the cloning model beside it
+    // needs the GPU, and the single global setting this replaced meant that
+    // choosing for one silently overwrote the choice for the other. So the
+    // answer is held per model and guarded by the pair it describes; the
+    // stage-wide list is only what can be said before a model is picked.
+    /// The accelerator the loaded model is actually running on (`cuda`, `rocm`,
+    /// `cpu`, …); empty when nothing is loaded.
+    ///
+    /// Deliberately not a preference. A `gpu` choice that fell back to the CPU
+    /// reads `cpu` here, which is the point: the card's "Active:" line would
+    /// otherwise tell the user they are on a GPU they are not on. It is filled
+    /// from the stage view's resolved accelerator and from the daemon's `ready`
+    /// event — never from what the user staged.
     pub current_device: String,
-    /// Available devices from daemon
-    pub available_devices: Vec<String>,
+    /// The devices the stage's selected backend can run models on here, from
+    /// `GET /pipeline/{stage}/device/list`.
+    ///
+    /// The union over the models that backend serves, and so the only device
+    /// answer available before a model is picked. It keeps the card's device
+    /// control populated in the beat between staging a model and that model's
+    /// own, narrower list arriving, rather than letting the control appear a
+    /// moment after the model dropdown it sits beside. Empty until a backend is
+    /// selected.
+    pub stage_devices: Vec<String>,
+    /// One model's device answer: the preference it will load with, what that
+    /// resolved to, and the devices this host can offer it.
+    ///
+    /// A single slot rather than a map, mirroring `language.model_language`:
+    /// the card only ever asks about the model it is showing, and a map would
+    /// keep answers for models whose backend has since been swapped out — the
+    /// stalest possible thing to render a device picker from.
+    pub model_device: Option<ModelDevice>,
+    /// Which `(source, model)` pair [`Self::model_device`] describes. Reading
+    /// the block without checking this is how a card ends up showing one
+    /// model's device list under another model's name.
+    pub model_device_for: Option<(String, String)>,
     /// GPU inventory + memory from the daemon's `GET /gpu_info` (gpu-probe).
     pub gpu_info: Vec<super_tts_shared::models::protocol::GpuInfo>,
     /// Device switching state
@@ -150,6 +191,15 @@ pub struct AppModel {
     /// Backends discovered by the daemon, with the models/secrets/options
     /// each declares. Drives the per-backend sections on the Models page.
     pub backends: Vec<BackendInfo>,
+    /// The subset of [`Self::backends`] that can fill the synthesis stage, as
+    /// `GET /pipeline/{stage}/backend/list` reports it.
+    ///
+    /// What the "Load a backend" sheet may offer. Selecting a backend that
+    /// serves nothing this stage can run is refused by the daemon, so a sheet
+    /// built from the full catalog offers picks that fail on click — and while
+    /// synthesis is the only stage the two lists are identical, which is
+    /// exactly what would let the wrong one stand in unnoticed.
+    pub stage_backends: Vec<BackendInfo>,
     /// In-progress text for each secret input, keyed by `(source, name)`.
     pub backend_secret_inputs: HashMap<(String, String), String>,
     /// Whether each declared secret is currently configured, as reported by
@@ -197,6 +247,45 @@ impl AppModel {
         if self.action_error.as_ref().is_some_and(|e| e.scope == scope) {
             self.action_error = None;
         }
+    }
+
+    /// The daemon's device answer for one model, iff the held block is that
+    /// model's. The pair check is the whole value of this accessor: staging a
+    /// second model leaves the previous model's block in place until its own
+    /// answer lands, and a device picker drawn from it would be showing the
+    /// wrong model's options under the right model's name.
+    fn model_device_answer(&self, source: &str, model: &str) -> Option<&ModelDevice> {
+        let (held_source, held_model) = self.model_device_for.as_ref()?;
+        if held_source != source || held_model != model {
+            return None;
+        }
+        self.model_device.as_ref()
+    }
+
+    /// The devices this host can offer one model, as the daemon narrowed them.
+    ///
+    /// `None` is not "none offered" — it is the window between staging a model
+    /// and its answer arriving. A caller that collapsed the two would announce
+    /// "this model can't be loaded here" for a moment on every single pick,
+    /// which is why the empty list and the missing answer stay distinguishable
+    /// all the way up into the view.
+    #[must_use]
+    pub fn model_devices(&self, source: &str, model: &str) -> Option<&[String]> {
+        self.model_device_answer(source, model)
+            .map(|d| d.available_devices.as_slice())
+    }
+
+    /// The device preference the daemon has recorded for one model — what it
+    /// would load with today, `cpu`/`gpu`, or `none` for a model that
+    /// synthesizes remotely. `None` until the answer for this pair arrives.
+    ///
+    /// This is what a Load click compares its staged device against: writing a
+    /// preference the daemon already holds costs a request and, for the model a
+    /// stage is running, a reload of a model that is already where it belongs.
+    #[must_use]
+    pub fn model_device_preference(&self, source: &str, model: &str) -> Option<&str> {
+        self.model_device_answer(source, model)
+            .map(|d| d.device.as_str())
     }
 }
 

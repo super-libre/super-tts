@@ -271,7 +271,7 @@ Content-Type: application/json
 ```
 
 This is a bug in the client (a token without the `settings` scope
-trying to call `POST /active_model`, for example). Re-issuing
+trying to call `POST /pipeline/1/model`, for example). Re-issuing
 `/auth/request` with the missing scope added is the only path
 forward, and the user has to explicitly approve the new set.
 
@@ -310,9 +310,9 @@ docs — those are the source of truth, not duplicated here:
 
 - `speak` — `/speak`, `/speak/stop`, `/speak/stream`; see [speak.md](./scopes/speak.md).
 - `status` — `GET /status`; see [status.md](./scopes/status.md).
-- `settings` — the configuration + registry surface, including backend options; see [settings.md](./scopes/settings.md).
-- `secrets` — backend credential management: `GET/POST/DELETE /backends/{source}/secrets/*` (write-only; values never returned); see [secrets.md](./scopes/secrets.md).
-- `voices` — the cloned-voice library: `GET/POST/PATCH/DELETE /voices*`; see [voices.md](./scopes/voices.md).
+- `settings` — everything under `/settings/`, plus `/pipeline*`, `/backend*`, `/registry*`, `/gpu_info` and `/update*`, including backend options; see [settings.md](./scopes/settings.md).
+- `secrets` — backend credential management: `GET/POST/DELETE /backend/{backend_id}/secret/*` (write-only; values never returned); see [secrets.md](./scopes/secrets.md).
+- `voices` — the cloned-voice library: `GET/POST/PATCH/DELETE /voice*`; see [voices.md](./scopes/voices.md).
 - `playback_events`, `audio_visualization`, `daemon_status` — topic sets on `GET /events`; see each scope doc and [`/events`](./endpoints/v1/events.md).
 
 Rules to remember:

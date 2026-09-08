@@ -118,9 +118,15 @@ impl AppModel {
                 status_message: "Loading initial model state...".to_string(),
             },
 
-            // Initialize device state
-            current_device: String::new(), // Empty until loaded from daemon
-            available_devices: vec!["cpu".to_string()], // Default until loaded from daemon
+            // Device state. Every one of these starts empty rather than
+            // guessing a `["cpu"]` the daemon has not confirmed: which devices
+            // exist is a per-model question now, answered per model, and a
+            // seeded default would be indistinguishable from a real answer for
+            // a model that can in fact run nowhere on this host.
+            current_device: String::new(),
+            stage_devices: Vec::new(),
+            model_device: None,
+            model_device_for: None,
             gpu_info: Vec::new(),
             device_state: DeviceState::Ready,
             last_switch_progress_at: None,
@@ -143,6 +149,7 @@ impl AppModel {
 
             // Backend catalog + per-backend configuration state
             backends: Vec::new(),
+            stage_backends: Vec::new(),
             backend_secret_inputs: HashMap::new(),
             backend_secret_configured: HashMap::new(),
             backend_option_inputs: HashMap::new(),

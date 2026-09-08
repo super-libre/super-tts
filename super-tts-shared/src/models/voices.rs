@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The `/v1/voices` cloned-voice library responses.
+//! The `/v1/voice` cloned-voice library responses.
 //!
 //! A cloned voice is a reference recording plus the id that names it on
 //! `POST /speak`. The daemon serializes these shapes from its on-disk library;
@@ -19,9 +19,10 @@
 use serde::{Deserialize, Serialize};
 
 /// One stored voice, as a client sees it.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct VoiceInfo {
-    /// The uuid half of the id, for building paths under `/voices`.
+    /// The uuid half of the id, for building paths under `/voice`.
     pub id: String,
     /// The full wire id, `voice:<uuid>` — what `POST /speak` takes as `voice`.
     /// Sent rather than left to the client to assemble, so the prefix is
@@ -53,6 +54,7 @@ pub struct VoiceInfo {
 /// Carried on the listing because it is what a voices UI needs and nothing
 /// else does: whether to offer cloning at all, how much of a recording will
 /// actually be used, and whether to ask the user what the clip says.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct VoiceModelSupport {
     /// Wire name of the loaded model.
@@ -72,7 +74,8 @@ pub struct VoiceModelSupport {
     pub needs_transcript: bool,
 }
 
-/// `GET /voices`.
+/// `GET /voice/list`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VoiceListResponse {
     /// `"success"`.
@@ -85,7 +88,8 @@ pub struct VoiceListResponse {
     pub model: Option<VoiceModelSupport>,
 }
 
-/// `POST /voices`, `GET /voices/{id}`, and `PATCH /voices/{id}`.
+/// `POST /voice`, `GET /voice/{id}`, and `PATCH /voice/{id}`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VoiceResponse {
     /// `"success"`.
@@ -94,7 +98,8 @@ pub struct VoiceResponse {
     pub voice: VoiceInfo,
 }
 
-/// `DELETE /voices/{id}`.
+/// `DELETE /voice/{id}`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VoiceDeletedResponse {
     /// `"success"`.

@@ -1,19 +1,21 @@
-# `/backends/{source}/options`
+# `/backend/{backend_id}/option/list`
 
 Read, set, and reset a backend's **options** — the non-sensitive
-configuration values (a base-URL override, a timeout, and so on) a backend
-declares as `[[options]]` in its
+configuration values (a base-URL override, a speaking-style preset, a timeout)
+a backend declares as `[[options]]` in its
 [`backend.toml`](../../../backend/config.md). The daemon stores option
 overrides as plaintext in its config and injects each as an
 `x-tts-option-<name>` request header at model-load time (see
 [contract.md](../../../backend/contract.md#request-headers)).
 
-`{source}` is the backend's repo id (e.g. `github.com/super-tts/openai`),
-**URL-percent-encoded** in the path — the same identifier used by
-[`DELETE /backends/{source}`](../backends.md#delete-backendssource):
+`{backend_id}` is the backend's id — its `source` as
+[`GET /backend/list`](../backends.md) reports it (e.g.
+`github.com/super-tts/openai`), **URL-percent-encoded** in the path — the same
+identifier used by
+[`DELETE /backend/{backend_id}`](../backends.md#delete-backendbackend_id):
 
 ```
-/backends/github.com%2Fsuper-tts%2Fopenai/options/base_url
+/backend/github.com%2Fsuper-tts%2Fopenai/option/base_url
 ```
 
 These endpoints mirror the [secrets](./secrets.md) endpoints exactly, with two
@@ -29,9 +31,9 @@ because option values are not sensitive — a `GET` **returns the value**.
 ## Declared-option guard
 
 `{name}` must be an option the backend **declares** in its `[[options]]`. An
-unknown `{name}` returns `404 unknown_option`; an unknown `{source}` returns
-`404 unknown_backend`. `list` is reserved for the collection endpoint, so a
-backend cannot declare an option named `list`.
+unknown `{name}` returns `404 unknown_option`; an unknown `{backend_id}`
+returns `404 unknown_backend`. `list` is reserved for the collection endpoint,
+so a backend cannot declare an option named `list`.
 
 ## Effective value vs. default
 
@@ -40,14 +42,38 @@ Each option has a manifest **default** and an optional user **override**. The
 the override; `DELETE` removes it, resetting the effective value back to the
 default.
 
-## `GET /backends/{source}/options/list`
+## Open-ended options and closed sets
+
+An option is either free-form or drawn from a fixed list, and `choices` is how
+the manifest says which. An empty `choices` is open-ended — `base_url` takes
+any endpoint the operator can name — and a client renders it as a text field.
+A non-empty `choices` is a closed set: a dropdown, and the daemon refuses a
+`POST` of anything outside it with `400 invalid_value`.
+
+The refusal matters because the settings UI is not the only thing that writes
+here. Before `choices` existed, an option whose accepted values were listed in
+its help text rendered as a free-text box: typing `formalish` into a styling
+option was accepted, stored, and injected into the load headers as though it
+were a value the backend knew — and the failure surfaced, if at all, as
+strange-sounding speech rather than as an error. A stored value has to stay one
+the backend understands, so the daemon validates it rather than trusting the
+picker.
+
+A dropdown behaves like a switch rather than like a text field: picking is the
+write, and picking the declared default clears the override instead of storing
+a copy of it — so a backend that later changes its default takes effect for
+users who never chose otherwise. A stored value the backend has since dropped
+from its list selects nothing rather than the nearest wrong row, and the user
+picks again.
+
+## `GET /backend/{backend_id}/option/list`
 
 List the backend's declared options with their effective values.
 
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-tts%2Fopenai/options/list HTTP/1.1
+GET /backend/github.com%2Fsuper-tts%2Fopenai/option/list HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…64hex…
 ```
@@ -64,7 +90,17 @@ Authorization: Bearer tts_…64hex…
       "type":     "string",
       "default":  "https://api.openai.com",
       "required": false,
+      "choices":  [],                       // open-ended; a text field
       "value":    "https://api.openai.com"  // effective value (override or default)
+    },
+    {
+      "name":     "styling",
+      "label":    "Styling",
+      "type":     "string",
+      "default":  "semi-formal",
+      "required": false,
+      "choices":  ["casual", "semi-formal", "formal"],  // closed set; a dropdown
+      "value":    "formal"
     }
   ]
 }
@@ -77,17 +113,23 @@ Authorization: Bearer tts_…64hex…
 | `…[].label`    | string           | Human-readable label; falls back to `name` when absent.        |
 | `…[].type`     | string           | Declared value type (e.g. `string`).                           |
 | `…[].default`  | any              | Manifest default; the effective value when no override is set. |
+| `…[].choices`  | array            | The values this option accepts. Empty means any value of `type`, which a client renders as a text field; a non-empty list is a dropdown, and a `POST` of anything outside it is refused. |
 | `…[].required` | boolean          | Whether the backend needs it to operate.                      |
 | `…[].value`    | any              | Effective value: the override if set, else `default`.          |
 
-## `GET /backends/{source}/options/{name}`
+A `bool` option never declares `choices` — a switch already names its two
+values — and a manifest that puts one there is rejected before it is
+published, along with one whose `default` sits outside its own list or whose
+list repeats a value.
+
+## `GET /backend/{backend_id}/option/{name}`
 
 Read one option's effective value.
 
 **Request:**
 
 ```http
-GET /backends/github.com%2Fsuper-tts%2Fopenai/options/base_url HTTP/1.1
+GET /backend/github.com%2Fsuper-tts%2Fopenai/option/base_url HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…64hex…
 ```
@@ -103,15 +145,18 @@ Authorization: Bearer tts_…64hex…
 }
 ```
 
-## `POST /backends/{source}/options/{name}`
+## `POST /backend/{backend_id}/option/{name}`
 
-Set the option override. Takes effect the next time that backend's model is
+Set the option override. Every stage currently running a model from that
+backend is reloaded so the new value takes effect at once; anything not loaded
+picks it up on its next load. A reload that fails is reported in `message`, and
+the stage keeps running the old instance rather than being left with nothing
 loaded.
 
 **Request:**
 
 ```http
-POST /backends/github.com%2Fsuper-tts%2Fopenai/options/base_url HTTP/1.1
+POST /backend/github.com%2Fsuper-tts%2Fopenai/option/base_url HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…64hex…
 Content-Type: application/json
@@ -121,7 +166,7 @@ Content-Type: application/json
 
 | Field   | Type   | Required | Notes                                                  |
 |---------|--------|----------|--------------------------------------------------------|
-| `value` | string | yes      | New override value. Use `DELETE` to reset to default.  |
+| `value` | string | yes      | New override value. Use `DELETE` to reset to default. When the option declares `choices`, must be one of them. |
 
 **Response (200):**
 
@@ -139,7 +184,7 @@ posting `192.168.0.179:8080/v1` stores and returns
 [config.md](../../../backend/config.md#base_url-and-egress) for the full rule.
 Every other option is stored exactly as posted.
 
-## `DELETE /backends/{source}/options/{name}`
+## `DELETE /backend/{backend_id}/option/{name}`
 
 Remove the override, resetting the option to its manifest **default**.
 Idempotent: resetting an option that has no override succeeds. The returned
@@ -148,7 +193,7 @@ Idempotent: resetting an option that has no override succeeds. The returned
 **Request:**
 
 ```http
-DELETE /backends/github.com%2Fsuper-tts%2Fopenai/options/base_url HTTP/1.1
+DELETE /backend/github.com%2Fsuper-tts%2Fopenai/option/base_url HTTP/1.1
 Host: tts.local
 Authorization: Bearer tts_…64hex…
 ```
@@ -163,8 +208,9 @@ Authorization: Bearer tts_…64hex…
 
 | HTTP | `message`         | Meaning                                              |
 |------|-------------------|------------------------------------------------------|
-| 400  | `invalid_request` | Malformed body.                                      |
+| 400  | `invalid_request` | Malformed body, or an empty `value`.                 |
+| 400  | `invalid_value`   | The option declares `choices` and the posted value is not one of them. The `message` names the values on offer. |
 | 401  | `invalid_session` | Token unknown / expired / `exe_changed`.             |
 | 403  | `scope_denied`    | Token lacks the `settings` scope.                    |
-| 404  | `unknown_backend` | No installed backend has that `source`.             |
-| 404  | `unknown_option`  | `{name}` is not a declared option of that backend.  |
+| 404  | `unknown_backend` | No installed backend has that `source`.              |
+| 404  | `unknown_option`  | `{name}` is not a declared option of that backend.   |

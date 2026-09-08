@@ -1,9 +1,74 @@
 // SPDX-License-Identifier: GPL-3.0-only
+//! The device a model runs on, and the global default behind it.
+//!
+//! A device is a property of a model, not of the daemon: a small voice runs
+//! fine on the CPU while the large one beside it needs the GPU, and a single
+//! global switch forced a user who wanted the GPU for one of them to accept it
+//! for both. So the preference is stored per `(source, model)`
+//! ([`crate::config::ModelSettings::device`]), and the global
+//! `device.preferred_device` survives as the fallback a model with no choice
+//! of its own inherits — which is also what keeps a config written before
+//! per-model devices loading its models exactly where it always did.
+//!
+//! Which handler a request lands in decides what setting a device *means*: for
+//! the model that is currently loaded it is a reload onto the new device, for
+//! any other model it is a note its next load picks up. Both answer with the
+//! same `{ device, resolved_accel, available_devices }` body so a client never
+//! has to know which case it hit.
 
-use crate::daemon::types::SuperTTSDaemon;
+use crate::daemon::types::{SuperTTSDaemon, normalize_device};
+use crate::tts_models::ModelDefinition;
+use crate::tts_models::backends;
 use crate::tts_models::synthesize::Synthesize;
 use log::{error, info, warn};
-use super_tts_shared::models::protocol::{DaemonResponse, DaemonStatusEvent, ErrorCode};
+use super_tts_registry_types::manifest::Device;
+use super_tts_shared::models::protocol::{
+    Command, DaemonResponse, DaemonStatusEvent, ErrorCode, StageModelDevice,
+};
+
+/// Which stored preference a device switch is changing, and therefore what a
+/// completed — or recovered — switch writes back.
+///
+/// The reload itself is identical either way (unload, load on the new device,
+/// fall back to the old one if that fails), so the two callers share every
+/// step of it and differ only here. Threading the scope through rather than
+/// duplicating the reload is what keeps a fix to the recovery path from
+/// landing in one of them and not the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceScope {
+    /// The global default, set by `set_device`: mirrored into the
+    /// `preferred_device` runtime lock as well as the config.
+    Global,
+    /// One model's own preference, set by `set_model_device` and stored
+    /// against its `(source, model)`.
+    Model,
+}
+
+/// The model a per-model device command resolved to: its definition, and the
+/// install directory whose record says which accelerators the installed build
+/// actually has.
+struct DeviceTarget {
+    definition: ModelDefinition,
+    backend_dir: std::path::PathBuf,
+}
+
+/// The two facts that narrow a model's declared devices to what it can run
+/// on here. See [`model_available_devices`].
+struct InstallContext {
+    host_devices: Vec<String>,
+    installed_accel: Vec<String>,
+}
+
+impl InstallContext {
+    /// The devices this install can offer `model` on this host.
+    fn offer(&self, model: &ModelDefinition) -> Vec<String> {
+        model_available_devices(
+            &self.host_devices,
+            &model.supported_devices,
+            &self.installed_accel,
+        )
+    }
+}
 
 impl SuperTTSDaemon {
     /// Handle set device command - switch between CPU and GPU
@@ -57,20 +122,42 @@ impl SuperTTSDaemon {
             "Starting device switch from {current_preferred} to {device} (will reload model: {model_to_reload})"
         );
 
-        // Update actual_device immediately to match preferred_device during switch
-        // This prevents get_device from returning the old device during the switch
-        {
-            let mut w = self.actual_device.write().await;
-            w.clone_from(&device);
-        }
+        self.reload_onto_device(
+            DeviceScope::Global,
+            &model_to_reload,
+            &source,
+            &device,
+            &current_preferred,
+            shutdown_rx,
+        )
+        .await
+    }
 
+    /// Move a loaded model onto `device`: announce, unload, load, and on
+    /// failure put it back on `previous`. The preference is recorded once the
+    /// load succeeded (or reverted once recovery has), which `scope` decides
+    /// the destination of.
+    ///
+    /// Shared by the global setter and the per-model one so there is exactly
+    /// one reload dance in the daemon. A second copy would drift on precisely
+    /// the paths nobody exercises by hand — the shutdown race, the recovery
+    /// load, the "backend uninstalled mid-switch" hole — and those are the ones
+    /// that leave a user with no model loaded at all.
+    async fn reload_onto_device(
+        &self,
+        scope: DeviceScope,
+        model: &str,
+        source: &str,
+        device: &str,
+        previous: &str,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    ) -> DaemonResponse {
         // Broadcast device switching status and unload current model
-        self.prepare_device_switch(&current_preferred, &device, &model_to_reload)
-            .await;
+        self.prepare_device_switch(previous, device, model).await;
 
         // Try to reload model with the requested device, but cancel if shutdown occurs
         let load_result = tokio::select! {
-            result = self.load_model_with_target_device(&model_to_reload, &source, &device) => {
+            result = self.load_model_with_target_device(model, source, device) => {
                 result
             }
             _ = shutdown_rx.recv() => {
@@ -82,23 +169,18 @@ impl SuperTTSDaemon {
         match load_result {
             Ok(model_instance) => {
                 self.handle_device_switch_success(
+                    scope,
                     model_instance,
-                    &device,
-                    &model_to_reload,
-                    &source,
-                    &current_preferred,
+                    device,
+                    model,
+                    source,
+                    previous,
                 )
                 .await
             }
             Err(e) => {
-                self.handle_device_switch_failure(
-                    e,
-                    &device,
-                    &model_to_reload,
-                    &source,
-                    &current_preferred,
-                )
-                .await
+                self.handle_device_switch_failure(scope, e, device, model, source, previous)
+                    .await
             }
         }
     }
@@ -205,6 +287,17 @@ impl SuperTTSDaemon {
 
     /// Prepare for device switch by broadcasting status and unloading current model
     async fn prepare_device_switch(&self, from_device: &str, to_device: &str, model: &str) {
+        // Stage `actual_device` at the target for the duration of the switch,
+        // so `get_device` does not keep reporting the device the model just
+        // left while its replacement is still loading. `finalize_loaded_model`
+        // overwrites this with the accelerator the load really landed on, and
+        // the recovery path with the one it reverted to, so the optimistic
+        // value never outlives the switch.
+        {
+            let mut w = self.actual_device.write().await;
+            *w = to_device.to_string();
+        }
+
         // Broadcast device switching status to settings subscribers
         self.events
             .publish_daemon_status(DaemonStatusEvent::SwitchingDevice {
@@ -223,6 +316,7 @@ impl SuperTTSDaemon {
     /// Handle successful device switch
     async fn handle_device_switch_success(
         &self,
+        scope: DeviceScope,
         model_instance: Box<dyn Synthesize>,
         device: &str,
         model_to_reload: &str,
@@ -245,23 +339,11 @@ impl SuperTTSDaemon {
         };
         let actual_device = self.finalize_loaded_model(definition, model_instance).await;
 
-        // Update the preferred device after successful reload (the actual
-        // device was already recorded by `finalize_loaded_model`).
-        {
-            let mut w = self.preferred_device.write().await;
-            *w = device.to_string();
-        }
-
-        // Update the config with new device preference and save to disk
-        {
-            let mut config_guard = self.config.write().await;
-            config_guard.update_preferred_device(device.to_string());
-        }
-
-        // Broadcast config change event
-        if let Err(e) = self.persist_config().await {
-            warn!("Failed to persist config after device switch: {e}");
-        }
+        // Record the preference only now: a switch that failed to load must
+        // leave the stored device as it was, or a daemon restart would put the
+        // model back on a device it has already proven it cannot run on.
+        self.record_device_preference(scope, source, model_to_reload, device)
+            .await;
 
         let success_message = device_switch_message(device, &actual_device);
 
@@ -275,18 +357,14 @@ impl SuperTTSDaemon {
             preferred_device: Some(device.to_string()),
         });
 
-        let resolved_accel = self.resolved_accel(device).await;
-        let available_devices = self.probe_available_devices().await;
-        DaemonResponse::success()
-            .with_device(device.to_string())
-            .with_resolved_accel(resolved_accel)
-            .with_available_devices(available_devices)
-            .with_message(success_message)
+        self.device_switch_response(scope, source, model_to_reload, device, success_message)
+            .await
     }
 
     /// Handle failed device switch with recovery attempt
     async fn handle_device_switch_failure(
         &self,
+        scope: DeviceScope,
         error: anyhow::Error,
         device: &str,
         model_to_reload: &str,
@@ -334,21 +412,8 @@ impl SuperTTSDaemon {
                 // Install the recovered model and record its actual device.
                 let recovery_actual_device =
                     self.finalize_loaded_model(definition, model_instance).await;
-                {
-                    let mut w = self.preferred_device.write().await;
-                    *w = previous_device.to_string();
-                }
-
-                // Update the config to revert to previous device
-                {
-                    let mut config_guard = self.config.write().await;
-                    config_guard.update_preferred_device(previous_device.to_string());
-                }
-
-                // Broadcast config change event for recovery
-                if let Err(e) = self.persist_config().await {
-                    warn!("Failed to persist config after device recovery: {e}");
-                }
+                self.restore_device_preference(scope, model_to_reload, previous_device)
+                    .await;
 
                 warn!(
                     "Recovery successful - reverted to previous device: {previous_device} (actual: {recovery_actual_device})"
@@ -375,9 +440,108 @@ impl SuperTTSDaemon {
         }
     }
 
+    /// Record `device` as the preference a completed switch established, and
+    /// persist it. A persist failure is logged, not returned: the in-memory
+    /// config already holds the choice, so the daemon behaves as asked until
+    /// it restarts, and failing the request would claim the switch did not
+    /// happen when the model has already moved.
+    ///
+    /// The global scope also mirrors into the `preferred_device` runtime lock,
+    /// which `get_device` reads; the per-model scope has no runtime mirror
+    /// because every reader of a model's device goes through the config.
+    async fn record_device_preference(
+        &self,
+        scope: DeviceScope,
+        source: &str,
+        model: &str,
+        device: &str,
+    ) {
+        match scope {
+            DeviceScope::Global => {
+                *self.preferred_device.write().await = device.to_string();
+                self.config
+                    .write()
+                    .await
+                    .update_preferred_device(device.to_string());
+            }
+            DeviceScope::Model => {
+                self.config.write().await.update_model_device(
+                    source,
+                    model,
+                    Some(device.to_string()),
+                );
+            }
+        }
+        if let Err(e) = self.persist_config().await {
+            warn!("Failed to persist config after device change: {e}");
+        }
+    }
+
+    /// Put the preference back after a failed switch recovered the model onto
+    /// `previous`.
+    ///
+    /// Only the global default is written. A per-model preference is
+    /// deliberately left alone: nothing was stored for it (the store happens
+    /// only after a successful load), and `previous` is the model's
+    /// *effective* device, which may be the global default it was merely
+    /// inheriting — writing that back would silently pin the model to a device
+    /// it never chose, and a later change to the default would then skip it.
+    async fn restore_device_preference(&self, scope: DeviceScope, model: &str, previous: &str) {
+        if scope == DeviceScope::Model {
+            log::debug!(
+                "Device switch for {model} failed; its stored preference was never changed, \
+                 so there is nothing to revert"
+            );
+            return;
+        }
+        *self.preferred_device.write().await = previous.to_string();
+        self.config
+            .write()
+            .await
+            .update_preferred_device(previous.to_string());
+        if let Err(e) = self.persist_config().await {
+            warn!("Failed to persist config after device recovery: {e}");
+        }
+    }
+
+    /// The success body a completed switch answers with, in the shape its
+    /// scope owns: the global setter reports the host's devices, the per-model
+    /// setter the narrower list that model can actually be offered here. Both
+    /// carry the same three keys, so a client reads one shape either way.
+    ///
+    /// A per-model switch whose backend vanished mid-flight falls back to the
+    /// host-wide shape rather than failing: the model did load, and answering
+    /// with a slightly wider device list beats reporting a failure that did
+    /// not happen.
+    async fn device_switch_response(
+        &self,
+        scope: DeviceScope,
+        source: &str,
+        model: &str,
+        device: &str,
+        message: String,
+    ) -> DaemonResponse {
+        if scope == DeviceScope::Model
+            && let Some(target) = self.device_target(model, source).await
+        {
+            return self.model_device_response(&target, message).await;
+        }
+        let resolved_accel = self.resolved_accel(device).await;
+        let available_devices = self.probe_available_devices().await;
+        DaemonResponse::success()
+            .with_device(device.to_string())
+            .with_resolved_accel(resolved_accel)
+            .with_available_devices(available_devices)
+            .with_message(message)
+    }
+
     /// Probe the host's device availability fresh, off the async runtime.
-    /// Shared by every `/active_device` response path so `available_devices`
-    /// never depends on which one produced the response.
+    ///
+    /// Shared by every device response path — the global default's, and the
+    /// per-model narrowing that starts from it — so `available_devices` never
+    /// depends on which one produced the response. Probed rather than cached
+    /// because a driver can be installed under a running daemon, and a stale
+    /// "no GPU here" would outlive the machine it was true of.
     async fn probe_available_devices(&self) -> Vec<String> {
         let host = tokio::task::spawn_blocking(crate::registry::host_detect::detect)
             .await
@@ -433,6 +597,356 @@ impl SuperTTSDaemon {
             .with_message(message)
     }
 
+    /// Route the per-model device commands to their handlers. Keeps the
+    /// destructuring out of the giant `handle_command` match.
+    ///
+    /// # Panics
+    /// Panics if `cmd` is not one of the per-model device variants; the caller
+    /// (`handle_command`) only ever passes those.
+    pub async fn handle_model_device(&self, cmd: Command) -> DaemonResponse {
+        match cmd {
+            Command::SetModelDevice { model, device } => {
+                self.handle_set_model_device(model, device).await
+            }
+            Command::GetModelDevice { model } => self.handle_get_model_device(model).await,
+            Command::ListModelDevices { model } => self.handle_list_model_devices(model).await,
+            Command::ListActiveBackendDevices => self.handle_list_active_backend_devices().await,
+            _ => unreachable!("handle_model_device received a non-device command"),
+        }
+    }
+
+    /// Read one model's device: the preference in effect for it, what that
+    /// resolved to, and what this install can offer it.
+    ///
+    /// "In effect" rather than "stored", deliberately: a model with no device
+    /// of its own answers with the global default it will actually load on,
+    /// not with a null a client would have to know to resolve itself — and
+    /// would resolve differently from the load path the first time the two
+    /// disagreed.
+    pub(crate) async fn handle_get_model_device(&self, model: String) -> DaemonResponse {
+        let target = match self.resolve_device_target(&model).await {
+            Ok(target) => target,
+            Err(early_return) => return early_return,
+        };
+        let device = self.effective_device(&target).await;
+        let message = format!("Device for {model}: {device}");
+        self.model_device_response(&target, message).await
+    }
+
+    /// The devices this install can offer `model` on this host, on their own.
+    ///
+    /// The `available_devices` half of
+    /// [`handle_get_model_device`](Self::handle_get_model_device) without the
+    /// preference beside it, so a client painting a device picker for a model
+    /// it is not asking about — a row in a model list, say — does not also
+    /// pull that model's stored choice and its resolution.
+    pub(crate) async fn handle_list_model_devices(&self, model: String) -> DaemonResponse {
+        let target = match self.resolve_device_target(&model).await {
+            Ok(target) => target,
+            Err(early_return) => return early_return,
+        };
+        let install = self.install_context(&target.backend_dir).await;
+        let devices = install.offer(&target.definition);
+        DaemonResponse::success()
+            .with_available_devices(devices)
+            .with_message(format!("Devices available to {model} listed"))
+    }
+
+    /// The devices the active backend can be run on here: the union over the
+    /// models it serves of what this install can offer each.
+    ///
+    /// The same answer as [`handle_list_model_devices`](Self::handle_list_model_devices)
+    /// without naming a model, for a client that has selected a backend but no
+    /// model yet — and which would otherwise have to fan out one request per
+    /// model and union the results itself.
+    pub(crate) async fn handle_list_active_backend_devices(&self) -> DaemonResponse {
+        let Some(source) = self.active_backend_source().await else {
+            return DaemonResponse::error_with_code(
+                ErrorCode::InvalidBackend,
+                "No backend is selected, so there is no backend to list devices for. \
+                 Select one first.",
+            );
+        };
+        let found = {
+            let backends = self.backends.read().await;
+            backends
+                .iter()
+                .find(|b| b.source == source)
+                .map(|b| (b.dir.clone(), b.models.clone()))
+        };
+        let Some((backend_dir, models)) = found else {
+            return DaemonResponse::error_with_code(
+                ErrorCode::InvalidBackend,
+                &format!("Backend {source} is no longer installed."),
+            );
+        };
+        let install = self.install_context(&backend_dir).await;
+        let devices = backend_available_devices(models.iter().map(|m| install.offer(m)));
+        DaemonResponse::success()
+            .with_available_devices(devices)
+            .with_message(format!("Devices available to {source} listed"))
+    }
+
+    /// Run `model` on `device`. Reloads it when it is the loaded model;
+    /// otherwise only records the choice, which its next load picks up — which
+    /// is what lets a user stage a device for a model before ever loading it,
+    /// instead of loading it once on the wrong device to move it.
+    pub(crate) async fn handle_set_model_device(
+        &self,
+        model: String,
+        device: String,
+    ) -> DaemonResponse {
+        info!("Device change requested for {model}: {device}");
+
+        // A reload started now would race the exit; refuse before touching
+        // anything.
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        if let Ok(()) = shutdown_rx.try_recv() {
+            warn!("Device change rejected - shutdown in progress");
+            return DaemonResponse::error("Device change rejected due to shutdown in progress");
+        }
+
+        // Validate and normalize (`cuda`/`metal` → `gpu`) in one step, so
+        // everything downstream stores and threads `cpu`/`gpu` rather than the
+        // raw input the client sent. Emit the documented `400 invalid_device`
+        // so a bad request is distinguishable from a server failure.
+        let Some(device) = parse_device_preference(&device) else {
+            warn!("Invalid device specified: {device}");
+            return DaemonResponse::error_with_code(
+                ErrorCode::InvalidDevice,
+                &format!("Invalid device '{device}'. Must be 'cpu' or 'gpu'"),
+            );
+        };
+
+        let target = match self.resolve_device_target(&model).await {
+            Ok(target) => target,
+            Err(early_return) => return early_return,
+        };
+        if let Some(rejection) = model_rejects_device(&target.definition, &device) {
+            return rejection;
+        }
+
+        // Where the model is running now, if it is the loaded one. Only then
+        // does the change mean a reload.
+        let running_on = self
+            .running_device(&target.definition.source, &target.definition.name)
+            .await;
+        let current = self.effective_device(&target).await;
+        let name = target.definition.name.clone();
+        let source = target.definition.source.clone();
+
+        let Some(actual) = running_on else {
+            self.store_model_device(&target, &device).await;
+            info!("Device for {name} set to {device} (not loaded — nothing to reload)");
+            return self
+                .model_device_response(
+                    &target,
+                    format!("Device for {name} set to {device}. Its next load will use it."),
+                )
+                .await;
+        };
+
+        if switch_is_satisfied(&current, &actual, &device) {
+            // Nothing to reload — but record the choice anyway: the model may
+            // have been on this device only through the global default, and
+            // the user just made it its own, which is what stops a later
+            // change to that default from moving it.
+            self.store_model_device(&target, &device).await;
+            info!("Device change skipped - {name} already on {device} (actual: {actual})");
+            return self
+                .model_device_response(&target, format!("Already using device: {device}"))
+                .await;
+        }
+        if current == device {
+            info!("Device for {name} is set to {device} but it is on {actual} - forcing a reload");
+        }
+
+        // Loading and unloading a backend instance mid-utterance is the same
+        // hazard as switching models mid-utterance.
+        if let Some(resp) = self.guard_model_mutation("switch devices") {
+            warn!("Device change rejected - speech in progress");
+            return resp;
+        }
+
+        info!("Starting device switch for {name} from {current} to {device}");
+        self.reload_onto_device(
+            DeviceScope::Model,
+            &name,
+            &source,
+            &device,
+            &current,
+            shutdown_rx,
+        )
+        .await
+    }
+
+    /// Resolve `model` against the active backend.
+    ///
+    /// A device command names a model, not a `(source, model)` pair, so the
+    /// model is looked up in the selected backend — the same resolution a
+    /// model switch performs for an omitted `source`, and for the same reason:
+    /// two installed backends may serve the same model name, and picking
+    /// whichever the directory scan reached first would set a device on a
+    /// model the user never meant.
+    // `DaemonResponse` is the protocol's response type and is returned by value
+    // throughout the daemon; boxing it in this one helper's `Err` would buy
+    // nothing and read inconsistently against every sibling handler.
+    #[allow(clippy::result_large_err)]
+    async fn resolve_device_target(&self, model: &str) -> Result<DeviceTarget, DaemonResponse> {
+        let Some(source) = self.active_backend_source().await else {
+            return Err(DaemonResponse::error_with_code(
+                ErrorCode::InvalidBackend,
+                "No backend is selected, so there is nothing to resolve the model against. \
+                 Select a backend first.",
+            ));
+        };
+        self.device_target(model, &source).await.ok_or_else(|| {
+            DaemonResponse::error_with_code(
+                ErrorCode::InvalidModel,
+                &format!("Backend {source} serves no model {model}."),
+            )
+        })
+    }
+
+    /// The `(definition, install dir)` pair a device answer needs for one
+    /// known `(model, source)`, or `None` when no discovered backend serves
+    /// it — which a backend uninstalled concurrently with the request makes
+    /// reachable at any point, not just before the work starts.
+    async fn device_target(&self, model: &str, source: &str) -> Option<DeviceTarget> {
+        let backends = self.backends.read().await;
+        backends::find_model(&backends, model, source).map(|(backend, definition)| DeviceTarget {
+            definition: definition.clone(),
+            backend_dir: backend.dir.clone(),
+        })
+    }
+
+    /// The device the target loads on: its own, else the global default.
+    async fn effective_device(&self, target: &DeviceTarget) -> String {
+        self.config
+            .read()
+            .await
+            .effective_device(&target.definition.source, &target.definition.name)
+    }
+
+    /// Record the target's device and persist it, for the paths that store
+    /// without reloading (an unloaded model, or one already on the device).
+    async fn store_model_device(&self, target: &DeviceTarget, device: &str) {
+        self.record_device_preference(
+            DeviceScope::Model,
+            &target.definition.source,
+            &target.definition.name,
+            device,
+        )
+        .await;
+    }
+
+    /// The accelerator `(source, model)` is running on right now, or `None`
+    /// when it is not the model that is loaded. Read from the instance rather
+    /// than from any preference, so a `gpu` choice that fell back to the CPU
+    /// reports `cpu` — the whole point of tracking the two separately.
+    ///
+    /// Doubles as the "is *this* model loaded?" test, which is why the two are
+    /// deliberately one call: a caller that asked them separately could be told
+    /// a model is loaded and then be handed the device of a different one,
+    /// which is precisely the window a model switch leaves open.
+    ///
+    /// Takes the pair rather than a resolved [`DeviceTarget`] because the
+    /// pipeline report asks about a *selection*, which stays meaningful after
+    /// the backend serving it has been uninstalled and can no longer be
+    /// resolved to a definition.
+    pub(in crate::daemon) async fn running_device(
+        &self,
+        source: &str,
+        model: &str,
+    ) -> Option<String> {
+        let guard = self.model.read().await;
+        let loaded = guard.as_ref()?;
+        (loaded.definition.name == model && loaded.definition.source == source)
+            .then(|| normalize_device(&loaded.instance.device()))
+    }
+
+    /// The device block for one `(source, model)`: the preference in effect and
+    /// what it has actually resolved to. `running` is that model's live
+    /// accelerator, from [`running_device`](Self::running_device), or `None`
+    /// when it is not the loaded one.
+    ///
+    /// Shared by the per-model device verbs and by stage 1's model slot on
+    /// `GET /pipeline/{stage}/model`, which answer the same question in two
+    /// shapes. Two derivations of "what device is this model on" would drift on
+    /// the cases that are easy to get wrong — the online sentinel, and refusing
+    /// to resolve a `gpu` preference no load has confirmed — and a client
+    /// polling both endpoints would see them disagree.
+    ///
+    /// Deliberately without `available_devices`: that list costs a fresh host
+    /// probe, and the pipeline's model slot is polled far more often than a
+    /// device picker is painted.
+    pub(in crate::daemon) async fn model_device_view(
+        &self,
+        source: &str,
+        model: &str,
+        running: Option<String>,
+    ) -> StageModelDevice {
+        let online = {
+            let backends = self.backends.read().await;
+            backends::find_model(&backends, model, source).is_some_and(|(_, def)| def.is_online())
+        };
+        if online {
+            // The manifest's own sentinel: remote compute has no local device,
+            // and nothing resolves locally whether it is loaded or not.
+            return StageModelDevice {
+                preference: Device::None.to_string(),
+                resolved_accel: None,
+            };
+        }
+        let preference = self.config.read().await.effective_device(source, model);
+        let resolved_accel = match running {
+            Some(actual) => Some(actual),
+            // Not loaded: `cpu` needs no resolution, `gpu` has none yet — a
+            // client is never told a device resolved before a load confirmed it.
+            None => (preference == "cpu").then(|| preference.clone()),
+        };
+        StageModelDevice {
+            preference,
+            resolved_accel,
+        }
+    }
+
+    /// The `{ device, resolved_accel, available_devices }` body every
+    /// per-model device verb answers with, so the shape cannot drift between
+    /// them.
+    async fn model_device_response(
+        &self,
+        target: &DeviceTarget,
+        message: String,
+    ) -> DaemonResponse {
+        let source = &target.definition.source;
+        let name = &target.definition.name;
+        let running = self.running_device(source, name).await;
+        let view = self.model_device_view(source, name, running).await;
+        let available_devices = self
+            .install_context(&target.backend_dir)
+            .await
+            .offer(&target.definition);
+        DaemonResponse::success()
+            .with_device(view.preference)
+            .with_resolved_accel(view.resolved_accel)
+            .with_available_devices(available_devices)
+            .with_message(message)
+    }
+
+    /// What this host and one backend's installed asset can offer, read once
+    /// per request: the host is probed fresh, off the async runtime, so an AMD
+    /// host is never offered a GPU it cannot use, and the install record says
+    /// which accelerators the build actually has.
+    async fn install_context(&self, backend_dir: &std::path::Path) -> InstallContext {
+        InstallContext {
+            host_devices: self.probe_available_devices().await,
+            installed_accel: crate::registry::installed::read(backend_dir)
+                .map(|r| r.selected.accel)
+                .unwrap_or_default(),
+        }
+    }
+
     /// Read-only GPU inventory for `GET /gpu_info`. Hardware detection runs on a
     /// blocking thread (NVML / sysfs / `system_profiler`) so it never stalls the
     /// async runtime. Best-effort: an empty list when no GPU is found.
@@ -462,6 +976,85 @@ pub(crate) fn host_available_devices(host: &crate::registry::host_detect::Host) 
     if host.cuda.is_some() || host.rocm.is_some() || host.vulkan.is_some() {
         devices.push("gpu".to_string());
     }
+    devices
+}
+
+/// Refuse a device the model cannot run on at all.
+///
+/// Only the manifest is consulted: an online model has no local device, and
+/// a model declaring only `cpu` cannot be sent to the GPU. Whether *this
+/// host* has the accelerator is deliberately not a rejection — a `gpu`
+/// choice on a host without one falls back to the CPU at load time, reported
+/// through `resolved_accel`, the same as it always has, and refusing it here
+/// would also refuse a preference the user is staging for a machine they are
+/// about to move the config to.
+fn model_rejects_device(definition: &ModelDefinition, device: &str) -> Option<DaemonResponse> {
+    let name = &definition.name;
+    if definition.is_online() {
+        return Some(DaemonResponse::error_with_code(
+            ErrorCode::InvalidDevice,
+            &format!("Model {name} runs on a remote service and has no local device to set."),
+        ));
+    }
+    let declared: Vec<String> = definition
+        .supported_devices
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    if declared.iter().any(|d| d == device) {
+        return None;
+    }
+    Some(DaemonResponse::error_with_code(
+        ErrorCode::InvalidDevice,
+        &format!(
+            "Model {name} does not run on {device}; it supports {}.",
+            declared.join(", ")
+        ),
+    ))
+}
+
+/// The devices this install can offer a model on this host.
+///
+/// `declared` is what the *model* can do, `installed_accel` what the
+/// *installed build* can do, and `host_devices` what the machine has; only
+/// the intersection is offerable, exactly as
+/// `docs/protocol/endpoints/v1/backends.md` ("Deriving the offered device
+/// list") describes it. A CUDA-only backend on a host with no NVIDIA GPU
+/// installs its CPU asset, and offering a GPU there is the defect this closes.
+/// An empty `installed_accel` means the daemon has no record — a
+/// local-directory import, an install predating the record, or a WASM
+/// component, whose record names a transport rather than an accelerator — and
+/// the manifest is then the only available answer. Online models (`none`)
+/// offer nothing: there is no local compute.
+pub(crate) fn model_available_devices(
+    host_devices: &[String],
+    declared: &[Device],
+    installed_accel: &[String],
+) -> Vec<String> {
+    if declared.contains(&Device::None) {
+        return Vec::new();
+    }
+    let installed_accel: Vec<&String> = installed_accel.iter().filter(|a| *a != "wasm").collect();
+    let accelerated =
+        installed_accel.is_empty() || installed_accel.iter().any(|a| a.as_str() != "cpu");
+    let mut offered: Vec<String> = declared
+        .iter()
+        .map(ToString::to_string)
+        .filter(|d| host_devices.contains(d))
+        .filter(|d| d == "cpu" || accelerated)
+        .collect();
+    offered.dedup();
+    offered
+}
+
+/// The devices a backend can be run on here: the union of what its models
+/// are offered, in the `cpu`, `gpu` order every device list uses.
+pub(crate) fn backend_available_devices(
+    per_model: impl IntoIterator<Item = Vec<String>>,
+) -> Vec<String> {
+    let mut devices: Vec<String> = per_model.into_iter().flatten().collect();
+    devices.sort();
+    devices.dedup();
     devices
 }
 
@@ -768,5 +1361,131 @@ mod tests {
         assert_eq!(preference_axis("cpu"), "cpu");
         assert_eq!(preference_axis("remote"), "remote");
         assert_eq!(preference_axis("unknown"), "unknown");
+    }
+
+    fn both() -> Vec<String> {
+        vec!["cpu".to_string(), "gpu".to_string()]
+    }
+
+    /// The narrowing that makes a per-model list worth asking for: a model
+    /// declaring `gpu` on a backend whose installed asset is CPU-only can run
+    /// on no GPU here, whatever the host has.
+    #[test]
+    fn a_cpu_only_install_offers_no_gpu() {
+        assert_eq!(
+            model_available_devices(&both(), &[Device::Cpu, Device::Gpu], &["cpu".to_string()]),
+            vec!["cpu".to_string()]
+        );
+        assert_eq!(
+            model_available_devices(&both(), &[Device::Gpu], &["cpu".to_string()]),
+            Vec::<String>::new(),
+            "a GPU-only model on a CPU-only install runs nowhere"
+        );
+    }
+
+    /// A GPU install on a GPU host offers what the model declares, and the
+    /// host list still caps it: no GPU on the host, no GPU offered, even with
+    /// a GPU asset installed.
+    #[test]
+    fn the_host_caps_what_the_install_can_offer() {
+        let cuda = vec!["cuda".to_string()];
+        assert_eq!(
+            model_available_devices(&both(), &[Device::Cpu, Device::Gpu], &cuda),
+            both()
+        );
+        assert_eq!(
+            model_available_devices(&["cpu".to_string()], &[Device::Cpu, Device::Gpu], &cuda),
+            vec!["cpu".to_string()]
+        );
+        assert_eq!(
+            model_available_devices(&both(), &[Device::Cpu], &cuda),
+            vec!["cpu".to_string()],
+            "a CPU-only model is not offered the GPU"
+        );
+    }
+
+    /// No record, or a WASM record naming a transport rather than an
+    /// accelerator, leaves the manifest as the only answer.
+    #[test]
+    fn without_an_accelerator_record_the_manifest_answers() {
+        assert_eq!(
+            model_available_devices(&both(), &[Device::Cpu, Device::Gpu], &[]),
+            both()
+        );
+        assert_eq!(
+            model_available_devices(&both(), &[Device::Cpu, Device::Gpu], &["wasm".to_string()]),
+            both()
+        );
+    }
+
+    /// An online model has no local device to offer.
+    #[test]
+    fn an_online_model_offers_nothing() {
+        assert_eq!(
+            model_available_devices(&both(), &[Device::None], &[]),
+            Vec::<String>::new()
+        );
+    }
+
+    /// A backend's list is the union of its models' lists: a CPU-only model
+    /// beside a GPU-capable one gives both, an online model contributes
+    /// nothing, and the order is always `cpu` then `gpu`.
+    #[test]
+    fn a_backends_devices_are_the_union_of_its_models() {
+        assert_eq!(
+            backend_available_devices([
+                vec!["gpu".to_string()],
+                vec!["cpu".to_string()],
+                Vec::new(),
+                both(),
+            ]),
+            both()
+        );
+        assert_eq!(
+            backend_available_devices([Vec::new(), Vec::new()]),
+            Vec::<String>::new(),
+            "a backend of online models runs on nothing local"
+        );
+        assert_eq!(backend_available_devices([]), Vec::<String>::new());
+    }
+
+    fn definition(devices: Vec<Device>) -> ModelDefinition {
+        ModelDefinition {
+            name: "m".to_string(),
+            source: "github.com/x/y".to_string(),
+            is_multilingual: false,
+            primary_language: "en".to_string(),
+            supported_languages: vec!["en".to_string()],
+            estimated_vram_bytes: 0,
+            max_input_chars: None,
+            processing_interval: std::time::Duration::from_secs(1),
+            supported_devices: devices,
+            voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+            clone_ref_seconds: None,
+            clone_needs_transcript: false,
+            voices: Vec::new(),
+            realtime: false,
+            provider: None,
+        }
+    }
+
+    /// The manifest, and only the manifest, decides what a model may be set
+    /// to: the host's accelerators are a load-time fallback, not a rejection.
+    #[test]
+    fn a_model_is_refused_only_what_its_manifest_rules_out() {
+        let local = definition(vec![Device::Cpu, Device::Gpu]);
+        assert!(model_rejects_device(&local, "cpu").is_none());
+        assert!(model_rejects_device(&local, "gpu").is_none());
+
+        let cpu_only = definition(vec![Device::Cpu]);
+        assert!(model_rejects_device(&cpu_only, "cpu").is_none());
+        let rejection = model_rejects_device(&cpu_only, "gpu").expect("refused");
+        assert_eq!(rejection.error_code, Some(ErrorCode::InvalidDevice));
+
+        let online = definition(vec![Device::None]);
+        for device in ["cpu", "gpu"] {
+            let rejection = model_rejects_device(&online, device).expect("refused");
+            assert_eq!(rejection.error_code, Some(ErrorCode::InvalidDevice));
+        }
     }
 }

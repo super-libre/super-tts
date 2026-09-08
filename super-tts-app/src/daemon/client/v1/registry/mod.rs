@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `/registry/backends` — backend catalog list, install, refresh, update, uninstall.
+//! `/registry/backend/*` — the published catalog and the acts that change what
+//! is installed from it: list, install, refresh, update.
+//!
+//! Removing an installed backend is not here. It is served at
+//! `DELETE /backend/{source}` and lives in
+//! [`crate::daemon::client::v1::backends`], because it is a property of what is
+//! already on disk: installing comes from the registry, and a backend imported
+//! from a local directory was never in the registry to be removed from it.
 
 mod install;
 mod list;
 mod refresh;
-mod uninstall;
 mod update;
 
 pub use install::{install_by_local_path, install_by_repo_url, install_by_source};
 pub use list::list;
 pub use refresh::refresh;
-pub use uninstall::uninstall;
 pub use update::update;
 
 /// Filters for the registry list endpoint.

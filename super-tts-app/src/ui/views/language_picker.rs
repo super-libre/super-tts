@@ -4,9 +4,20 @@ use cosmic::iced::Length;
 use cosmic::widget::{self, button, column, scrollable, text_input};
 
 use crate::core::app::AppModel;
-use crate::ui::languages::{GLOBAL_LANGUAGES, friendly_name};
+use crate::ui::languages::friendly_name;
 use crate::ui::messages::{LanguageMessage, Message};
 
+/// The language search sheet, in either of its two modes.
+///
+/// Both lists are the daemon's, never this app's. Which tags a model answers to
+/// — whether it wants `en` or `en-US` — is a rule only the daemon's resolver
+/// knows, and the global setting's vocabulary is the union of what the installed
+/// models can speak, so it grows and shrinks as backends come and go. The
+/// hard-coded table that used to fill the global half offered tags no model
+/// served and, more quietly, never learned about the ones a freshly installed
+/// backend added. `auto` is pinned rather than taken from either list, because
+/// it is a control and not a language, and a search query must not be able to
+/// filter it away.
 pub fn sheet(app: &AppModel) -> Element<'_, Message> {
     let spacing = cosmic::theme::spacing();
     let q = app.language.language_picker_query.to_lowercase();
@@ -20,12 +31,12 @@ pub fn sheet(app: &AppModel) -> Element<'_, Message> {
         // Per-model sheet.
         pinned.push((None, "Follow global".to_string())); // clear → DELETE
         pinned.push((Some("auto".to_string()), friendly_name("auto"))); // "Auto-detect"
-        // Supported languages from the resolution block — but only when the
-        // block belongs to this exact (source, model) pair (stale-block guard).
-        if app.language.model_language_for.as_ref() == Some(&(src.clone(), mdl.clone()))
-            && let Some(block) = &app.language.model_language
-        {
-            for tag in &block.supported {
+        // The tags this model can be pinned to — but only when the held list
+        // belongs to this exact (source, model) pair (stale-list guard). An
+        // empty list is a real answer for a monolingual model, and leaves the
+        // sheet with nothing but the two pinned controls.
+        if app.language.model_language_for.as_ref() == Some(&(src.clone(), mdl.clone())) {
+            for tag in &app.language.model_languages {
                 if tag.eq_ignore_ascii_case("auto") {
                     continue; // already pinned as "Auto-detect"
                 }
@@ -36,8 +47,11 @@ pub fn sheet(app: &AppModel) -> Element<'_, Message> {
         // Global sheet — "Auto-detect" only; the unset state is reached by not
         // choosing anything, so there is no explicit "No preference" entry.
         pinned.push((Some("auto".to_string()), friendly_name("auto"))); // "Auto-detect"
-        for tag in GLOBAL_LANGUAGES {
-            langs.push((Some((*tag).to_string()), friendly_name(tag)));
+        for tag in &app.language.primary_languages {
+            if tag.eq_ignore_ascii_case("auto") {
+                continue; // the daemon always includes it; it is pinned above
+            }
+            langs.push((Some(tag.clone()), friendly_name(tag)));
         }
     }
     langs.sort_by(|a, b| a.1.cmp(&b.1));

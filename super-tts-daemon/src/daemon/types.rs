@@ -94,8 +94,13 @@ pub struct SuperTTSDaemon {
     pub audio_theme: Arc<RwLock<AudioTheme>>,
     pub volume: Arc<RwLock<u8>>,
     pub download_manager: Arc<DownloadStateManager>,
-    // Device management
-    pub preferred_device: Arc<tokio::sync::RwLock<String>>, // "cpu" or "cuda"
+    // Device management. `preferred_device` is the runtime mirror of the
+    // *global default* (`config.device.preferred_device`) that `get_device`
+    // reads — not what any one model loads on. A model's device is
+    // `config.effective_device(source, model)`: its own if it has one, this
+    // otherwise. Every load path asks the config, never this lock, so a
+    // per-model choice cannot be lost to a stale mirror.
+    pub preferred_device: Arc<tokio::sync::RwLock<String>>, // "cpu" or "gpu"
     pub actual_device: Arc<tokio::sync::RwLock<String>>,    // actual device in use (may fallback)
     // Configuration management
     pub config: Arc<tokio::sync::RwLock<DaemonConfig>>,

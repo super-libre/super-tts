@@ -26,7 +26,7 @@ This document is the companion to:
 
 A model is identified by the `(name, source)` pair — the same
 pair external clients use on
-[`/active_model`](../endpoints/v1/active_model.md):
+[`/pipeline/{stage}/model`](../endpoints/v1/pipeline/model.md):
 
 | Field      | Type   | Notes                                                                       |
 |------------|--------|-----------------------------------------------------------------------------|
@@ -40,8 +40,9 @@ disambiguated by `source`. The daemon derives a model's `source` from the
 [config.md](./config.md).
 
 > `source` supersedes the older `builtin | custom | online` discriminator.
-> [active_model.md](../endpoints/v1/active_model.md) and
-> [models.md](../endpoints/v1/models.md) are reconciled with this definition.
+> [pipeline/model.md](../endpoints/v1/pipeline/model.md) and
+> [pipeline/model-list.md](../endpoints/v1/pipeline/model-list.md) are
+> reconciled with this definition.
 
 > `[backend].id` is a separate identifier that names a backend's install
 > directory. It is not part of model identity.
@@ -79,8 +80,28 @@ a top-level `status` field of `"success"` or `"error"`.
 | DELETE | `/v1/voices/{voice}` | Release a registered cloned voice.†            |
 
 † Only for models declaring `cloned` in
-[`voice_kinds`](./config.md#voices). A backend whose models are all preset or
+[`voice_kinds`](./config.md#modelsvoices). A backend whose models are all preset or
 described never receives these calls and need not implement them.
+
+### Contract generations and the `/v1` prefix
+
+The manifest's [`contract`](./config.md#contract-generations) names a
+*generation* of this agreement — which fields a `backend.toml` may declare and
+which routes exist to be served. Each generation extends the one before it.
+`v1` is the only generation so far, and it is everything on this page.
+
+A generation does not oblige a backend to serve all of it. What a backend must
+implement follows from the models it declares, not from the generation it
+names: a backend whose models are all preset or described serves
+`POST /v1/synthesize` and never `POST /v1/voices`, and is no less a `v1`
+backend for it.
+
+The `/v1` in the route paths is not that number. It is a path segment inside
+the agreement, and an extending generation leaves it alone: a future `v2`
+backend would serve whatever `v2` adds *next to* `/v1/synthesize`, renaming
+nothing. The prefix would move only for a generation that changed the shape of
+a route that already exists — which is the case a new generation is meant to
+avoid needing.
 
 ### Request headers
 
@@ -149,7 +170,7 @@ Content-Type: application/json
 | Field      | Type   | Required | Notes                                                          |
 |------------|--------|----------|----------------------------------------------------------------|
 | `name`     | string | yes      | A model `name` the backend declares in its configuration.           |
-| `device`   | string | no       | The resolved accelerator for this load: `cpu`, `cuda`, `rocm`, `metal`, or `vulkan`. This is the accelerator the installed asset actually targets, not the user's `cpu`/`gpu` preference — the daemon resolves that preference against the asset it selected, so a build carrying more than one runtime is told which one to use. The same resolution is what external clients see as `resolved_accel` on [`GET`/`POST /active_device`](../endpoints/v1/active_device.md). **Absent** when the daemon has no record of which accelerator the installed build targets — an install performed from a local directory, for instance — in which case the backend selects for itself. The backend may still fall back; the actual device is reported by `GET /v1/status`. |
+| `device`   | string | no       | The resolved accelerator for this load: `cpu`, `cuda`, `rocm`, `metal`, or `vulkan`. This is the accelerator the installed asset actually targets, not the user's `cpu`/`gpu` preference — the daemon resolves that preference against the asset it selected, so a build carrying more than one runtime is told which one to use. The same resolution is what external clients see as `resolved_accel` on [`GET`/`POST /pipeline/{stage}/model/{model}/device`](../endpoints/v1/pipeline/device.md). **Absent** when the daemon has no record of which accelerator the installed build targets — an install performed from a local directory, for instance — in which case the backend selects for itself. The backend may still fall back; the actual device is reported by `GET /v1/status`. |
 | `provider` | string | no       | Present only when the model declares [`provider`](./config.md#models) in its configuration, echoed back verbatim. Carries no meaning to the daemon. |
 
 > **Compatibility.** `provider` was part of model identity before it became
@@ -350,7 +371,7 @@ Content-Type: application/json
 
 Register a cloned voice's reference audio, so later syntheses can name it by id
 alone. Only reached for a model declaring `cloned` in
-[`voice_kinds`](./config.md#voices).
+[`voice_kinds`](./config.md#modelsvoices).
 
 **Called once per voice per load, not per synthesis.** Deriving a speaker
 embedding — or encoding reference codes — is real work, and the daemon issues

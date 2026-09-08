@@ -33,6 +33,10 @@ impl SuperTTSDaemon {
             Command::ListModels => self.handle_list_models().await,
             Command::SetDevice { device } => self.handle_set_device(device).await,
             Command::GetDevice => self.handle_get_device().await,
+            cmd @ (Command::SetModelDevice { .. }
+            | Command::GetModelDevice { .. }
+            | Command::ListModelDevices { .. }
+            | Command::ListActiveBackendDevices) => self.handle_model_device(cmd).await,
             Command::GetConfig => self.handle_get_config().await,
             Command::CancelDownload => self.handle_cancel_download(),
             Command::GetDownloadStatus => self.handle_get_download_status(),
@@ -54,9 +58,11 @@ impl SuperTTSDaemon {
             }
             Command::GetPrimaryLanguage => self.handle_get_primary_language().await,
             Command::ClearPrimaryLanguage => self.handle_clear_primary_language().await,
+            Command::ListPrimaryLanguages => Self::handle_list_primary_languages(),
             cmd @ (Command::SetModelLanguage { .. }
             | Command::GetModelLanguage { .. }
-            | Command::ClearModelLanguage { .. }) => self.handle_model_language(cmd).await,
+            | Command::ClearModelLanguage { .. }
+            | Command::ListModelLanguages { .. }) => self.handle_model_language(cmd).await,
             Command::SetAllowOnlineModels { enabled } => {
                 self.handle_set_allow_online_models(enabled).await
             }
@@ -75,6 +81,7 @@ impl SuperTTSDaemon {
             Command::GetActiveBackend => self.handle_get_active_backend().await,
             Command::GetGpuInfo => Self::handle_get_gpu_info().await,
             Command::ClearActiveBackend => self.handle_clear_active_backend().await,
+            Command::GetPipeline => self.handle_get_pipeline().await,
         }
     }
 }

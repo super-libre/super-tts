@@ -317,6 +317,17 @@ fn conditional_property_names_exist() {
             "SubprocessAsset missing `{key}`"
         );
     }
+    let opt_props = defs["Opt"]["properties"]
+        .as_object()
+        .expect("Opt properties");
+    for key in ["name", "default", "choices"] {
+        assert!(opt_props.contains_key(key), "Opt missing `{key}`");
+    }
+    assert_eq!(
+        opt_props["choices"]["uniqueItems"],
+        serde_json::json!(true),
+        "a choice offered twice must not validate"
+    );
     let files_props = defs["FileSpec"]["properties"]
         .as_object()
         .expect("FileSpec properties");
@@ -532,4 +543,28 @@ fn allows_documented_optionals() {
         v.is_valid(&with_files),
         "model files with url/destination/sha256 must validate"
     );
+}
+
+/// Every table a `CONTRACT_FIELDS` row may name resolves to a definition the
+/// schema actually has, so a future row cannot generate a rule that matches
+/// nothing. Checked over the mapping rather than over today's rows, which is
+/// what makes it useful while the table is still empty: the first v2 field
+/// added inherits a mapping that has been proven to land somewhere.
+#[test]
+fn every_mappable_contract_table_has_a_schema_definition() {
+    use super_tts_registry_types::manifest::{Contract, ContractField, FieldRule};
+    let schema = super_tts_registry_types::schema::backend_schema();
+    let defs = schema["definitions"].as_object().expect("definitions");
+    for table in ["backend", "models", "secrets", "options"] {
+        let field = ContractField {
+            since: Contract::LATEST,
+            rule: FieldRule::Added,
+            table,
+            key: "unused",
+        };
+        let def = field
+            .schema_definition()
+            .unwrap_or_else(|| panic!("`{table}` has no schema definition mapped"));
+        assert!(defs.contains_key(def), "`{table}` maps to missing `{def}`");
+    }
 }

@@ -1,11 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::daemon::http::state::AppState;
+use crate::daemon::http::wire::{ErrorEnvelope, ReasonEnvelope, RegistryError};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use super_tts_shared::registry::RefreshResponse;
 use super_tts_shared::registry::events::RegistryEvent;
 
-/// `POST /registry/backends/refresh` — force-refetch the registry index.
+/// `POST /registry/backend/refresh` — force-refetch the registry index.
+#[utoipa::path(
+    post,
+    path = "/registry/backend/refresh",
+    tag = "registry",
+    summary = "Re-fetch the backend catalog",
+    description = "\
+Pulls the published index again rather than serving what is cached, and reports how \
+many backends it now holds. Use it after a backend is published, or to clear an \
+`index_stale` marker a listing came back with.
+
+`GET /registry/backend/list` refreshes on its own schedule; this forces it now. \
+Idempotent, and concurrent calls coalesce into a single fetch, so a refresh button \
+cannot start a stampede. The outcome is also published on the `registry_install` event \
+topic, which is how a second client learns the catalog moved.",
+    security(("session_token" = ["settings"])),
+    responses(
+        (status = 200, description = "Refreshed.", body = RefreshResponse),
+        (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
+        (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
+        (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
+        (status = 503, description = "The registry could not be reached (`registry_unavailable`).", body = RegistryError),
+    ),
+)]
 pub(crate) async fn refresh_registry(State(s): State<AppState>) -> impl IntoResponse {
     if let Ok(index) = s.registry_client.refresh().await {
         let payload = serde_json::to_value(RegistryEvent::RefreshCompleted {
@@ -15,15 +40,19 @@ pub(crate) async fn refresh_registry(State(s): State<AppState>) -> impl IntoResp
         .unwrap_or_default();
         s.daemon.events.publish_registry_install(payload);
 
-        let body = serde_json::json!({
-            "schema_version": index.schema_version,
-            "generated_at": index.generated_at,
-            "backend_count": index.backends.len(),
-        });
+        // Built as the struct the `#[utoipa::path]` above names, rather than as
+        // an ad-hoc object with the same keys: the document then describes the
+        // value this line produces, and a field renamed on one side stops
+        // compiling on the other.
+        let body = RefreshResponse {
+            schema_version: index.schema_version,
+            generated_at: index.generated_at.clone(),
+            backend_count: index.backends.len(),
+        };
         (
             StatusCode::OK,
             [("content-type", "application/json")],
-            body.to_string(),
+            serde_json::to_string(&body).unwrap_or_default(),
         )
             .into_response()
     } else {

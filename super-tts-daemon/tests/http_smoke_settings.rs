@@ -2,7 +2,7 @@
 //! Settings-scope HTTP endpoint smoke test.
 //!
 //! Exercises the verb-free settings surface
-//! (`POST /audio_theme`, `GET /volume`, `GET /active_model`, etc.) plus
+//! (`POST /settings/audio_theme`, `GET /settings/volume`, `GET /pipeline/1/model`, etc.) plus
 //! scope-aware rejection: a `client`-scope token must NOT be allowed to
 //! hit settings endpoints.
 //!
@@ -201,16 +201,16 @@ async fn settings_scope_endpoints() {
     .expect("auth_request client");
     let client_token = client_auth.session_token;
 
-    // --- GET /audio_theme ---
-    let (s, body) = raw_get_json(&http_socket, "/audio_theme", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /audio_theme: {body}");
+    // --- GET /settings/audio_theme ---
+    let (s, body) = raw_get_json(&http_socket, "/settings/audio_theme", &settings_token).await;
+    assert_eq!(s, StatusCode::OK, "GET /settings/audio_theme: {body}");
     assert_eq!(body["status"], "success");
     let initial_theme = body["audio_theme"]
         .as_str()
         .unwrap_or("classic")
         .to_string();
 
-    // --- POST /audio_theme: round-trip a different value ---
+    // --- POST /settings/audio_theme: round-trip a different value ---
     let target_theme = if initial_theme == "silent" {
         "classic"
     } else {
@@ -218,69 +218,74 @@ async fn settings_scope_endpoints() {
     };
     let (s, body) = raw_post_json(
         &http_socket,
-        "/audio_theme",
+        "/settings/audio_theme",
         &settings_token,
         serde_json::json!({ "theme": target_theme }),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "POST /audio_theme: {body}");
+    assert_eq!(s, StatusCode::OK, "POST /settings/audio_theme: {body}");
     assert_eq!(body["status"], "success");
 
     // Read it back.
-    let (s, body) = raw_get_json(&http_socket, "/audio_theme", &settings_token).await;
+    let (s, body) = raw_get_json(&http_socket, "/settings/audio_theme", &settings_token).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["audio_theme"], target_theme);
 
     // Restore so other tests don't see persistent side-effects.
     let _ = raw_post_json(
         &http_socket,
-        "/audio_theme",
+        "/settings/audio_theme",
         &settings_token,
         serde_json::json!({ "theme": initial_theme }),
     )
     .await;
 
-    // --- GET /volume ---
-    let (s, body) = raw_get_json(&http_socket, "/volume", &settings_token).await;
+    // --- GET /settings/volume ---
+    let (s, body) = raw_get_json(&http_socket, "/settings/volume", &settings_token).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["status"], "success");
 
-    // --- POST /volume / GET /volume round-trip ---
+    // --- POST /settings/volume / GET /settings/volume round-trip ---
     let (s, _) = raw_post_json(
         &http_socket,
-        "/volume",
+        "/settings/volume",
         &settings_token,
         serde_json::json!({ "volume": 75 }),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
 
-    // --- GET /active_model: composed shape with `current` + `switch` ---
-    let (s, body) = raw_get_json(&http_socket, "/active_model", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /active_model: {body}");
+    // --- GET /pipeline/1/model: the stage's model slot ---
+    let (s, body) = raw_get_json(&http_socket, "/pipeline/1/model", &settings_token).await;
+    assert_eq!(s, StatusCode::OK, "GET /pipeline/1/model: {body}");
     assert_eq!(body["status"], "success");
-    let active_model = &body["active_model"];
+    let slot = &body["model"];
+    assert_eq!(slot["stage"], 1, "the slot names its own stage: {slot}");
     // With no backends installed (hermetic test), the daemon is idle and the
-    // current model is null; with a backend it would be a string. Accept both.
-    let current_model = &active_model["current"]["model"];
+    // slot is empty; with a backend it would name a model. Accept both — but
+    // the slot is always reported, never an absent key.
     assert!(
-        current_model.is_string() || current_model.is_null(),
-        "active_model.current.model has unexpected shape: {active_model}"
+        slot["model"].is_string() || slot["model"].is_null(),
+        "model slot has unexpected shape: {slot}"
+    );
+    assert_eq!(
+        slot["loaded"], false,
+        "a hermetic daemon has loaded nothing: {slot}"
     );
     // No switch in flight at startup
-    assert!(active_model["switch"].is_null());
+    assert!(slot["switch"].is_null());
 
-    // --- GET /models ---
-    let (s, body) = raw_get_json(&http_socket, "/models", &settings_token).await;
+    // --- GET /pipeline/1/model/list ---
+    let (s, body) = raw_get_json(&http_socket, "/pipeline/1/model/list", &settings_token).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["status"], "success");
     assert!(body["available_models"].is_array());
 
-    // --- GET /audio_themes ---
+    // --- GET /settings/audio_theme/list ---
     // Pin the wire values, not just the shape: they must be the documented
-    // snake_case tokens (docs/protocol/endpoints/v1/audio_themes.md), e.g.
+    // snake_case tokens (docs/protocol/endpoints/v1/settings/audio_theme/list.md), e.g.
     // `scifi` — not the PascalCase variant names.
-    let (s, body) = raw_get_json(&http_socket, "/audio_themes", &settings_token).await;
+    let (s, body) = raw_get_json(&http_socket, "/settings/audio_theme/list", &settings_token).await;
     assert_eq!(s, StatusCode::OK);
     let themes = body["available_audio_themes"]
         .as_array()
@@ -294,85 +299,139 @@ async fn settings_scope_endpoints() {
         "audio themes must be the documented snake_case tokens"
     );
 
-    // --- POST /active_device: invalid device name should error ---
+    // --- The device is per model, and reached through the stage that runs it.
+    // There is no daemon-wide device setting to read or write here any more:
+    // the stage is empty on a hermetic daemon, so there is nothing to resolve
+    // a model name against and both the read and the write say so rather than
+    // answering about some global value. `http_smoke_pipeline.rs` drives the
+    // same paths with a backend selected.
+    let (s, body) = raw_get_json(
+        &http_socket,
+        "/pipeline/1/model/kokoro-82m/device",
+        &settings_token,
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "with no backend selected there is no model to read a device for: {body}"
+    );
+    assert_eq!(body["error_code"], "invalid_backend", "{body}");
+
     let (s, body) = raw_post_json(
         &http_socket,
-        "/active_device",
+        "/pipeline/1/model/kokoro-82m/device",
         &settings_token,
         serde_json::json!({ "device": "definitely-not-a-real-device" }),
     )
     .await;
-    // The daemon returns 200 with status:"error" or 400 — both are
-    // acceptable as long as the device wasn't switched. Verify we
-    // didn't end up on a new device.
-    let (_, after) = raw_get_json(&http_socket, "/active_device", &settings_token).await;
-    assert_ne!(
-        after["device"], "definitely-not-a-real-device",
-        "bogus device should not have been accepted (response was {s}: {body})"
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "a bogus device must be refused, not stored: {body}"
+    );
+    assert_eq!(
+        body["error_code"], "invalid_device",
+        "the device is validated before the stage is resolved, so the client \
+         is told which of the two was wrong: {body}"
     );
 
-    // --- GET /allow_online_models ---
-    let (s, body) = raw_get_json(&http_socket, "/allow_online_models", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /allow_online_models: {body}");
+    // And the pre-model list is the same shape of refusal.
+    let (s, body) = raw_get_json(&http_socket, "/pipeline/1/device/list", &settings_token).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error_code"], "invalid_backend", "{body}");
+
+    // --- GET /settings/allow_online_models ---
+    let (s, body) = raw_get_json(
+        &http_socket,
+        "/settings/allow_online_models",
+        &settings_token,
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::OK,
+        "GET /settings/allow_online_models: {body}"
+    );
     assert_eq!(body["status"], "success");
     let initial_allow = body["allow_online_models"].as_bool().unwrap_or(false);
 
-    // --- POST /allow_online_models: round-trip the inverse ---
+    // --- POST /settings/allow_online_models: round-trip the inverse ---
     let (s, _) = raw_post_json(
         &http_socket,
-        "/allow_online_models",
+        "/settings/allow_online_models",
         &settings_token,
         serde_json::json!({ "enabled": !initial_allow }),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "POST /allow_online_models");
-    let (_, body) = raw_get_json(&http_socket, "/allow_online_models", &settings_token).await;
+    assert_eq!(s, StatusCode::OK, "POST /settings/allow_online_models");
+    let (_, body) = raw_get_json(
+        &http_socket,
+        "/settings/allow_online_models",
+        &settings_token,
+    )
+    .await;
     assert_eq!(body["allow_online_models"], !initial_allow);
     // Restore.
     let _ = raw_post_json(
         &http_socket,
-        "/allow_online_models",
+        "/settings/allow_online_models",
         &settings_token,
         serde_json::json!({ "enabled": initial_allow }),
     )
     .await;
 
-    // --- GET /update_check_enabled ---
-    let (s, body) = raw_get_json(&http_socket, "/update_check_enabled", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /update_check_enabled: {body}");
+    // --- GET /settings/update_check_enabled ---
+    let (s, body) = raw_get_json(
+        &http_socket,
+        "/settings/update_check_enabled",
+        &settings_token,
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::OK,
+        "GET /settings/update_check_enabled: {body}"
+    );
     assert_eq!(body["status"], "success");
     let initial_update_check_enabled = body["update_check_enabled"].as_bool().unwrap_or(true);
 
-    // --- POST /update_check_enabled: round-trip the inverse ---
+    // --- POST /settings/update_check_enabled: round-trip the inverse ---
     let (s, _) = raw_post_json(
         &http_socket,
-        "/update_check_enabled",
+        "/settings/update_check_enabled",
         &settings_token,
         serde_json::json!({ "enabled": !initial_update_check_enabled }),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "POST /update_check_enabled");
-    let (_, body) = raw_get_json(&http_socket, "/update_check_enabled", &settings_token).await;
+    assert_eq!(s, StatusCode::OK, "POST /settings/update_check_enabled");
+    let (_, body) = raw_get_json(
+        &http_socket,
+        "/settings/update_check_enabled",
+        &settings_token,
+    )
+    .await;
     assert_eq!(body["update_check_enabled"], !initial_update_check_enabled);
     // Restore.
     let _ = raw_post_json(
         &http_socket,
-        "/update_check_enabled",
+        "/settings/update_check_enabled",
         &settings_token,
         serde_json::json!({ "enabled": initial_update_check_enabled }),
     )
     .await;
 
-    // --- GET /update_beta_optin ---
-    let (s, body) = raw_get_json(&http_socket, "/update_beta_optin", &settings_token).await;
-    assert_eq!(s, StatusCode::OK, "GET /update_beta_optin: {body}");
+    // --- GET /settings/update_beta_optin ---
+    let (s, body) =
+        raw_get_json(&http_socket, "/settings/update_beta_optin", &settings_token).await;
+    assert_eq!(s, StatusCode::OK, "GET /settings/update_beta_optin: {body}");
     assert_eq!(body["status"], "success");
     let initial_beta_optin = body["update_beta_optin"]
         .as_str()
         .unwrap_or("auto")
         .to_string();
 
-    // --- POST /update_beta_optin: round-trip ---
+    // --- POST /settings/update_beta_optin: round-trip ---
     let target_beta_optin = if initial_beta_optin == "enabled" {
         "disabled"
     } else {
@@ -380,18 +439,19 @@ async fn settings_scope_endpoints() {
     };
     let (s, _) = raw_post_json(
         &http_socket,
-        "/update_beta_optin",
+        "/settings/update_beta_optin",
         &settings_token,
         serde_json::json!({ "value": target_beta_optin }),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "POST /update_beta_optin");
-    let (_, body) = raw_get_json(&http_socket, "/update_beta_optin", &settings_token).await;
+    assert_eq!(s, StatusCode::OK, "POST /settings/update_beta_optin");
+    let (_, body) =
+        raw_get_json(&http_socket, "/settings/update_beta_optin", &settings_token).await;
     assert_eq!(body["update_beta_optin"], target_beta_optin);
     // Restore.
     let _ = raw_post_json(
         &http_socket,
-        "/update_beta_optin",
+        "/settings/update_beta_optin",
         &settings_token,
         serde_json::json!({ "value": initial_beta_optin }),
     )
@@ -436,24 +496,24 @@ async fn settings_scope_endpoints() {
     assert_eq!(body["update_available"], false);
     assert!(body["installer_asset"].is_null(), "{body}");
 
-    // --- POST /audio_theme/test: just verifies the endpoint accepts the
+    // --- POST /settings/audio_theme/test: just verifies the endpoint accepts the
     // request and returns success. Audio playback is best-effort under
     // CI (no PulseAudio) but the handler always returns 200 with status:"success".
     let (s, body) = raw_post_json(
         &http_socket,
-        "/audio_theme/test",
+        "/settings/audio_theme/test",
         &settings_token,
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "POST /audio_theme/test: {body}");
+    assert_eq!(s, StatusCode::OK, "POST /settings/audio_theme/test: {body}");
 
-    // --- POST /active_model/cancel: with no switch in flight, the
+    // --- POST /pipeline/1/model/cancel: with no switch in flight, the
     // daemon returns 409 Conflict with
     // `{ "status": "error", "message": "No download in progress" }`.
     let (s, body) = raw_post_json(
         &http_socket,
-        "/active_model/cancel",
+        "/pipeline/1/model/cancel",
         &settings_token,
         serde_json::json!({}),
     )
@@ -461,7 +521,7 @@ async fn settings_scope_endpoints() {
     assert_eq!(
         s,
         StatusCode::CONFLICT,
-        "POST /active_model/cancel with no switch should be 409: {body}"
+        "POST /pipeline/1/model/cancel with no switch should be 409: {body}"
     );
     assert_eq!(body["status"], "error");
     assert!(
@@ -471,12 +531,12 @@ async fn settings_scope_endpoints() {
         "cancel response missing expected message: {body}"
     );
 
-    // --- POST /active_model: unknown model name should be 400 Bad
+    // --- POST /pipeline/1/model: unknown model name should be 400 Bad
     // Request with status:"error". We don't want to trigger an
     // actual model download in CI, so we probe the error path.
     let (s, body) = raw_post_json(
         &http_socket,
-        "/active_model",
+        "/pipeline/1/model",
         &settings_token,
         serde_json::json!({
             "model": "definitely-not-a-real-model-xyz",
@@ -487,17 +547,17 @@ async fn settings_scope_endpoints() {
     assert_eq!(
         s,
         StatusCode::BAD_REQUEST,
-        "POST /active_model unknown-model expected 400: {body}"
+        "POST /pipeline/1/model unknown-model expected 400: {body}"
     );
     assert_eq!(body["status"], "error");
     let msg = body["message"].as_str().unwrap_or("");
     assert!(
         msg.contains("No installed backend"),
-        "active_model unknown-model message should mention no backend serves it, got: {msg:?}"
+        "POST /pipeline/1/model unknown-model message should mention no backend serves it, got: {msg:?}"
     );
 
     // --- Scope enforcement: client-scope token MUST be rejected ---
-    let (s, body) = raw_get_json(&http_socket, "/audio_theme", &client_token).await;
+    let (s, body) = raw_get_json(&http_socket, "/settings/audio_theme", &client_token).await;
     assert_eq!(
         s,
         StatusCode::FORBIDDEN,
@@ -507,7 +567,7 @@ async fn settings_scope_endpoints() {
 
     let (s, body) = raw_post_json(
         &http_socket,
-        "/volume",
+        "/settings/volume",
         &client_token,
         serde_json::json!({ "volume": 50 }),
     )

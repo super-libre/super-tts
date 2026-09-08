@@ -5,7 +5,8 @@
 
 use crate::daemon::client::{
     get_current_audio_theme, get_custom_models_dir, get_notification_method,
-    get_update_check_enabled, get_update_status, get_volume, list_backends, ping_daemon,
+    get_update_check_enabled, get_update_status, get_volume, list_backends, list_stage_backends,
+    ping_daemon,
 };
 use crate::state::AudioTheme;
 use crate::ui::messages::{
@@ -14,6 +15,7 @@ use crate::ui::messages::{
 };
 use cosmic::prelude::*;
 use log::warn;
+use super_tts_shared::models::protocol::SYNTHESIS_STAGE;
 
 /// Ping the daemon and map the result to `DaemonConnected` / `DaemonError`.
 /// Shared by the periodic keep-alive, the reconnect retries, and the startup
@@ -42,15 +44,31 @@ pub(in crate::core::app) fn reload_backend_catalogs() -> Task<cosmic::Action<Mes
     Task::batch([reload_backends(), fetch_registry_catalog(false)])
 }
 
-/// Reload the installed-backend catalog and map the result to `BackendsLoaded`
-/// / `BackendsError`.
+/// Reload the installed-backend catalog and the subset of it that can fill the
+/// synthesis stage, mapping each to its own message.
+///
+/// Both, because the two answer different questions and different surfaces ask
+/// them. The Library manages every installed backend; the Models page's "Load a
+/// backend" sheet may only offer the ones `POST /pipeline/{stage}` will accept,
+/// and a backend serving nothing this stage can run is refused there. Offering
+/// it anyway hands the user a pick that fails on click. They hold the same
+/// backends while synthesis is the only role — which is precisely why one list
+/// would quietly stand in for the other until a second stage existed.
 pub(in crate::core::app) fn reload_backends() -> Task<cosmic::Action<Message>> {
-    Task::perform(list_backends(), |result| {
-        cosmic::Action::App(match result {
-            Ok(backends) => Message::Backend(BackendMessage::BackendsLoaded(backends)),
-            Err(e) => Message::Backend(BackendMessage::BackendsError(e.to_string())),
-        })
-    })
+    Task::batch([
+        Task::perform(list_backends(), |result| {
+            cosmic::Action::App(match result {
+                Ok(backends) => Message::Backend(BackendMessage::BackendsLoaded(backends)),
+                Err(e) => Message::Backend(BackendMessage::BackendsError(e.to_string())),
+            })
+        }),
+        Task::perform(list_stage_backends(SYNTHESIS_STAGE), |result| {
+            cosmic::Action::App(match result {
+                Ok(backends) => Message::Backend(BackendMessage::StageBackendsLoaded(backends)),
+                Err(e) => Message::Backend(BackendMessage::BackendsError(e.to_string())),
+            })
+        }),
+    ])
 }
 
 /// Fetch the full annotated registry catalog (optionally refreshing the index

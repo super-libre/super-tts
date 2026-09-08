@@ -14,7 +14,7 @@ one request, which is what a status widget actually needs.
 playing interrupts it — that is what "speak this instead" means, and it is why
 this endpoint is *not* guarded by `speech_in_progress`. Only swapping the model
 out from under live synthesis is refused (see
-[`/active_model`](./active_model.md)).
+[`/pipeline/{stage}/model`](./pipeline/model.md)).
 
 To stream text in as it is generated — an LLM reply spoken as it arrives —
 use [`GET /speak/stream`](./speak/stream.md) instead. This endpoint takes
@@ -46,8 +46,8 @@ Content-Type: application/json
 | Field          | Type     | Required | Meaning                                                                          |
 |----------------|----------|----------|----------------------------------------------------------------------------------|
 | `text`         | string   | yes      | What to speak. Empty or whitespace-only is `400 invalid_value`.                  |
-| `voice`        | string   | no       | A voice id the active model declares. Omitted → the model's `default_voice`. A cloned voice is named `voice:<uuid>` — see [`/voices`](./voices.md#speaking-in-a-cloned-voice). |
-| `language`     | string   | no       | BCP-47 override. Omitted → the configured language (see [`/language`](./language.md)). |
+| `voice`        | string   | no       | A voice id the active model declares. Omitted → the model's `default_voice`. A cloned voice is named `voice:<uuid>` — see [`/voice`](./voice.md#speaking-in-a-cloned-voice). |
+| `language`     | string   | no       | BCP-47 override. Omitted → the configured language (see [`/settings/language`](./settings/language.md)). |
 | `speed`        | number   | no       | Rate multiplier, roughly 0.5–2.0. Backends that cannot vary rate ignore it.      |
 | `instructions` | string   | no       | Free-text delivery guidance, for models that accept it. Ignored otherwise.       |
 
@@ -91,11 +91,11 @@ one-at-a-time — adding an id later would break every client written against it
 | 400  | `invalid_value`     | `text` missing, empty, or over the cap; a `voice` the model does not declare or whose shape it did not opt into (see [`voice_kinds`](../../backend/config.md#voices)); or a malformed field. |
 | 401  | `invalid_session`   | Token unknown / expired / `exe_changed` — re-auth and retry.                                |
 | 403  | `scope_denied`      | Token lacks the `speak` scope.                                                              |
-| 409  | `model_not_loaded`  | No model is loaded. Load one via [`POST /active_model`](./active_model.md) and retry.        |
+| 409  | `model_not_loaded`  | No model is loaded. Load one via [`POST /pipeline/1/model`](./pipeline/model.md#post-pipelinestagemodel) and retry.        |
 | 429  | `rate_limited`      | Too many requests; back off.                                                                |
 | 500  | —                   | The backend failed, or the output device could not be opened. `message` carries the reason.  |
 
 A failure the caller did not cause — no model, a dead audio device, a backend
 that refused — also raises a desktop notification, because a `speak` is as
 likely to come from a keyboard shortcut as from an app with a UI to show the
-error in. See [`/notification_method`](./notification_method.md).
+error in. See [`/settings/notification_method`](./settings/notification_method.md).

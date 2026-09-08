@@ -386,3 +386,225 @@ fn gpu_host_info_serializes_the_published_field_names() {
     assert_eq!(value["host"]["vulkan"]["api_version"], "1.4.354");
     assert_eq!(value["gpu_info"][0]["arch_target"], "sm_86");
 }
+
+/// The per-model device verbs carry the model they address in `data`, the
+/// same place every other per-model command carries it — and the setter
+/// carries the raw device string, unvalidated here so the daemon can answer
+/// `invalid_device` for a value it recognizes as a device but refuses as a
+/// preference.
+#[test]
+fn model_device_commands_parse_the_model_and_device() {
+    let req = make_request(
+        "set_model_device",
+        Some(json!({ "model": "kokoro-82m", "device": "gpu" })),
+    );
+    match Command::try_from(req).expect("parses") {
+        Command::SetModelDevice { model, device } => {
+            assert_eq!(model, "kokoro-82m");
+            assert_eq!(device, "gpu");
+        }
+        other => panic!("wrong command: {other:?}"),
+    }
+
+    let req = make_request("get_model_device", Some(json!({ "model": "kokoro-82m" })));
+    match Command::try_from(req).expect("parses") {
+        Command::GetModelDevice { model } => assert_eq!(model, "kokoro-82m"),
+        other => panic!("wrong command: {other:?}"),
+    }
+}
+
+/// The list verbs: per model it names one, per backend it names nothing —
+/// the daemon's own selection is the backend.
+#[test]
+fn device_list_commands_parse() {
+    let req = make_request("list_model_devices", Some(json!({ "model": "kokoro-82m" })));
+    match Command::try_from(req).expect("parses") {
+        Command::ListModelDevices { model } => assert_eq!(model, "kokoro-82m"),
+        other => panic!("wrong command: {other:?}"),
+    }
+    assert!(matches!(
+        Command::try_from(make_request("list_active_backend_devices", None)),
+        Ok(Command::ListActiveBackendDevices)
+    ));
+}
+
+/// Neither half may be omitted: a setter without a device has nothing to set,
+/// and either verb without a model has nothing to address. An empty string is
+/// as absent as a missing key — it would otherwise reach the daemon and fail
+/// as "no such model", blaming the backend for a malformed request.
+#[test]
+fn model_device_commands_require_both_halves() {
+    for (command, data) in [
+        ("set_model_device", json!({ "device": "gpu" })),
+        ("set_model_device", json!({ "model": "", "device": "gpu" })),
+        ("set_model_device", json!({ "model": "kokoro-82m" })),
+        ("get_model_device", json!({})),
+        ("get_model_device", json!({ "model": "" })),
+        ("list_model_devices", json!({})),
+        ("list_model_devices", json!({ "model": "" })),
+    ] {
+        assert!(
+            Command::try_from(make_request(command, Some(data.clone()))).is_err(),
+            "{command} with {data} must be refused"
+        );
+    }
+}
+
+/// `get_pipeline` takes nothing: the pipeline is the daemon's own, and a
+/// `stage` parameter would only let a client ask for a stage that does not
+/// exist. The whole list comes back and the client picks the row it wants.
+#[test]
+fn get_pipeline_parses_without_data() {
+    assert!(matches!(
+        Command::try_from(make_request("get_pipeline", None)),
+        Ok(Command::GetPipeline)
+    ));
+    // A body is ignored rather than refused: a client that sends `{}` because
+    // its HTTP helper always sends one must not be told the command is
+    // malformed.
+    assert!(matches!(
+        Command::try_from(make_request("get_pipeline", Some(json!({})))),
+        Ok(Command::GetPipeline)
+    ));
+}
+
+/// A one-element pipeline is still a list on the wire, and the stage carries
+/// its own number. A client reads the array and matches on `stage`, so the
+/// shape has to survive serialization as an array even with a single row —
+/// collapsing it to an object here is a change no second stage could undo
+/// without breaking every reader.
+#[test]
+fn a_response_carries_the_pipeline_as_a_list_of_stages() {
+    let response = DaemonResponse {
+        pipeline: Some(vec![StageReport {
+            stage: SYNTHESIS_STAGE,
+            role: StageRole::Synthesis,
+            source: Some("github.com/super-tts/kokoro".to_string()),
+            name: Some("Kokoro".to_string()),
+            enabled: true,
+        }]),
+        ..DaemonResponse::success()
+    };
+    let json = serde_json::to_value(&response).expect("serialize");
+    assert!(json["pipeline"].is_array(), "pipeline must stay a list");
+    assert_eq!(json["pipeline"][0]["stage"], SYNTHESIS_STAGE);
+    assert_eq!(json["pipeline"][0]["role"], "synthesis");
+    assert_eq!(json["pipeline"][0]["enabled"], true);
+
+    // And it stays off the wire on every response that is not about the
+    // pipeline — this type is shared by every command.
+    let untouched = serde_json::to_value(DaemonResponse::success()).expect("serialize");
+    assert!(untouched.get("pipeline").is_none());
+}
+
+/// `stage_model` rides on the same response type and must be omitted unless
+/// the command actually answered for a model slot, or a client polling any
+/// other endpoint would read a slot that was never filled in.
+#[test]
+fn a_response_carries_the_stage_model_slot_only_when_set() {
+    let untouched = serde_json::to_value(DaemonResponse::success()).expect("serialize");
+    assert!(untouched.get("stage_model").is_none());
+
+    let response = DaemonResponse {
+        stage_model: Some(StageModelReport {
+            stage: SYNTHESIS_STAGE,
+            model: Some("kokoro-82m".to_string()),
+            loaded: false,
+            device: Some(StageModelDevice {
+                preference: "gpu".to_string(),
+                resolved_accel: None,
+            }),
+            switch: None,
+        }),
+        ..DaemonResponse::success()
+    };
+    let json = serde_json::to_value(&response).expect("serialize");
+    assert_eq!(json["stage_model"]["stage"], SYNTHESIS_STAGE);
+    assert_eq!(json["stage_model"]["model"], "kokoro-82m");
+    // Selected but not loaded is a real state, not a contradiction.
+    assert_eq!(json["stage_model"]["loaded"], false);
+    assert!(json["stage_model"]["switch"].is_null());
+}
+
+/// The two language-listing verbs: the global one addresses nothing, the
+/// per-model one carries the same `(source, model)` pair its setter does.
+#[test]
+fn language_list_commands_parse() {
+    assert!(matches!(
+        Command::try_from(make_request("list_primary_languages", None)),
+        Ok(Command::ListPrimaryLanguages)
+    ));
+
+    let request = make_request(
+        "list_model_languages",
+        Some(json!({ "source": "github.com/super-tts/kokoro", "model": "kokoro-82m" })),
+    );
+    match Command::try_from(request).expect("parses") {
+        Command::ListModelLanguages { source, model } => {
+            assert_eq!(source, "github.com/super-tts/kokoro");
+            assert_eq!(model, "kokoro-82m");
+        }
+        other => panic!("wrong command: {other:?}"),
+    }
+}
+
+/// A model's language list addresses one model, so neither half of its
+/// identity may be omitted. Falling back to "the active one" would answer for
+/// a model the client never named, and its picker would then be filled with
+/// another model's languages — a mismatch nothing downstream could detect,
+/// because every tag in it is a legitimate tag.
+#[test]
+fn list_model_languages_requires_both_halves() {
+    for data in [
+        json!({}),
+        json!({ "model": "kokoro-82m" }),
+        json!({ "source": "github.com/super-tts/kokoro" }),
+    ] {
+        assert!(
+            Command::try_from(make_request("list_model_languages", Some(data.clone()))).is_err(),
+            "list_model_languages with {data} must be refused"
+        );
+    }
+}
+
+/// `available_languages` answers two different endpoints — the global setting's
+/// list and one model's — so it must be omitted from every response that
+/// answers neither, and must survive as an empty list when a monolingual model
+/// genuinely has nothing to offer. An empty list and an absent key mean
+/// different things to a picker: "hide the control" versus "this reply is not
+/// about languages".
+#[test]
+fn available_languages_distinguishes_empty_from_absent() {
+    let untouched = serde_json::to_value(DaemonResponse::success()).expect("serialize");
+    assert!(untouched.get("available_languages").is_none());
+
+    let empty = serde_json::to_value(DaemonResponse {
+        available_languages: Some(Vec::new()),
+        ..DaemonResponse::success()
+    })
+    .expect("serialize");
+    assert_eq!(empty["available_languages"], json!([]));
+
+    let filled = serde_json::to_value(DaemonResponse {
+        available_languages: Some(vec!["auto".to_string(), "en-US".to_string()]),
+        ..DaemonResponse::success()
+    })
+    .expect("serialize");
+    assert_eq!(filled["available_languages"][0], "auto");
+}
+
+/// The global default keeps its own verbs. Per-model devices are an addition,
+/// not a replacement: a client with no model in hand still has something to
+/// set, and every client shipped before the per-model verbs keeps working.
+#[test]
+fn the_global_device_commands_still_parse() {
+    let req = make_request("set_device", Some(json!({ "device": "cpu" })));
+    match Command::try_from(req).expect("parses") {
+        Command::SetDevice { device } => assert_eq!(device, "cpu"),
+        other => panic!("wrong command: {other:?}"),
+    }
+    assert!(matches!(
+        Command::try_from(make_request("get_device", None)),
+        Ok(Command::GetDevice)
+    ));
+}

@@ -253,7 +253,7 @@ async fn malformed_body_on_json_extractor_endpoint_is_400() {
     let (status, _) = send(
         &sock,
         Method::POST,
-        "/v1/audio_theme",
+        "/v1/settings/audio_theme",
         Some(&token),
         Some(b"}{ not json"),
         Some("application/json"),

@@ -43,6 +43,15 @@ pub fn configure_sheet<'a>(backend: &'a BackendInfo, app: &'a AppModel) -> Eleme
             section = section.add(secret_row(&backend.source, secret, configured, input));
         }
         for option in &backend.options {
+            // An option that names the values it takes has nothing to type, so
+            // nothing to type wrong: it gets a dropdown of exactly those values
+            // instead of a box the daemon would have to reject. It is what an
+            // option whose allowed values only ever lived in its help text
+            // always wanted to be.
+            if option.has_choices() {
+                section = section.add(choice_option_row(&backend.source, option));
+                continue;
+            }
             let key = (backend.source.clone(), option.name.clone());
             let input = app
                 .backend_option_inputs
@@ -155,6 +164,80 @@ pub(super) fn secret_row<'a>(
     .into()
 }
 
+/// The caption under an option's label: its description, with the backend's
+/// declared default named alongside it.
+///
+/// Naming the default is what lets the row be read at all. The daemon reports
+/// only the *effective* value, so a row showing `formal` says nothing about
+/// whether that came from the backend or from a previous override the user has
+/// forgotten setting — and in the dropdown's case, which entry to pick to hand
+/// the option back to the backend. Shared by the text field and the dropdown so
+/// the two cannot drift into describing the same option differently.
+fn option_hint(option: &BackendOption) -> String {
+    let mut hint = option.description.clone();
+    if let Some(default) = &option.default
+        && !default.is_empty()
+    {
+        if hint.is_empty() {
+            hint = format!("Default: {default}");
+        } else {
+            hint = format!("{hint} (default: {default})");
+        }
+    }
+    hint
+}
+
+/// One option row for an option that declares `choices`: the label/description
+/// over a full-width dropdown of the values the backend accepts, laid out like
+/// the text-field row so the sheet's rows read as one column.
+///
+/// There is no Save button and no Reset button — picking is the write, and
+/// picking the declared default is itself the reset, since the handler turns
+/// that pick into a clear rather than storing a copy of the default.
+///
+/// A stored value the backend no longer offers leaves the dropdown on its
+/// placeholder rather than selecting a wrong row: [`BackendOption::choice_index`]
+/// returns `None` for a value that is not on the list, so the user is shown
+/// that nothing valid is selected and picks again, instead of being quietly
+/// told they had chosen something they never did.
+pub(super) fn choice_option_row<'a>(
+    source: &'a str,
+    option: &'a BackendOption,
+) -> Element<'a, Message> {
+    let spacing = cosmic::theme::spacing();
+    let display = option.label.clone().unwrap_or_else(|| option.name.clone());
+    let hint = option_hint(option);
+    let label = config_label(display, (!hint.is_empty()).then_some(hint), option.required);
+
+    // The message carries the chosen value, not its index: the catalog can be
+    // replaced by a reload between render and press, and an index into a list
+    // that has since changed would write the wrong choice.
+    let pick_source = source.to_string();
+    let pick_name = option.name.clone();
+    let pick_choices = option.choices.clone();
+    let dropdown = widget::dropdown(
+        option.choices.as_slice(),
+        option.choice_index(),
+        move |index| {
+            Message::Backend(BackendMessage::BackendOptionChosen {
+                source: pick_source.clone(),
+                name: pick_name.clone(),
+                value: pick_choices[index].clone(),
+            })
+        },
+    )
+    .placeholder("Select")
+    .width(Length::Fill);
+
+    settings::item_row(vec![
+        column![label, dropdown]
+            .spacing(spacing.space_xs)
+            .width(Length::Fill)
+            .into(),
+    ])
+    .into()
+}
+
 /// One option-entry row for a backend (e.g. `base_url`): the label/description
 /// over a full-width text field + Save on its own row beneath, so the input
 /// isn't squeezed to the right of the label in the narrow sheet.
@@ -168,16 +251,7 @@ pub(super) fn option_row<'a>(
 ) -> Element<'a, Message> {
     let spacing = cosmic::theme::spacing();
     let display = option.label.clone().unwrap_or_else(|| option.name.clone());
-    let mut hint = option.description.clone();
-    if let Some(default) = &option.default
-        && !default.is_empty()
-    {
-        if hint.is_empty() {
-            hint = format!("Default: {default}");
-        } else {
-            hint = format!("{hint} (default: {default})");
-        }
-    }
+    let hint = option_hint(option);
 
     let label = config_label(display, (!hint.is_empty()).then_some(hint), option.required);
 

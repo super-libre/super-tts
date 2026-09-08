@@ -55,7 +55,10 @@ impl SuperTTSDaemon {
         info!("Reloading active model {name} to apply configuration changes");
         self.broadcast_model_loading_status(&name);
         self.unload_current_model().await;
-        let device_pref = self.preferred_device.read().await.clone();
+        // Reload where the model belongs, not where the global default points:
+        // an in-place reload to pick up a changed secret must not also move
+        // the model off the device it was deliberately put on.
+        let device_pref = self.config.read().await.effective_device(&source, &name);
         match self.instantiate_backend(&name, &source, &device_pref).await {
             Ok((instance, definition)) => {
                 self.finalize_model_switch_success(name, source, definition, instance)

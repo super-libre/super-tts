@@ -49,15 +49,21 @@ pub(super) fn no_backend_empty_state<'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// The "Load a backend" side sheet: a hint line plus one row per installed
-/// backend. The active backend is flagged; every other row carries a Load
-/// button that activates it (and dismisses the sheet).
+/// The "Load a backend" side sheet: a hint line plus one row per backend that
+/// can fill the synthesis stage. The active backend is flagged; every other row
+/// carries a Load button that activates it (and dismisses the sheet).
+///
+/// Drawn from `stage_backends`, not the full installed catalog: the daemon
+/// refuses a backend that serves nothing this stage can run, so a sheet built
+/// from the catalog offers picks that fail the moment they are made. The two
+/// lists are identical while synthesis is the only stage — which is why reading
+/// the wrong one here would look right for as long as it took to add a second.
 pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
     let spacing = cosmic::theme::spacing();
     let muted = muted_text_color();
     let active = app.models_page.active_backend.as_deref();
 
-    let mut col = widget::column::with_capacity(app.backends.len() + 1)
+    let mut col = widget::column::with_capacity(app.stage_backends.len() + 1)
         .spacing(spacing.space_xs)
         .width(Length::Fill)
         .push(
@@ -67,7 +73,7 @@ pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
             .class(cosmic::theme::Text::Color(muted)),
         );
 
-    if app.backends.is_empty() {
+    if app.stage_backends.is_empty() {
         return col
             .push(text::body(
                 "No backends installed yet. Open the Library to install one.",
@@ -75,7 +81,7 @@ pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
             .into();
     }
 
-    for backend in &app.backends {
+    for backend in &app.stage_backends {
         col = col.push(load_backend_row(
             backend,
             active == Some(backend.source.as_str()),

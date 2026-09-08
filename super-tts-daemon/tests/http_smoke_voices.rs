@@ -203,7 +203,7 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
 
     // Nothing yet: a daemon that has never cloned a voice lists an empty
     // library rather than failing on a directory that does not exist.
-    let (s, body) = json(&sock, Method::GET, "/voices", &token, None).await;
+    let (s, body) = json(&sock, Method::GET, "/voice/list", &token, None).await;
     assert_eq!(s, StatusCode::OK, "empty list: {body}");
     assert_eq!(body["voices"].as_array().map(Vec::len), Some(0), "{body}");
     assert!(
@@ -214,7 +214,7 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
     // Upload.
     let (s, body) = upload(
         &sock,
-        "/voices?label=Ada&transcript=the%20quick%20brown%20fox",
+        "/voice?label=Ada&transcript=the%20quick%20brown%20fox",
         &token,
         wav(1.5),
     )
@@ -234,10 +234,10 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
     );
 
     // Listed, and readable on its own.
-    let (s, body) = json(&sock, Method::GET, "/voices", &token, None).await;
+    let (s, body) = json(&sock, Method::GET, "/voice/list", &token, None).await;
     assert_eq!(s, StatusCode::OK, "{body}");
     assert_eq!(body["voices"].as_array().map(Vec::len), Some(1), "{body}");
-    let (s, body) = json(&sock, Method::GET, &format!("/voices/{id}"), &token, None).await;
+    let (s, body) = json(&sock, Method::GET, &format!("/voice/{id}"), &token, None).await;
     assert_eq!(s, StatusCode::OK, "{body}");
     assert_eq!(body["voice"]["id"], id.as_str(), "{body}");
 
@@ -245,7 +245,7 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
     let (s, ct, bytes) = raw(
         &sock,
         Method::GET,
-        &format!("/voices/{id}/audio"),
+        &format!("/voice/{id}/audio"),
         &token,
         None,
         Vec::new(),
@@ -259,7 +259,7 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
     let (s, body) = json(
         &sock,
         Method::PATCH,
-        &format!("/voices/{id}"),
+        &format!("/voice/{id}"),
         &token,
         Some(serde_json::json!({ "label": "Ada Lovelace" })),
     )
@@ -272,18 +272,11 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
     );
 
     // Delete, and stay deleted.
-    let (s, body) = json(
-        &sock,
-        Method::DELETE,
-        &format!("/voices/{id}"),
-        &token,
-        None,
-    )
-    .await;
+    let (s, body) = json(&sock, Method::DELETE, &format!("/voice/{id}"), &token, None).await;
     assert_eq!(s, StatusCode::OK, "{body}");
-    let (s, _) = json(&sock, Method::GET, &format!("/voices/{id}"), &token, None).await;
+    let (s, _) = json(&sock, Method::GET, &format!("/voice/{id}"), &token, None).await;
     assert_eq!(s, StatusCode::NOT_FOUND, "a deleted voice is gone");
-    let (s, body) = json(&sock, Method::GET, "/voices", &token, None).await;
+    let (s, body) = json(&sock, Method::GET, "/voice/list", &token, None).await;
     assert_eq!(s, StatusCode::OK, "{body}");
     assert_eq!(body["voices"].as_array().map(Vec::len), Some(0), "{body}");
 }
@@ -292,26 +285,26 @@ async fn a_voice_is_uploaded_listed_played_back_renamed_and_deleted() {
 async fn refuses_uploads_it_cannot_use() {
     let (_guard, sock, token) = start_daemon(&["voices"]).await;
 
-    let (s, body) = upload(&sock, "/voices?label=Junk", &token, b"not audio".to_vec()).await;
+    let (s, body) = upload(&sock, "/voice?label=Junk", &token, b"not audio".to_vec()).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error_code"], "unsupported_audio", "{body}");
 
-    let (s, body) = upload(&sock, "/voices", &token, wav(0.5)).await;
+    let (s, body) = upload(&sock, "/voice", &token, wav(0.5)).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "a voice needs a name: {body}");
     assert_eq!(body["error_code"], "invalid_value", "{body}");
 
-    let (s, body) = upload(&sock, "/voices?label=Empty", &token, Vec::new()).await;
+    let (s, body) = upload(&sock, "/voice?label=Empty", &token, Vec::new()).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error_code"], "invalid_value", "{body}");
 
-    let (s, _) = json(&sock, Method::GET, "/voices/not-a-uuid", &token, None).await;
+    let (s, _) = json(&sock, Method::GET, "/voice/not-a-uuid", &token, None).await;
     assert_eq!(
         s,
         StatusCode::NOT_FOUND,
         "a malformed id is a miss, not a path"
     );
 
-    let (s, body) = json(&sock, Method::GET, "/voices", &token, None).await;
+    let (s, body) = json(&sock, Method::GET, "/voice/list", &token, None).await;
     assert_eq!(body["voices"].as_array().map(Vec::len), Some(0), "{body}");
     assert_eq!(s, StatusCode::OK);
 }
@@ -323,11 +316,11 @@ async fn a_settings_token_cannot_reach_the_voice_library() {
     let (_guard, sock, token) = start_daemon(&["settings"]).await;
 
     for (method, path) in [
-        (Method::GET, "/voices"),
-        (Method::GET, "/voices/2f8a2d0e-0000-4000-8000-000000000000"),
+        (Method::GET, "/voice/list"),
+        (Method::GET, "/voice/2f8a2d0e-0000-4000-8000-000000000000"),
         (
             Method::DELETE,
-            "/voices/2f8a2d0e-0000-4000-8000-000000000000",
+            "/voice/2f8a2d0e-0000-4000-8000-000000000000",
         ),
     ] {
         let (s, body) = json(&sock, method.clone(), path, &token, None).await;
@@ -335,6 +328,6 @@ async fn a_settings_token_cannot_reach_the_voice_library() {
         assert_eq!(body["message"], "scope_denied", "{method} {path}: {body}");
     }
 
-    let (s, body) = upload(&sock, "/voices?label=Sneaky", &token, wav(0.5)).await;
+    let (s, body) = upload(&sock, "/voice?label=Sneaky", &token, wav(0.5)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
 }

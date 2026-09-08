@@ -89,7 +89,7 @@ tts speak --voice voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4 "Read this in my vo
 
 A voice is stored once and independently of any model — each model takes as much of the recording as it declares it can use, so switching models never means recording again. Samples live in `~/.local/share/super-tts/voices`, readable only by you, and reach nothing but the loaded model. Apps ask for them under a scope of their own: an app allowed to change every setting still cannot read your recordings unless you approve that separately.
 
-See [`/voices`](./docs/protocol/endpoints/v1/voices.md) for the endpoints, and the [`voices` scope](./docs/protocol/scopes/voices.md) for what granting it means.
+See [`/voices`](./docs/protocol/endpoints/v1/voice.md) for the endpoints, and the [`voices` scope](./docs/protocol/scopes/voices.md) for what granting it means.
 
 ## 🤖 Models
 

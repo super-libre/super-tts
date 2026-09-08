@@ -5,13 +5,17 @@ mod registry;
 
 use crate::core::app::{AppModel, ModelOperationState};
 use crate::daemon::client::{
-    clear_active_backend, get_gpu_info, set_active_backend, set_device, set_model,
-    unload_active_model,
+    clear_stage_backend, get_gpu_info, list_stage_devices, reload_stage_model, set_model_device,
+    set_stage_backend, set_stage_model, unload_stage_model,
 };
 use crate::state::{ContextPage, DaemonStatus, ModelsTab};
-use crate::ui::messages::{DownloadMessage, Message, ModelMessage, ModelsPageMessage};
+use crate::ui::messages::{
+    DeviceMessage, DownloadMessage, Message, ModelMessage, ModelsPageMessage,
+};
 use cosmic::prelude::*;
 use log::debug;
+use super_tts_shared::daemon::http_client::HttpError;
+use super_tts_shared::models::protocol::SYNTHESIS_STAGE;
 
 impl AppModel {
     /// Models-page UI: tab switch, per-backend dropdown / GPU / select, the
@@ -25,13 +29,13 @@ impl AppModel {
             | ModelsPageMessage::StageActiveModel(_)
             | ModelsPageMessage::StageActiveDevice(_)
             | ModelsPageMessage::LoadStagedModel
-            | ModelsPageMessage::UnloadActiveModel => self.handle_models_tab_selection(message),
+            | ModelsPageMessage::UnloadActiveModel
+            | ModelsPageMessage::ReloadActiveModel => self.handle_models_tab_selection(message),
 
             ModelsPageMessage::OpenBackendConfig(_)
             | ModelsPageMessage::CloseBackendConfig
             | ModelsPageMessage::SelectBackend(_)
             | ModelsPageMessage::BackendSelectFailed { .. }
-            | ModelsPageMessage::StagedModelLoadFailed { .. }
             | ModelsPageMessage::DeselectBackend
             | ModelsPageMessage::ActiveBackendLoaded(_)
             | ModelsPageMessage::RefreshGpuInfo
@@ -94,19 +98,28 @@ impl AppModel {
 
             ModelsPageMessage::StageActiveModel(model) => {
                 // Stage the pick. The Load button reads `staged_model` /
-                // `staged_device` and only then calls the daemon.
-                let source = self.models_page.active_backend.clone();
-                let device = staged_default_device(&self.backends, source.as_deref(), &model);
+                // `staged_device` and only then writes anything.
+                //
+                // The device is cleared rather than guessed: which devices this
+                // model can be loaded onto, and which one it would load with,
+                // are the daemon's answers now — the manifest's declared list
+                // is not narrowed by the accelerators the installed asset
+                // actually shipped with, and seeding from it is what used to
+                // stage a GPU an install could not use. The fetch below fills
+                // it in; until it does the Load button stays disabled.
+                let Some(source) = self.models_page.active_backend.clone() else {
+                    log::warn!("StageActiveModel ignored — no backend fills the stage");
+                    return Task::none();
+                };
                 self.models_page.staged_model = Some(model.clone());
-                self.models_page.staged_device = device;
-                // Fetch the per-model language block at selection time so the
-                // active-backend card can show the language control before Load.
-                // Wire point 2: model staged (StageActiveModel).
-                if let Some(src) = source {
-                    self.load_model_language(src, model)
-                } else {
-                    Task::none()
-                }
+                self.models_page.staged_device = None;
+                // Wire point 2: model staged. Both per-model answers are read
+                // here so the card can show the language control and the device
+                // picker before Load, rather than after it.
+                Task::batch([
+                    self.load_model_language(&source, model.clone()),
+                    self.load_model_device(&source, model),
+                ])
             }
 
             ModelsPageMessage::StageActiveDevice(device) => {
@@ -116,25 +129,80 @@ impl AppModel {
 
             ModelsPageMessage::LoadStagedModel => self.handle_load_staged_model(),
 
-            ModelsPageMessage::UnloadActiveModel => {
-                // Drop the loaded model but keep the backend selected.
-                // Optimistic clear so the UI returns to the staged-pickers
-                // state immediately; the daemon's `ready` event with
-                // `model_loaded: false` is the source of truth.
-                self.clear_loaded_model();
-                self.models_page.staged_model = None;
-                self.models_page.staged_device = None;
-                self.model_operation_state = ModelOperationState::Ready;
-                Task::perform(unload_active_model(), |result| match result {
-                    Ok(_) => cosmic::Action::None,
-                    Err(e) => {
-                        cosmic::Action::App(Message::Model(ModelMessage::ModelError(e.to_string())))
-                    }
-                })
+            ModelsPageMessage::UnloadActiveModel => self.handle_unload_active_model(),
+
+            ModelsPageMessage::ReloadActiveModel => {
+                if !self.is_model_ready() {
+                    log::warn!("Model operation already in progress — ignoring Reload click");
+                    return Task::none();
+                }
+                let (model, source) = (self.current_model.clone(), self.current_source.clone());
+                if model.is_empty() {
+                    log::warn!("ReloadActiveModel ignored — no model is loaded");
+                    return Task::none();
+                }
+                // Same model, same device, brought back up. Nothing is
+                // re-downloaded, so this is a short operation — but it is still
+                // a switch as far as the card is concerned, and leaving the
+                // controls live would let a second click race the first.
+                self.set_model_loading(model.clone(), "Reloading model...".to_string());
+                Task::perform(
+                    reload_stage_model(SYNTHESIS_STAGE),
+                    move |result| match result {
+                        // Reported as a switch to the same model rather than
+                        // waited on: that arm returns the card to Ready and
+                        // re-reads the language and the resolved accelerator,
+                        // which is exactly what a reload can have changed.
+                        // Waiting for the `ready` broadcast instead would leave
+                        // the card spinning if it were missed.
+                        Ok(()) => cosmic::Action::App(Message::Model(ModelMessage::ModelChanged {
+                            model: model.clone(),
+                            source: source.clone(),
+                        })),
+                        Err(e) => cosmic::Action::App(Message::Model(ModelMessage::ModelError(
+                            e.to_string(),
+                        ))),
+                    },
+                )
             }
 
             _ => Task::none(),
         }
+    }
+
+    /// Free the loaded model's device memory, keeping both the backend and the
+    /// model it was pointed at.
+    ///
+    /// The daemon remembers the selection through an unload — that is what
+    /// separates this from Deselect — so the card remembers it too: what was
+    /// running becomes what is staged, and loading it again onto another device
+    /// is one click rather than a re-pick from the dropdown. The local change is
+    /// optimistic; the daemon's `ready` event with `model_loaded: false` is the
+    /// source of truth and lands a moment later.
+    fn handle_unload_active_model(&mut self) -> Task<cosmic::Action<Message>> {
+        let unloaded = (!self.current_model.is_empty())
+            .then(|| (self.current_source.clone(), self.current_model.clone()));
+        self.clear_loaded_model();
+        self.model_operation_state = ModelOperationState::Ready;
+        // Re-read the device rather than reuse what was staged for the load:
+        // the preference may have changed since, and the picker must open on
+        // what the daemon would actually load with today.
+        self.models_page.staged_device = None;
+        self.models_page.staged_model = unloaded.as_ref().map(|(_, model)| model.clone());
+        let restage = if let Some((source, model)) = unloaded {
+            self.load_model_device(&source, model)
+        } else {
+            Task::none()
+        };
+        Task::batch([
+            restage,
+            Task::perform(unload_stage_model(SYNTHESIS_STAGE), |result| match result {
+                Ok(()) => cosmic::Action::None,
+                Err(e) => {
+                    cosmic::Action::App(Message::Model(ModelMessage::ModelError(e.to_string())))
+                }
+            }),
+        ])
     }
 
     fn handle_load_staged_model(&mut self) -> Task<cosmic::Action<Message>> {
@@ -156,7 +224,7 @@ impl AppModel {
             &source,
             &model,
             self.models_page.staged_device.as_deref(),
-            &self.current_device,
+            self.model_device_preference(&source, &model),
         ) {
             StagedLoad::NotInCatalog => {
                 log::warn!(
@@ -168,36 +236,36 @@ impl AppModel {
             StagedLoad::Switch { device_to_set } => device_to_set,
         };
 
-        // Capture the pre-switch device so a failed switch rolls it back rather
-        // than leaving the UI on a device the daemon never adopted (audit
-        // Tier 3 #37).
-        let prev_device = self.current_device.clone();
+        // No optimistic device write. The device the card shows is the
+        // accelerator a load actually resolved to, and the staged value is a
+        // `cpu`/`gpu` preference — writing one into the other would have the
+        // "Active:" line claim a GPU before any load confirmed one, and there
+        // would be nothing to roll it back to if the switch then failed.
         self.set_model_loading(model.clone(), "Initiating model switch...".to_string());
-        if let Some(dev) = &device_to_set {
-            self.current_device.clone_from(dev);
-        }
 
         let model_label = model.clone();
         let source_label = source.clone();
         Task::batch([
             Task::perform(
                 async move {
+                    // The device is written against the *model*, before the
+                    // model is loaded. For a model no stage is running that is
+                    // only a note for its next load, which is precisely what
+                    // lets the card set a device without the daemon loading the
+                    // model twice.
                     if let Some(dev) = device_to_set {
-                        set_device(dev).await?;
+                        set_model_device(SYNTHESIS_STAGE, model.clone(), dev).await?;
                     }
-                    set_model(model, source).await.map(|_| ())
+                    set_stage_model(SYNTHESIS_STAGE, model, Some(source)).await
                 },
                 move |result| match result {
                     Ok(()) => cosmic::Action::App(Message::Model(ModelMessage::ModelChanged {
                         model: model_label.clone(),
                         source: source_label.clone(),
                     })),
-                    Err(e) => cosmic::Action::App(Message::ModelsPage(
-                        ModelsPageMessage::StagedModelLoadFailed {
-                            prev_device: prev_device.clone(),
-                            message: e.to_string(),
-                        },
-                    )),
+                    Err(e) => {
+                        cosmic::Action::App(Message::Model(ModelMessage::ModelError(e.to_string())))
+                    }
                 },
             ),
             Task::perform(
@@ -260,9 +328,10 @@ impl AppModel {
             }
 
             ModelsPageMessage::SelectBackend(source) => {
-                // Select the backend WITHOUT loading a model — the card moves
-                // to the top fixed header, any model from a different backend
-                // is unloaded. (`set_model` is the way to also load a model.)
+                // Fill the stage WITHOUT loading a model — the card moves to
+                // the top fixed header, any model from a different backend is
+                // unloaded. Pointing the stage at a model is the separate act
+                // the Load button performs.
                 if self.models_page.active_backend.as_deref() == Some(source.as_str()) {
                     return Task::none();
                 }
@@ -272,19 +341,37 @@ impl AppModel {
                 let prev_active = self.models_page.active_backend.take();
                 self.models_page.active_backend = Some(source.clone());
                 self.clear_loaded_model();
+                self.clear_staged_model();
                 self.model_operation_state = ModelOperationState::Ready;
                 // Activation comes from the Models page's "Load a backend" sheet;
                 // dismiss it now that a choice was made.
                 self.core.window.show_context = false;
-                Task::perform(set_active_backend(source), move |result| match result {
-                    Ok(()) => cosmic::Action::None,
-                    Err(e) => cosmic::Action::App(Message::ModelsPage(
-                        ModelsPageMessage::BackendSelectFailed {
-                            prev_active: prev_active.clone(),
-                            message: e.to_string(),
-                        },
-                    )),
-                })
+                Task::perform(
+                    async move {
+                        set_stage_backend(SYNTHESIS_STAGE, source).await?;
+                        // Sequenced behind the select, not batched beside it:
+                        // this list is the *new* backend's, and a concurrent
+                        // read could just as easily answer for the old one.
+                        // A failed read is not a failed select — the per-model
+                        // list is the accurate one anyway, and this only keeps
+                        // the device control populated until it arrives.
+                        let devices = list_stage_devices(SYNTHESIS_STAGE)
+                            .await
+                            .unwrap_or_default();
+                        Ok::<Vec<String>, HttpError>(devices)
+                    },
+                    move |result| match result {
+                        Ok(devices) => cosmic::Action::App(Message::Device(
+                            DeviceMessage::StageDevicesLoaded(devices),
+                        )),
+                        Err(e) => cosmic::Action::App(Message::ModelsPage(
+                            ModelsPageMessage::BackendSelectFailed {
+                                prev_active: prev_active.clone(),
+                                message: e.to_string(),
+                            },
+                        )),
+                    },
+                )
             }
 
             ModelsPageMessage::BackendSelectFailed {
@@ -296,26 +383,24 @@ impl AppModel {
                 Task::none()
             }
 
-            ModelsPageMessage::StagedModelLoadFailed {
-                prev_device,
-                message,
-            } => {
-                self.current_device = prev_device;
-                self.set_model_error(&message);
-                Task::none()
-            }
-
             ModelsPageMessage::DeselectBackend => {
-                // Optimistically clear the active backend + loaded model; the
+                // Optimistically empty the stage — backend, model and all; the
                 // daemon goes idle. (Rejected only mid-utterance — an edge case
-                // that self-heals on the next refresh.)
+                // that self-heals on the next refresh.) Unlike Unload, this
+                // forgets the model too, so the staged pick and its device
+                // answer go with it rather than lingering as an offer to load
+                // something from a backend that no longer fills the stage.
                 self.models_page.active_backend = None;
                 self.clear_loaded_model();
+                self.clear_staged_model();
+                self.stage_devices.clear();
                 self.model_operation_state = ModelOperationState::Ready;
                 self.models_page.configure_backend = None;
                 // Close the configuration sheet if it was open for this backend.
                 self.core.window.show_context = false;
-                Task::perform(clear_active_backend(), |_| cosmic::Action::None)
+                Task::perform(clear_stage_backend(SYNTHESIS_STAGE), |_| {
+                    cosmic::Action::None
+                })
             }
 
             ModelsPageMessage::ToggleInstalledMenu(source) => {
@@ -338,58 +423,44 @@ impl AppModel {
     }
 }
 
-/// The device a freshly staged model starts on: the first device this install
-/// can actually offer for it, or `None` when it can offer none.
-///
-/// The narrowing is what makes `None` reachable, and `None` is what the Load
-/// button reads: a model declaring `gpu` on a backend whose installed asset is
-/// CPU-only can run on no device here, and staging one from the manifest would
-/// leave Load enabled next to the advisory saying so — sending a `set_device`
-/// that persists a GPU preference the user was just told is unusable. Seeding
-/// from the offered list also keeps the staged device inside the set the
-/// dropdown renders, so the picker never shows an unselected value.
-fn staged_default_device(
-    backends: &[crate::daemon::backends::BackendInfo],
-    source: Option<&str>,
-    model: &str,
-) -> Option<String> {
-    let source = source?;
-    let backend = backends.iter().find(|b| b.source == source)?;
-    crate::ui::views::models::offered_devices(backend, model)
-        .first()
-        .cloned()
-}
-
 /// What a Load click resolves to.
 #[derive(Debug, PartialEq, Eq)]
 enum StagedLoad {
     /// The staged `(source, model)` is no longer in the installed-backend
     /// catalog — the click is stale and must not reach the daemon.
     NotInCatalog,
-    /// Switch to the staged model, first setting the device when `Some`.
+    /// Point the stage at the staged model, first writing the model's device
+    /// when `Some`.
     Switch { device_to_set: Option<String> },
 }
 
-/// Resolve a Load click against the installed-backend catalog.
+/// Resolve a Load click against the installed-backend catalog and the device
+/// preference the daemon already holds for the staged model.
 ///
 /// The catalog check is not merely an optimization. A backend can be
 /// uninstalled — or the catalog refreshed — between staging a model and
-/// clicking Load. Without it, a miss reads as "not online", the staged device
-/// is sent as a real `set_device`, and the daemon unloads the working model,
-/// reloads it on the new device, and *persists* that device — before the
-/// `set_model` that follows fails with `invalid_model`. The user ends up on a
-/// device they never chose, from a click that could not have succeeded.
+/// clicking Load, and a miss reads here as "not online", which would send a
+/// device write for a model that no longer exists and surface as two errors
+/// where the click could not have succeeded at all. Nothing reaches the daemon
+/// for a pair it cannot serve.
 ///
 /// For online models (the `none` sentinel in `supported_devices`) there is no
-/// device to set; otherwise the staged device is sent only when it actually
-/// differs from the current one, compared on the preference axis (see
-/// [`preference_axis`]).
+/// device to write. Otherwise the staged device goes out only when it differs
+/// from what the daemon already records for *this model* — a plain string
+/// comparison now, because both sides are the same `cpu`/`gpu` preference from
+/// the same endpoint. There is no accelerator to collapse onto an axis: the
+/// resolved `cuda`/`rocm` name lives on a separate field and is never what a
+/// staged pick is compared against.
+///
+/// `stored_device` is `None` until that model's device answer arrives. Writing
+/// on an unknown is the safe direction — a redundant write to a model no stage
+/// is running is a note, not a reload.
 fn staged_load_device(
     backends: &[crate::daemon::backends::BackendInfo],
     source: &str,
     model: &str,
     staged_device: Option<&str>,
-    current_device: &str,
+    stored_device: Option<&str>,
 ) -> StagedLoad {
     let Some(online) = backends
         .iter()
@@ -403,32 +474,15 @@ fn staged_load_device(
         None
     } else {
         staged_device
-            .filter(|d| *d != "none" && preference_axis(d) != preference_axis(current_device))
+            .filter(|d| *d != "none" && Some(*d) != stored_device)
             .map(ToString::to_string)
     };
     StagedLoad::Switch { device_to_set }
 }
 
-/// Collapse a device label onto the `cpu`/`gpu` axis the preference is
-/// expressed in.
-///
-/// A staged device is a preference (`set_device` takes `cpu` or `gpu`), while
-/// `current_device` is the accelerator that preference resolved to — `cuda` on
-/// an NVIDIA host. The two are only comparable here: raw, a staged `gpu` never
-/// equals a current `cuda`, so every GPU model switch resends the preference
-/// and the daemon unloads and reloads the running model on the same GPU before
-/// the model switch begins. A `gpu` preference that fell back to `cpu` still
-/// differs on this axis, so retrying the accelerator keeps working.
-fn preference_axis(device: &str) -> &str {
-    match device {
-        "cuda" | "rocm" | "metal" | "vulkan" => "gpu",
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{StagedLoad, staged_default_device, staged_load_device};
+    use super::{StagedLoad, staged_load_device};
     use crate::daemon::backends::{BackendInfo, BackendModel};
 
     fn backend(source: &str, model: &str, devices: &[&str]) -> BackendInfo {
@@ -454,17 +508,16 @@ mod tests {
         }
     }
 
-    /// The regression: a Load click for a pair that is no longer installed
-    /// must not reach the daemon at all. Treating the catalog miss as merely
-    /// "not online" sends a real `set_device` first, which unloads the working
-    /// model and persists a device the user never chose — and only then does
-    /// the `set_model` fail with `invalid_model`.
+    /// The regression: a Load click for a pair that is no longer installed must
+    /// not reach the daemon at all. Treating the catalog miss as merely "not
+    /// online" sends a device write for a model that no longer exists, and the
+    /// user gets two failures out of one click that could never have worked.
     #[test]
     fn a_stale_pair_sends_nothing() {
         let installed = vec![backend(
             "github.com/super-tts/kokoro",
             "kokoro-tiny",
-            &["cuda"],
+            &["gpu"],
         )];
 
         // Backend uninstalled between staging and the click.
@@ -473,8 +526,8 @@ mod tests {
                 &installed,
                 "github.com/super-tts/gone",
                 "kokoro-tiny",
-                Some("cuda"),
-                "cpu"
+                Some("gpu"),
+                Some("cpu")
             ),
             StagedLoad::NotInCatalog,
         );
@@ -484,8 +537,8 @@ mod tests {
                 &installed,
                 "github.com/super-tts/kokoro",
                 "kokoro-large",
-                Some("cuda"),
-                "cpu"
+                Some("gpu"),
+                Some("cpu")
             ),
             StagedLoad::NotInCatalog,
         );
@@ -495,44 +548,48 @@ mod tests {
                 &[],
                 "github.com/super-tts/kokoro",
                 "kokoro-tiny",
-                Some("cuda"),
-                "cpu"
+                Some("gpu"),
+                Some("cpu")
             ),
             StagedLoad::NotInCatalog,
         );
     }
 
-    /// A staged local model on a different device still sets it — the guard
-    /// must not swallow the case it sits in front of.
+    /// A staged local model on a device other than the one the daemon has
+    /// recorded still writes it — the guard must not swallow the case it sits
+    /// in front of.
     #[test]
     fn a_local_model_on_a_new_device_sets_it() {
         let installed = vec![backend(
             "github.com/super-tts/kokoro",
             "kokoro-tiny",
-            &["cpu", "cuda"],
+            &["cpu", "gpu"],
         )];
         assert_eq!(
             staged_load_device(
                 &installed,
                 "github.com/super-tts/kokoro",
                 "kokoro-tiny",
-                Some("cuda"),
-                "cpu"
+                Some("gpu"),
+                Some("cpu")
             ),
             StagedLoad::Switch {
-                device_to_set: Some("cuda".to_string())
+                device_to_set: Some("gpu".to_string())
             },
         );
     }
 
-    /// No `set_device` when it would be a no-op: the daemon is already on that
-    /// device, or none was staged.
+    /// No device write when it would be a no-op: the daemon already records
+    /// that preference for this model, or nothing was staged. The comparison is
+    /// against *this model's* stored preference, not against whatever the
+    /// daemon happens to be running — that was the global setting this
+    /// replaced, and under it a second model's load rewrote the first's device.
     #[test]
     fn an_unchanged_device_is_not_resent() {
         let installed = vec![backend(
             "github.com/super-tts/kokoro",
             "kokoro-tiny",
-            &["cpu", "cuda"],
+            &["cpu", "gpu"],
         )];
         for staged in [Some("cpu"), None] {
             assert_eq!(
@@ -541,14 +598,65 @@ mod tests {
                     "github.com/super-tts/kokoro",
                     "kokoro-tiny",
                     staged,
-                    "cpu"
+                    Some("cpu")
                 ),
                 StagedLoad::Switch {
                     device_to_set: None
                 },
-                "staged={staged:?} must not resend the current device"
+                "staged={staged:?} must not resend the stored preference"
             );
         }
+    }
+
+    /// A `gpu` preference the daemon holds for one model is not the same fact
+    /// as a `gpu` model *running*: the staged value is compared against that
+    /// model's own record, so staging `gpu` for a model recorded as `cpu`
+    /// writes even while another model is loaded on the GPU.
+    #[test]
+    fn the_comparison_is_against_this_models_own_record() {
+        let installed = vec![backend(
+            "github.com/super-tts/kokoro",
+            "kokoro-large",
+            &["cpu", "gpu"],
+        )];
+        assert_eq!(
+            staged_load_device(
+                &installed,
+                "github.com/super-tts/kokoro",
+                "kokoro-large",
+                Some("gpu"),
+                Some("cpu")
+            ),
+            StagedLoad::Switch {
+                device_to_set: Some("gpu".to_string())
+            },
+        );
+    }
+
+    /// Before that model's device answer arrives there is nothing to compare
+    /// against, and the staged value is written rather than assumed redundant.
+    /// A write to a model no stage is running is a note for its next load, so
+    /// the cost of being wrong here is one request — where skipping it would
+    /// load the model onto a device the user did not choose.
+    #[test]
+    fn an_unknown_stored_preference_still_writes() {
+        let installed = vec![backend(
+            "github.com/super-tts/kokoro",
+            "kokoro-tiny",
+            &["cpu", "gpu"],
+        )];
+        assert_eq!(
+            staged_load_device(
+                &installed,
+                "github.com/super-tts/kokoro",
+                "kokoro-tiny",
+                Some("cpu"),
+                None
+            ),
+            StagedLoad::Switch {
+                device_to_set: Some("cpu".to_string())
+            },
+        );
     }
 
     /// Online models carry the `none` sentinel and have no device to set;
@@ -566,7 +674,7 @@ mod tests {
                 "github.com/super-tts/openai",
                 "kokoro-1",
                 Some("none"),
-                "cpu"
+                Some("none")
             ),
             StagedLoad::Switch {
                 device_to_set: None
@@ -578,8 +686,8 @@ mod tests {
                 &online,
                 "github.com/super-tts/openai",
                 "kokoro-1",
-                Some("cuda"),
-                "cpu"
+                Some("gpu"),
+                Some("none")
             ),
             StagedLoad::Switch {
                 device_to_set: None
@@ -596,146 +704,11 @@ mod tests {
                 "github.com/super-tts/kokoro",
                 "kokoro-tiny",
                 Some("none"),
-                "cpu"
+                Some("cpu")
             ),
             StagedLoad::Switch {
                 device_to_set: None
             },
-        );
-    }
-
-    /// A staged `gpu` against a daemon already on CUDA is the *same* choice
-    /// spelled two ways: `set_device` takes the `cpu`/`gpu` preference, while
-    /// the current device is the accelerator that preference resolved to.
-    /// Comparing them raw makes every GPU model switch resend the preference,
-    /// which unloads the running model and reloads it on the same GPU before
-    /// the model switch even starts.
-    #[test]
-    fn a_staged_gpu_is_not_resent_to_a_daemon_already_on_an_accelerator() {
-        let installed = vec![backend(
-            "github.com/super-tts/kokoro",
-            "kokoro-tiny",
-            &["cpu", "gpu"],
-        )];
-        for current in ["cuda", "rocm", "metal", "vulkan", "gpu"] {
-            assert_eq!(
-                staged_load_device(
-                    &installed,
-                    "github.com/super-tts/kokoro",
-                    "kokoro-tiny",
-                    Some("gpu"),
-                    current
-                ),
-                StagedLoad::Switch {
-                    device_to_set: None
-                },
-                "current={current} is already the gpu preference"
-            );
-        }
-    }
-
-    /// The deliberate exception: a `gpu` preference that fell back to the CPU
-    /// still differs on the preference axis, so Load retries the accelerator.
-    #[test]
-    fn a_staged_gpu_is_resent_when_the_daemon_actually_fell_back_to_the_cpu() {
-        let installed = vec![backend(
-            "github.com/super-tts/kokoro",
-            "kokoro-tiny",
-            &["cpu", "gpu"],
-        )];
-        assert_eq!(
-            staged_load_device(
-                &installed,
-                "github.com/super-tts/kokoro",
-                "kokoro-tiny",
-                Some("gpu"),
-                "cpu"
-            ),
-            StagedLoad::Switch {
-                device_to_set: Some("gpu".to_string())
-            },
-        );
-        assert_eq!(
-            staged_load_device(
-                &installed,
-                "github.com/super-tts/kokoro",
-                "kokoro-tiny",
-                Some("cpu"),
-                "cuda"
-            ),
-            StagedLoad::Switch {
-                device_to_set: Some("cpu".to_string())
-            },
-        );
-    }
-
-    fn backend_with_accel(devices: &[&str], installed_accel: &[&str]) -> Vec<BackendInfo> {
-        let mut b = backend("github.com/super-tts/piper", "piper-mini", devices);
-        b.installed_accel = installed_accel.iter().map(|a| (*a).to_string()).collect();
-        vec![b]
-    }
-
-    /// The reported bug, on the staging path: a GPU-only model on an install
-    /// that resolved to a CPU asset can run on nothing here. Staging must
-    /// leave the device unset, because that is the only thing standing
-    /// between the "needs a device this install doesn't have" advisory and a
-    /// Load button that would happily persist an unusable GPU preference.
-    #[test]
-    fn a_gpu_only_model_on_a_cpu_install_stages_no_device() {
-        let installed = backend_with_accel(&["gpu"], &["cpu"]);
-        assert_eq!(
-            staged_default_device(&installed, Some("github.com/super-tts/piper"), "piper-mini"),
-            None,
-        );
-    }
-
-    /// Same root cause, quieter symptom: a model declaring `["gpu", "cpu"]`
-    /// on a CPU-only install can run — on the CPU. Seeding from the manifest
-    /// stages `gpu`, which is not in the offered list, so the dropdown renders
-    /// with nothing selected while Load sends a device the install cannot use.
-    /// The staged device must always be one the picker actually offers.
-    #[test]
-    fn a_gpu_first_model_on_a_cpu_install_stages_the_cpu() {
-        let installed = backend_with_accel(&["gpu", "cpu"], &["cpu"]);
-        let staged =
-            staged_default_device(&installed, Some("github.com/super-tts/piper"), "piper-mini");
-        assert_eq!(staged, Some("cpu".to_string()));
-        assert!(
-            crate::ui::views::models::offered_devices(&installed[0], "piper-mini")
-                .contains(&staged.expect("staged")),
-            "the staged device must be one the picker offers"
-        );
-    }
-
-    /// With an accelerated asset installed, the model's first device is staged
-    /// as before — the narrowing only removes what this install cannot do.
-    #[test]
-    fn an_accelerated_install_stages_the_models_first_device() {
-        let installed = backend_with_accel(&["gpu", "cpu"], &["cuda"]);
-        assert_eq!(
-            staged_default_device(&installed, Some("github.com/super-tts/piper"), "piper-mini"),
-            Some("gpu".to_string()),
-        );
-    }
-
-    /// An online model has no local device, and an unknown backend/model has
-    /// no answer at all — both stage nothing rather than guessing.
-    #[test]
-    fn an_online_or_unknown_model_stages_no_device() {
-        let online = backend_with_accel(&["none"], &[]);
-        assert_eq!(
-            staged_default_device(&online, Some("github.com/super-tts/piper"), "piper-mini"),
-            None,
-        );
-        let installed = backend_with_accel(&["cpu"], &["cpu"]);
-        assert_eq!(
-            staged_default_device(&installed, None, "piper-mini"),
-            None,
-            "no active backend stages nothing"
-        );
-        assert_eq!(
-            staged_default_device(&installed, Some("github.com/super-tts/gone"), "piper-mini"),
-            None,
         );
     }
 }
