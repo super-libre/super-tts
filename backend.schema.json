@@ -389,7 +389,7 @@
       "type": "object"
     },
     "Contract": {
-      "description": "Backend-protocol contract version.",
+      "description": "Backend-protocol contract version: the one thing a manifest declares about\nwhat it implements.\n\nA contract generation names a set of manifest fields and backend routes.\nEach generation is additive over the one before, so a backend declares the\n*lowest* generation whose fields it uses, and a daemon supports every\ngeneration up to the one it was built with.\n\nThis is a closed enum on purpose. A daemon that predates a generation\ncannot parse a manifest declaring it, which is what stops such a daemon\nfrom installing a backend it cannot drive: the refusal needs no field the\nold daemon would have to know about, because it is the *absence* of\nknowledge that refuses. Every generation added here therefore also gates\nitself against every daemon released before it.\n\nVariant order is generation order; the derived `Ord` relies on it.",
       "oneOf": [
         {
           "const": "v1",
@@ -630,6 +630,15 @@
       ],
       "description": "One `[[options]]` declaration — non-secret configuration the backend reads\nas an `x-tts-option-<name>` request header.",
       "properties": {
+        "choices": {
+          "default": [],
+          "description": "The values this option accepts, when it accepts a closed set. Empty\nmeans any value of the declared `type`.\n\nDeclaring them is what turns a free-text field into a dropdown, and\nwhat lets the daemon refuse a value the backend would not understand.\nAn option whose allowed values were only ever written into its\n`description` accepted anything the user typed, and shipped it.",
+          "items": {
+            "$ref": "#/definitions/OptionDefault"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "default": {
           "anyOf": [
             {
