@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Super TTS Applet (Full)
+Comment=Text-to-speech panel applet - Full visualization display
+Type=Application
+Exec=super-tts-cosmic-applet --side full
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Iced;Speech;TTS;Super;
+Icon=super-tts-cosmic-applet
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=50

@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Data models and types for the Super TTS application.
+
+// Re-export AudioTheme from shared crate
+pub use super_tts_shared::models::theme::AudioTheme;
+
+/// Daemon connection status
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum DaemonStatus {
+    #[default]
+    Disconnected,
+    Connecting,
+    Connected,
+    Error(String),
+    /// User denied the settings-scope consent prompt (either just now
+    /// or via the daemon's sticky deny cache). All settings-scope
+    /// operations will fail until the user explicitly retries
+    /// authorization — usually after `systemctl --user restart
+    /// super-tts`. The auto-retry loop is suppressed in this state to
+    /// avoid spamming the daemon's deny cache.
+    Blocked(String),
+}
+
+/// Whether the daemon is speaking.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum SpeakingStatus {
+    #[default]
+    Idle,
+    Speaking,
+}
+
+/// The page to display in the application
+#[derive(Debug, Clone)]
+pub enum Page {
+    Connection,
+    Customization,
+    Speech,
+    /// The active synthesis backend: its model picker, load/unload, and a
+    /// side sheet for switching which installed backend is active.
+    Models,
+    /// Manage installed backends and browse installable ones (the old Models
+    /// page's Installed / Browse tabs). No activation here — that lives on the
+    /// Models page.
+    Library,
+    /// The cloned-voice library: record or import a reference clip, and manage
+    /// the voices built from them.
+    Voices,
+    /// Self-update: current/latest version, automatic-check and beta-opt-in
+    /// settings, and the apply flow.
+    Updates,
+}
+
+/// The context page to display in the context drawer
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ContextPage {
+    #[default]
+    About,
+    /// Right-side sheet for adding a backend from a Git repo URL or a local
+    /// directory. Scoped to the Models page — it closes on navigation away or
+    /// daemon disconnect (see `AppModel::context_drawer`).
+    AddBackend,
+    /// Right-side sheet for editing the active/selected backend's secrets and
+    /// options. Reuses the drawer instead of a full-page takeover so the
+    /// backend list stays visible behind it. The backend is identified by
+    /// `AppModel::configure_backend`; also Models-scoped.
+    ConfigureBackend,
+    /// Right-side search sheet for picking a speech language. Scope
+    /// (global vs per-model) is carried by `AppModel::language_picker_target`.
+    LanguagePicker,
+    /// Right-side sheet for choosing which installed backend to activate (the
+    /// Models page's "Load a backend" / "Switch backend" flow). Scoped to the
+    /// Models page; picking a backend activates it and closes the sheet.
+    LoadBackend,
+}
+
+/// Where a transient action error belongs, so a failed save surfaces as an
+/// inline banner on the owning surface instead of hijacking the whole UI
+/// (Tier 1 #13) or being dropped to the log (Tier 1 #15). One scope-tagged
+/// slot ([`ActionError`]) is held on `AppModel`; the audit's "one error
+/// surface" (App Tier 3 #11) generalizes this.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ErrorScope {
+    /// The Customization page's Audio section: theme / volume / feedback saves,
+    /// and the global Primary Language save.
+    Customization,
+    /// The per-backend Configure sheet: secret / option saves.
+    ConfigureBackend,
+    /// The Speech page: notification-method saves and the test utterance.
+    Speech,
+    /// The Voices page: recording, upload, rename, and delete failures.
+    Voices,
+}
+
+/// A scope-tagged, transient action failure rendered as an inline banner on the
+/// page named by [`ErrorScope`]. Set on a failed save, cleared when the user
+/// retries that action, reconnects, or closes the owning surface.
+#[derive(Clone, Debug)]
+pub struct ActionError {
+    pub scope: ErrorScope,
+    pub message: String,
+}
+
+/// The per-model language resolution block returned by
+/// `GET /pipeline/{stage}/model/{model}/language`, deserialized once at the
+/// client boundary instead of being poked field-by-field as a
+/// `serde_json::Value` in the views. Unknown/absent fields default so a partial
+/// or null block yields an empty, harmless resolution.
+///
+/// It says which language is in effect and why — not which languages *could*
+/// be. That list is a separate call (`.../language/list`), because the two
+/// change on different occasions: pinning a language rewrites this block and
+/// leaves the offered set untouched. A `supported` field once rode along here
+/// and was dropped from the wire; anything that reads one from this block is
+/// reading a list that is always empty.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct LanguageResolution {
+    /// The effective BCP-47 tag in use, if any (`None` when unresolved).
+    #[serde(default)]
+    pub effective: Option<String>,
+    /// How `effective` was resolved: `"override"`, `"global"`, or `"default"`.
+    #[serde(default)]
+    pub source: String,
+    /// The global Primary Language tag used as the default fallback.
+    #[serde(default)]
+    pub primary: String,
+}
+
+/// Which tab of the Models page is active.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ModelsTab {
+    /// Backends already installed and discovered by the daemon.
+    #[default]
+    Installed,
+    /// Official backends the user can install.
+    Download,
+}
+
+/// Menu actions
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MenuAction {
+    About,
+}

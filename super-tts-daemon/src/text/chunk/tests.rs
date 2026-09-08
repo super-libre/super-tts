@@ -1,0 +1,262 @@
+// SPDX-License-Identifier: GPL-3.0-only
+use super::{ChunkPolicy, Chunker};
+
+/// No short opener and no limit: the simplest policy, for tests about
+/// boundary detection rather than sizing.
+fn plain() -> ChunkPolicy {
+    ChunkPolicy {
+        max_chars: None,
+        first_chunk_chars: 0,
+    }
+}
+
+fn chunk_all(policy: ChunkPolicy, text: &str) -> Vec<String> {
+    let mut c = Chunker::new(policy);
+    let mut out = c.push(text);
+    out.extend(c.finish());
+    out
+}
+
+#[test]
+fn text_within_the_limit_is_one_chunk() {
+    assert_eq!(
+        chunk_all(plain(), "Hello there. How are you?"),
+        vec!["Hello there. How are you?"]
+    );
+}
+
+#[test]
+fn an_empty_input_produces_no_chunks() {
+    assert!(chunk_all(plain(), "").is_empty());
+    assert!(chunk_all(plain(), "   ").is_empty());
+}
+
+/// The short opener exists to start speech quickly; everything after it packs
+/// as full as the limit allows.
+#[test]
+fn the_first_chunk_is_short_and_the_rest_are_not() {
+    let policy = ChunkPolicy {
+        max_chars: None,
+        first_chunk_chars: 30,
+    };
+    let text = "Short opener here. Then a considerably longer stretch of text that would \
+                otherwise have been merged into the very first chunk and delayed it.";
+    let chunks = chunk_all(policy, text);
+    assert_eq!(chunks.len(), 2, "one opener plus the remainder: {chunks:?}");
+    assert_eq!(chunks[0], "Short opener here.");
+    assert!(
+        chunks[1].len() > 60,
+        "the rest is not split further: {:?}",
+        chunks[1]
+    );
+}
+
+#[test]
+fn chunks_never_exceed_the_models_limit() {
+    let policy = ChunkPolicy {
+        max_chars: Some(40),
+        first_chunk_chars: 0,
+    };
+    let text = "One sentence here. Another sentence follows. And a third one arrives. \
+                Finally a fourth.";
+    for chunk in chunk_all(policy, text) {
+        assert!(
+            chunk.chars().count() <= 40,
+            "chunk over the limit: {chunk:?}"
+        );
+    }
+}
+
+/// A single sentence longer than the limit still has to be spoken, so the
+/// chunker falls back to a word break rather than refusing.
+#[test]
+fn an_oversized_sentence_falls_back_to_a_word_break() {
+    let policy = ChunkPolicy {
+        max_chars: Some(30),
+        first_chunk_chars: 0,
+    };
+    let text = "this one very long sentence has no terminator anywhere inside it at all";
+    let chunks = chunk_all(policy, text);
+    assert!(chunks.len() > 1);
+    for chunk in &chunks {
+        assert!(chunk.chars().count() <= 30, "{chunk:?}");
+        assert!(
+            !chunk.starts_with(' ') && !chunk.ends_with(' '),
+            "chunks are trimmed: {chunk:?}"
+        );
+    }
+    // Every word survives, in order.
+    let rejoined = chunks.join(" ");
+    assert_eq!(rejoined, text);
+}
+
+/// A word longer than the whole limit cannot be broken politely, but must still
+/// be spoken rather than jamming the chunker.
+#[test]
+fn a_single_word_longer_than_the_limit_is_still_emitted() {
+    let policy = ChunkPolicy {
+        max_chars: Some(10),
+        first_chunk_chars: 0,
+    };
+    let chunks = chunk_all(policy, &"a".repeat(35));
+    assert!(!chunks.is_empty());
+    assert_eq!(chunks.concat(), "a".repeat(35));
+}
+
+// ---------------------------------------------------------------- boundaries
+
+/// Each of these is audible when it goes wrong: a split here produces two
+/// utterances with a pause and a reset intonation in the middle of a phrase.
+#[test]
+fn abbreviations_do_not_end_a_sentence() {
+    for text in [
+        "Dr. Smith arrived today.",
+        "Fig. 3 shows the result.",
+        "Tea, coffee, etc. were served.",
+        "Cats, e.g. tabbies, sleep a lot.",
+        "Acme Inc. filed the report.",
+        "Meet on Mon. at noon.",
+    ] {
+        let chunks = chunk_all(plain(), text);
+        assert_eq!(chunks.len(), 1, "{text:?} must stay one chunk: {chunks:?}");
+    }
+}
+
+#[test]
+fn initials_do_not_end_a_sentence() {
+    let chunks = chunk_all(plain(), "J. R. R. Tolkien wrote it.");
+    assert_eq!(chunks, vec!["J. R. R. Tolkien wrote it."]);
+}
+
+#[test]
+fn decimals_versions_and_domains_do_not_end_a_sentence() {
+    for text in [
+        "Pi is 3.14 exactly.",
+        "Upgrade to v1.2 today.",
+        "It cost $1,234.56 total.",
+        "Visit example.com later.",
+    ] {
+        let chunks = chunk_all(plain(), text);
+        assert_eq!(chunks.len(), 1, "{text:?} split: {chunks:?}");
+    }
+}
+
+#[test]
+fn an_ellipsis_does_not_split_mid_sentence() {
+    let chunks = chunk_all(plain(), "Well... it depends on the case.");
+    assert_eq!(chunks.len(), 1, "{chunks:?}");
+}
+
+#[test]
+fn real_boundaries_are_found() {
+    let policy = ChunkPolicy {
+        max_chars: Some(25),
+        first_chunk_chars: 0,
+    };
+    let chunks = chunk_all(policy, "First one. Second one! Third one? Done.");
+    assert!(chunks.len() > 1);
+    // Every chunk ends on a terminator, so nothing was cut mid-sentence.
+    for chunk in &chunks {
+        assert!(
+            chunk.ends_with(['.', '!', '?']),
+            "chunk cut mid-sentence: {chunk:?}"
+        );
+    }
+}
+
+#[test]
+fn a_terminator_inside_quotes_still_ends_the_sentence() {
+    let policy = ChunkPolicy {
+        max_chars: Some(30),
+        first_chunk_chars: 0,
+    };
+    let chunks = chunk_all(policy, "He said \"go now.\" Then he left the room.");
+    assert!(chunks.len() > 1, "{chunks:?}");
+    assert!(
+        chunks[0].ends_with('"'),
+        "the closing quote belongs to the sentence it ends: {:?}",
+        chunks[0]
+    );
+}
+
+#[test]
+fn cjk_terminators_end_a_sentence() {
+    let policy = ChunkPolicy {
+        max_chars: Some(12),
+        first_chunk_chars: 0,
+    };
+    let chunks = chunk_all(policy, "こんにちは。元気ですか。さようなら。");
+    assert!(chunks.len() > 1, "{chunks:?}");
+    for chunk in &chunks {
+        assert!(chunk.ends_with('。'), "{chunk:?}");
+    }
+}
+
+// ----------------------------------------------------------------- streaming
+
+/// The streaming contract: feeding a delta at a time must produce the same
+/// chunks as feeding the whole string. A chunker that split on a terminator
+/// before seeing what follows it would fail this on "Dr." arriving alone.
+#[test]
+fn streaming_a_delta_at_a_time_matches_the_whole_string() {
+    let policy = ChunkPolicy {
+        max_chars: Some(60),
+        first_chunk_chars: 25,
+    };
+    let cases = [
+        "Dr. Smith arrived. He was late, as usual, and everyone noticed it.",
+        "Pi is 3.14. Visit example.com for more. Then stop.",
+        "One. Two. Three. Four. Five. Six. Seven. Eight.",
+    ];
+    for case in cases {
+        let whole = chunk_all(policy, case);
+        let mut c = Chunker::new(policy);
+        let mut streamed = Vec::new();
+        for ch in case.chars() {
+            streamed.extend(c.push(&ch.to_string()));
+        }
+        streamed.extend(c.finish());
+        assert_eq!(streamed, whole, "streaming {case:?} diverged");
+    }
+}
+
+/// Whatever the split, the words must come out complete and in order — the
+/// property that actually matters to a listener.
+#[test]
+fn chunking_never_loses_or_reorders_words() {
+    let policy = ChunkPolicy {
+        max_chars: Some(35),
+        first_chunk_chars: 15,
+    };
+    let text = "Dr. Smith arrived at 3.14 pm. He visited example.com first! \
+                Then, after a while, he left. Finally it ended.";
+    let chunks = chunk_all(policy, text);
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let got: Vec<String> = chunks
+        .iter()
+        .flat_map(|c| c.split_whitespace().map(str::to_owned))
+        .collect();
+    assert_eq!(got, words, "chunks: {chunks:?}");
+}
+
+/// A chunker is reused across utterances, so `finish` has to leave it clean —
+/// including the "first chunk is short" counter.
+#[test]
+fn finish_resets_state_for_the_next_utterance() {
+    let policy = ChunkPolicy {
+        max_chars: None,
+        first_chunk_chars: 20,
+    };
+    let mut c = Chunker::new(policy);
+    let first = {
+        let mut v = c.push("Short one here. And then some more text after it.");
+        v.extend(c.finish());
+        v
+    };
+    let second = {
+        let mut v = c.push("Short one here. And then some more text after it.");
+        v.extend(c.finish());
+        v
+    };
+    assert_eq!(first, second, "the second utterance must chunk identically");
+}

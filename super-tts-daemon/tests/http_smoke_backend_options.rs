@@ -1,0 +1,602 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Options-scope HTTP smoke test: `/backend/{backend_id}/option/...`
+//!
+//! Three test cases:
+//! 1. Round-trip: read default → set override → reset to default.
+//! 2. Unknown option: GET/POST to a `{name}` not declared → 404 `unknown_option`.
+//! 3. Unknown backend: GET on a source not installed → 404 `unknown_backend`.
+//!
+//! Uses `SUPER_TTS_KEYRING_MOCK=1` (in-memory keyring) and
+//! `SUPER_TTS_AUTO_APPROVE=1` (no GUI) — hermetic, part of default CI.
+//!
+//! The fixture backend (`fixture-openai/backend.toml`) is written into the
+//! isolated `XDG_DATA_HOME/super-tts/backends/` tree so the daemon discovers
+//! it on startup. It declares three options: `base_url` and `region` are
+//! open-ended, and `styling` offers a closed set, so both sides of the
+//! `choices` gate are exercisable.
+
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper::client::conn::http1::handshake;
+use hyper::{Method, Request, StatusCode};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+use super_tts_shared::daemon::http_client;
+use tokio::net::UnixStream;
+use tokio::time::sleep;
+
+const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
+
+/// URL-encoded `{source}` path segment for the fixture backend.
+/// The raw source id is `github.com/super-tts/openai`; slashes become `%2F`.
+const FIXTURE_SOURCE_ENC: &str = "github.com%2Fsuper-tts%2Fopenai";
+
+struct DaemonGuard {
+    child: Child,
+    cleanup_paths: Vec<PathBuf>,
+    /// Where the fixture backend was seeded, so a test can change it on disk
+    /// under the running daemon.
+    data_home: PathBuf,
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for p in &self.cleanup_paths {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+}
+
+fn next_test_uniq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static UNIQ: AtomicU64 = AtomicU64::new(0);
+    UNIQ.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Seed the fixture backend into `<data_home>/super-tts/backends/fixture-openai/`.
+/// The manifest declares `base_url` as an option with a default value.
+fn seed_fixture_backend(data_home: &Path) {
+    let backend_dir = data_home
+        .join("super-tts")
+        .join("backends")
+        .join("fixture-openai");
+    std::fs::create_dir_all(&backend_dir).expect("create fixture backend dir");
+
+    let toml = r#"[backend]
+source = "github.com/super-tts/openai"
+name = "Fixture OpenAI"
+version = "1.0.0"
+kind = "wasm"
+entrypoint = "openai.wasm"
+contract = "v1"
+description = "Test backend."
+license = "Apache-2.0"
+
+[network]
+allowed_hosts = ["api.openai.com"]
+
+[[secrets]]
+name = "openai_api_key"
+label = "OpenAI API key"
+description = "Your OpenAI API key."
+required = true
+
+[[options]]
+name = "base_url"
+label = "Base URL"
+description = "Override the OpenAI API base URL."
+type = "string"
+
+[[options]]
+name = "region"
+label = "Region"
+description = "Upstream region."
+type = "string"
+default = "us-east-1"
+
+[[options]]
+name = "styling"
+label = "Styling"
+description = "The register."
+type = "string"
+default = "formal"
+choices = ["casual", "formal"]
+
+[[models]]
+name = "kokoro-1"
+primary_language = "en"
+supported_languages = ["en"]
+supported_devices = ["none"]
+"#;
+    std::fs::write(backend_dir.join("backend.toml"), toml).expect("write fixture backend.toml");
+    // Create a placeholder entrypoint so the manifest can reference it.
+    std::fs::write(backend_dir.join("openai.wasm"), b"").expect("write placeholder entrypoint");
+}
+
+async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
+    let unique = format!("tts-options-{}-{}", std::process::id(), next_test_uniq());
+    let tmp = std::env::temp_dir();
+    let http_socket = tmp.join(format!("{unique}-http.sock"));
+    let config_home = tmp.join(format!("{unique}-config"));
+    let data_home = tmp.join(format!("{unique}-data"));
+
+    std::fs::create_dir_all(&config_home).expect("create test config dir");
+    std::fs::create_dir_all(&data_home).expect("create test data dir");
+
+    // Seed the fixture backend so the daemon has something with declared options.
+    seed_fixture_backend(&data_home);
+
+    let child = Command::new(DAEMON_BIN)
+        .env("SUPER_TTS_KEYRING_MOCK", "1")
+        .env("SUPER_TTS_AUTO_APPROVE", "1")
+        .env("SUPER_TTS_MUTE_CUES", "1")
+        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_DATA_HOME", &data_home)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn super-tts-daemon");
+
+    // Hand the child to the guard before the readiness loop: the timeout
+    // panic below must still kill and reap the daemon, not leak it.
+    let guard = DaemonGuard {
+        child,
+        cleanup_paths: vec![http_socket.clone(), config_home, data_home.clone()],
+        data_home,
+    };
+
+    let deadline = Instant::now() + Duration::from_mins(2);
+    while Instant::now() < deadline {
+        if Path::new(&http_socket).exists()
+            && http_client::auth_request(http_socket.clone(), "options-smoke-probe", &["status"])
+                .await
+                .is_ok()
+        {
+            // Mint the token with the caller-specified scopes.
+            let auth = http_client::auth_request(http_socket.clone(), "options-smoke", scopes)
+                .await
+                .expect("auth_request for test scopes");
+            let token = auth.session_token;
+            return (guard, http_socket, token);
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+    panic!("daemon HTTP listener not ready within 120s");
+}
+
+/// Issue an HTTP request and return `(status, json_body)`.
+async fn raw_request(
+    socket_path: &PathBuf,
+    method: Method,
+    path: &str,
+    token: &str,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
+    let stream = UnixStream::connect(socket_path).await.expect("connect");
+    let io = hyper_util::rt::TokioIo::new(stream);
+    let (mut sender, conn) = handshake::<_, Full<Bytes>>(io).await.expect("handshake");
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+
+    let body_bytes = body
+        .map(|b| serde_json::to_vec(&b).expect("encode body"))
+        .unwrap_or_default();
+
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(format!("http://tts.local/v1{path}"))
+        .header("host", "tts.local")
+        .header("authorization", format!("Bearer {token}"));
+    if !body_bytes.is_empty() {
+        builder = builder
+            .header("content-type", "application/json")
+            .header("content-length", body_bytes.len().to_string());
+    }
+    let req = builder
+        .body(Full::new(Bytes::from(body_bytes)))
+        .expect("build req");
+
+    let resp = sender.send_request(req).await.expect("send req");
+    let status = resp.status();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect")
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+async fn get(p: &PathBuf, path: &str, token: &str) -> (StatusCode, serde_json::Value) {
+    raw_request(p, Method::GET, path, token, None).await
+}
+
+async fn post_req(
+    p: &PathBuf,
+    path: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    raw_request(p, Method::POST, path, token, Some(body)).await
+}
+
+async fn delete_req(p: &PathBuf, path: &str, token: &str) -> (StatusCode, serde_json::Value) {
+    raw_request(p, Method::DELETE, path, token, None).await
+}
+
+/// Round-trip: default → override → reset to default.
+#[tokio::test]
+async fn option_set_get_and_reset_to_default() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/region");
+
+    // Default before any override.
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "GET option before set: {body}");
+    assert_eq!(
+        body["value"], "us-east-1",
+        "should start at manifest default: {body}"
+    );
+
+    // Set override.
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "eu-west-1" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "POST option: {body}");
+    assert_eq!(
+        body["value"], "eu-west-1",
+        "value should reflect override: {body}"
+    );
+
+    // Reset to default (DELETE clears the override).
+    let (s, body) = delete_req(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "DELETE option: {body}");
+    assert_eq!(
+        body["value"], "us-east-1",
+        "value should revert to manifest default after DELETE: {body}"
+    );
+}
+
+/// `base_url` is the one option a manifest may not supply a value for — its
+/// host is authorized for egress, so only the user may name it. It therefore
+/// round-trips through the unset state rather than through a default.
+#[tokio::test]
+async fn base_url_round_trips_through_unset() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/base_url");
+
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "GET base_url before set: {body}");
+    assert!(
+        body["value"].is_null() && body["default"].is_null(),
+        "base_url starts unset, with no manifest default: {body}"
+    );
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "https://gw.example.com" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "POST base_url: {body}");
+    assert_eq!(
+        body["value"], "https://gw.example.com",
+        "value should reflect override: {body}"
+    );
+
+    let (s, body) = delete_req(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "DELETE base_url: {body}");
+    assert!(
+        body["value"].is_null(),
+        "clearing the override leaves base_url unset, not defaulted: {body}"
+    );
+}
+
+/// `base_url` is stored canonical, so the settings field reads back the
+/// endpoint that will be dialed rather than the string that was posted. The
+/// scheme is why it matters: a value naming none is read by its host, and
+/// whether the request is encrypted must not be invisible in the field.
+#[tokio::test]
+async fn base_url_is_stored_canonical() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/base_url");
+
+    for (posted, want) in [
+        // A private gateway named without a scheme is plaintext.
+        ("192.168.0.179:8080/v1", "http://192.168.0.179:8080/v1"),
+        ("localhost:4000/v1", "http://localhost:4000/v1"),
+        // A name the daemon cannot classify keeps https.
+        ("gw.example.com/v1", "https://gw.example.com/v1"),
+        // The rest of the canonical form travels with it.
+        (
+            "  HTTPS://user:pass@gw.example.com/v1/?k=v  ",
+            "https://gw.example.com/v1",
+        ),
+    ] {
+        let (s, body) = post_req(
+            &sock,
+            &opt_path,
+            &token,
+            serde_json::json!({ "value": posted }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "POST {posted:?}: {body}");
+        assert_eq!(body["value"], want, "POST {posted:?} stored: {body}");
+
+        let (s, body) = get(&sock, &opt_path, &token).await;
+        assert_eq!(s, StatusCode::OK, "GET after {posted:?}: {body}");
+        assert_eq!(body["value"], want, "GET after {posted:?}: {body}");
+    }
+
+    // A value yielding no host is kept as typed rather than dropped, so the
+    // model load can refuse it by name.
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "http://" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "POST unreadable: {body}");
+    assert_eq!(body["value"], "http://", "kept as typed: {body}");
+}
+
+/// Listing all options for the backend.
+#[tokio::test]
+async fn option_list_returns_declared_options() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let list_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/list");
+
+    let (s, body) = get(&sock, &list_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "GET option/list: {body}");
+    assert_eq!(body["status"], "success", "list status: {body}");
+    let options = body["options"].as_array().expect("options array");
+    assert_eq!(options.len(), 3, "three declared options: {body}");
+    let o0 = &options[0];
+    assert_eq!(o0["name"], "base_url", "option name: {body}");
+    assert!(
+        o0["value"].is_null(),
+        "base_url carries no default, so no value until the user sets one: {body}"
+    );
+    let o1 = &options[1];
+    assert_eq!(o1["name"], "region", "option name: {body}");
+    assert_eq!(o1["value"], "us-east-1", "default value in list: {body}");
+    assert_eq!(
+        o1["choices"],
+        serde_json::json!([]),
+        "an open-ended option offers no list, which is what a client renders \
+         a text field from: {body}"
+    );
+    let o2 = &options[2];
+    assert_eq!(o2["name"], "styling", "option name: {body}");
+    assert_eq!(
+        o2["choices"],
+        serde_json::json!(["casual", "formal"]),
+        "the values the option accepts, in manifest order: {body}"
+    );
+}
+
+/// An option that declares `choices` accepts those and nothing else. The
+/// settings app renders a dropdown that cannot offer anything else, so this is
+/// the guard for every other client — and for the stored value staying one the
+/// backend understands, since it is injected into the load headers verbatim.
+#[tokio::test]
+async fn a_value_the_option_does_not_offer_is_refused() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/styling");
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "casual" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "an offered value stores: {body}");
+    assert_eq!(body["value"], "casual", "body: {body}");
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "formalish" }),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "a value off the list must be refused: {body}"
+    );
+    assert_eq!(body["error_code"], "invalid_value", "body: {body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("casual, formal"),
+        "the refusal names what is on offer: {body}"
+    );
+
+    // Refused, so the earlier value is still what is in effect.
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["value"], "casual",
+        "a refused write changes nothing: {body}"
+    );
+
+    // An option declaring no list still takes anything.
+    let region = format!("/backend/{FIXTURE_SOURCE_ENC}/option/region");
+    let (s, body) = post_req(
+        &sock,
+        &region,
+        &token,
+        serde_json::json!({ "value": "eu-west-9" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "an open-ended option is ungated: {body}");
+}
+
+/// Clearing a `choices` option returns it to the manifest default rather than
+/// to nothing, which is how a client returns a dropdown to its declared value:
+/// storing a copy of today's default instead would pin the user to it and stop
+/// a later manifest from moving it.
+#[tokio::test]
+async fn clearing_a_choices_option_returns_it_to_the_declared_default() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/styling");
+
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["value"], "formal",
+        "it starts on the manifest default: {body}"
+    );
+
+    let (s, body) = post_req(
+        &sock,
+        &opt_path,
+        &token,
+        serde_json::json!({ "value": "casual" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(body["value"], "casual", "body: {body}");
+
+    let (s, body) = delete_req(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["value"], "formal",
+        "DELETE reverts to the declared default, not to unset: {body}"
+    );
+    assert_eq!(
+        body["default"], "formal",
+        "and says what clearing reverted to: {body}"
+    );
+}
+
+/// GET on an undeclared option name returns 404 `unknown_option`.
+#[tokio::test]
+async fn undeclared_option_is_404() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/not_a_real_option");
+
+    let (s, body) = get(&sock, &path, &token).await;
+    assert_eq!(
+        s,
+        StatusCode::NOT_FOUND,
+        "undeclared option must be 404: {body}"
+    );
+    assert_eq!(
+        body["message"], "unknown_option",
+        "error code for undeclared option: {body}"
+    );
+}
+
+/// POST with an empty `value` returns 400 `invalid_request`.
+#[tokio::test]
+async fn set_empty_value_is_400() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let opt_path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/base_url");
+
+    let (s, body) = post_req(&sock, &opt_path, &token, serde_json::json!({ "value": "" })).await;
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "empty value must be 400: {body}"
+    );
+    assert_eq!(
+        body["message"], "invalid_request",
+        "error code for empty value: {body}"
+    );
+}
+
+/// GET on an unknown backend returns 404 `unknown_backend`.
+#[tokio::test]
+async fn unknown_backend_is_404() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let path = "/backend/github.com%2Fnot%2Finstalled/option/base_url";
+
+    let (s, body) = get(&sock, path, &token).await;
+    assert_eq!(
+        s,
+        StatusCode::NOT_FOUND,
+        "unknown backend must be 404: {body}"
+    );
+    assert_eq!(
+        body["message"], "unknown_backend",
+        "error code for unknown backend: {body}"
+    );
+}
+
+/// `GET /backend/list` reports the version on disk now, not the one the daemon
+/// scanned at startup.
+///
+/// A client shows this beside an update badge judged from `installed_version`
+/// on the registry listing, which is read per request — reported from the scan
+/// instead, this would name the version the daemon started with while the badge
+/// spoke for the one on disk.
+#[tokio::test]
+async fn backend_version_is_read_from_disk_per_request() {
+    let (guard, sock, token) = start_daemon(&["settings"]).await;
+    let manifest = guard
+        .data_home
+        .join("super-tts")
+        .join("backends")
+        .join("fixture-openai")
+        .join("backend.toml");
+
+    let (s, body) = get(&sock, "/backend/list", &token).await;
+    assert_eq!(s, StatusCode::OK, "GET /backend/list: {body}");
+    assert_eq!(body["backends"][0]["version"], "1.0.0", "seeded: {body}");
+
+    // Change it underneath the running daemon; nothing rescans.
+    let edited = std::fs::read_to_string(&manifest)
+        .expect("read fixture manifest")
+        .replace("version = \"1.0.0\"", "version = \"2.5.0\"");
+    std::fs::write(&manifest, edited).expect("write fixture manifest");
+
+    let (s, body) = get(&sock, "/backend/list", &token).await;
+    assert_eq!(s, StatusCode::OK, "GET /backend/list after edit: {body}");
+    assert_eq!(
+        body["backends"][0]["version"], "2.5.0",
+        "version follows the manifest without a rescan: {body}"
+    );
+}
+
+/// When the manifest cannot be read, the version falls back to what the last
+/// scan recorded rather than blanking.
+///
+/// A backend whose `backend.toml` has gone missing is broken either way; the
+/// last version the daemon actually loaded is more use to whoever is looking at
+/// it than an empty field, and it is what the running model came from.
+#[tokio::test]
+async fn backend_version_falls_back_to_the_scan_when_the_manifest_is_gone() {
+    let (guard, sock, token) = start_daemon(&["settings"]).await;
+    let manifest = guard
+        .data_home
+        .join("super-tts")
+        .join("backends")
+        .join("fixture-openai")
+        .join("backend.toml");
+
+    std::fs::remove_file(&manifest).expect("remove fixture manifest");
+
+    let (s, body) = get(&sock, "/backend/list", &token).await;
+    assert_eq!(s, StatusCode::OK, "GET /backend/list: {body}");
+    assert_eq!(
+        body["backends"][0]["version"], "1.0.0",
+        "the scanned version stands in when the manifest cannot be read: {body}"
+    );
+}
