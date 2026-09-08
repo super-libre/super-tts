@@ -113,3 +113,32 @@ supported_devices = ["cuda"]
         "the manifest's provider did not reach the load body: {body}"
     );
 }
+
+/// The cache key comes from the backend directory's own name, so two
+/// backends never share one — a shared cache would be a correctness bug
+/// rather than a slow path, since `CubeCL`'s kernel database is keyed inside
+/// the file by build and device, not by who wrote it.
+#[test]
+fn each_backend_gets_its_own_cache_dir() {
+    let root = std::path::Path::new("/data/super-tts/backends");
+    let qwen = backend_cache_dir(&root.join("app.super-tts.qwen-tts")).expect("named dir");
+    let kokoro = backend_cache_dir(&root.join("app.super-tts.kokoro")).expect("named dir");
+    assert_ne!(qwen, kokoro);
+    assert!(qwen.ends_with("backends/app-super-tts-qwen-tts"), "{qwen:?}");
+    assert!(qwen.starts_with(super_tts_shared::paths::cache_dir()));
+}
+
+/// The directory name reaches the path through [`sanitize`], so a backend
+/// directory that was somehow named with traversal cannot walk the cache
+/// root. The installer will not produce such a name, but this path joins a
+/// filesystem-derived string and is the wrong place to rely on that.
+#[test]
+fn a_traversing_directory_name_cannot_escape_the_cache_root() {
+    let dir = std::path::Path::new("/data/super-tts/backends/..");
+    // `..` is a path component, not a name — Path::file_name refuses it.
+    assert!(backend_cache_dir(dir).is_err());
+
+    let odd = backend_cache_dir(std::path::Path::new("/data/x/a..b/")).expect("named dir");
+    assert!(odd.starts_with(super_tts_shared::paths::cache_dir().join("backends")));
+    assert!(odd.ends_with("a--b"), "{odd:?}");
+}
