@@ -103,15 +103,12 @@ the lowest generation whose fields you use.
 | Generation | Covers                                                                                                                                             | First supported by |
 |------------|------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
 | `v1`       | The contract as this document describes it: discovery from `backend.toml`, `POST /v1/load`, `POST /v1/synthesize`, `POST /v1/cancel`, and the cloned-voice registration routes for models that declare them. | Super TTS 0.1.0    |
-| `v2`       | Adds the [per-architecture selector](#per-architecture-variants) on `[[models.files]]` — `accel`, `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api`, `optional` — so one `destination` may be published as several host-specific variants. No route changes. | Super TTS 0.2.0    |
 
-Declare `v1` unless you write a file selector. `v2` is a generation rather than
-an optional extra because that selector has no safe reading for a daemon that
-does not know it: the variants of one destination look like ordinary files, so
-such a daemon would download every one of them onto the same path and serve
-whichever landed last. There is no spelling of it that degrades quietly, so the
-refusal has to come from the generation — and it comes with no field anyone had
-to add first, which is the machinery below.
+`v1` is currently the only generation, so every manifest declares it and there
+is no second row to choose between. The machinery below is described anyway,
+because its whole value is that it is already in place: it is what will let a
+`v2` be introduced without every Super TTS released before it having to be
+taught something first.
 
 Extending the contract does not oblige a backend to serve all of it. Which
 routes a backend must implement is decided by the models it declares, not by
@@ -678,8 +675,7 @@ absolute paths, `..` traversal, and backslashes are rejected.
 
 #### Per-architecture variants
 
-From [`contract = "v2"`](#contract-generations) an entry may also carry a
-**host selector**, written in the same vocabulary
+An entry may also carry a **host selector**, written in the same vocabulary
 [`[[assets.subprocess]]`](#assets) uses for a build. Entries sharing a
 `destination` are then variants of one file: the daemon scores each against the
 machine, downloads the best match, and leaves the rest alone. The backend reads

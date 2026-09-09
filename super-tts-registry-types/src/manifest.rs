@@ -136,28 +136,15 @@ impl fmt::Display for Kind {
 pub enum Contract {
     /// The v1 contract (`docs/protocol/backend/contract.md`).
     V1,
-    /// Adds the per-architecture selector on `[[models.files]]`: `accel`,
-    /// `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api` and `optional`. One
-    /// `destination` may be published as several host-specific variants, and
-    /// the daemon downloads the one this machine can use — the same question
-    /// `[[assets.subprocess]]` already answers for the executable, asked of
-    /// the data beside it.
-    ///
-    /// It is a generation rather than an optional extra because a daemon that
-    /// does not know the selector reads the variants as ordinary files and
-    /// downloads every one of them onto the same path. There is no spelling of
-    /// this that degrades safely, so the refusal has to come from the
-    /// generation.
-    V2,
 }
 
 impl Contract {
     /// The newest generation this crate understands. A manifest may not
     /// declare anything above it, because the closed enum refuses to parse it.
-    pub const LATEST: Self = Self::V2;
+    pub const LATEST: Self = Self::V1;
 
     /// Every generation, oldest first.
-    pub const ALL: &'static [Self] = &[Self::V1, Self::V2];
+    pub const ALL: &'static [Self] = &[Self::V1];
 
     /// The generation immediately before this one; `None` for the first.
     #[must_use]
@@ -192,7 +179,6 @@ impl Contract {
             // The manifest and its `[backend].contract` field both date from
             // the first Super TTS release; there is no earlier daemon to gate.
             Self::V1 => "0.1.0",
-            Self::V2 => "0.2.0",
         }
     }
 }
@@ -201,7 +187,6 @@ impl fmt::Display for Contract {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::V1 => write!(f, "v1"),
-            Self::V2 => write!(f, "v2"),
         }
     }
 }
@@ -266,12 +251,8 @@ pub struct ContractField {
     pub since: Contract,
     /// Which rule this row expresses.
     pub rule: FieldRule,
-    /// The table the field lives in, as a dotted path: `backend` for
-    /// `[backend]`, `models` for each `[[models]]` entry, `models.files` for
-    /// each `[[models.files]]` entry under one, and so on. Every segment must
-    /// appear in [`ARRAY_TABLES`] if it is an array of tables, because the
-    /// raw-document walk and the schema builder both decide at each step
-    /// whether to descend into an array or a plain table.
+    /// The top-level table the field lives in: `backend` for `[backend]`,
+    /// `models` for each `[[models]]` entry, and so on.
     pub table: &'static str,
     /// The field's key within that table.
     pub key: &'static str,
@@ -294,33 +275,12 @@ impl ContractField {
     ///
     /// The single answer for every consumer: the manifest spelling above, the
     /// raw-document audit, and the schema rule (which must attach to `items`
-    /// for an array). Adding a row for a table not listed in [`ARRAY_TABLES`]
-    /// fails the schema's own test rather than silently generating a rule that
-    /// matches nothing.
+    /// for an array). Adding a row for a table not listed here fails the
+    /// schema's own test rather than silently generating a rule that matches
+    /// nothing.
     #[must_use]
     pub fn is_array_table(&self) -> bool {
-        ARRAY_TABLES.contains(&self.table)
-    }
-
-    /// The path's segments, outermost first, each paired with whether that
-    /// segment is an array of tables.
-    ///
-    /// `models.files` walks `("models", true)` then `("files", true)`: the
-    /// consumer descends into every `[[models]]` entry, then into every
-    /// `[[models.files]]` entry under it. A single-segment path yields one
-    /// pair and behaves exactly as it did before nesting existed.
-    #[must_use]
-    pub fn segments(&self) -> Vec<(&'static str, bool)> {
-        let mut out = Vec::new();
-        let mut end = 0;
-        for segment in self.table.split('.') {
-            // `end` walks the original string so each level can be looked up
-            // whole: `models`, then `models.files`. The `+ 1` is the separator,
-            // which every segment but the first is preceded by.
-            end += segment.len() + usize::from(end != 0);
-            out.push((segment, ARRAY_TABLES.contains(&&self.table[..end])));
-        }
-        out
+        matches!(self.table, "models" | "secrets" | "options")
     }
 
     /// The name of this table's type in the generated JSON schema, or `None`
@@ -330,7 +290,6 @@ impl ContractField {
         match self.table {
             "backend" => Some("BackendMeta"),
             "models" => Some("ModelEntry"),
-            "models.files" => Some("FileSpec"),
             "secrets" => Some("Secret"),
             "options" => Some("Opt"),
             _ => None,
@@ -338,17 +297,11 @@ impl ContractField {
     }
 }
 
-/// Every manifest table spelled as an array of tables (`[[models]]`), by its
-/// dotted path.
-///
-/// A nested table lists each of its own prefixes, not just its full path:
-/// walking `models.files` has to know that `models` is an array before it can
-/// look inside one, and the schema builder has to emit an `items` level for it.
-const ARRAY_TABLES: &[&str] = &["models", "models.files", "secrets", "options"];
-
 /// Every field rule a generation after v1 introduces.
 ///
-/// Adding a field to a new generation means adding a row here, and both
+/// Empty while v1 is the only generation: there is no earlier contract for a
+/// field to be withheld from. It is the extension point rather than dead
+/// weight — adding a field to a v2 means adding a row here, and both
 /// [`Manifest::parse`] and the published JSON Schema learn the rule from it
 /// without being taught separately.
 ///
@@ -356,48 +309,7 @@ const ARRAY_TABLES: &[&str] = &["models", "models.files", "secrets", "options"];
 /// set instead — a new `VoiceKind`, a new `Device` — cannot be expressed here,
 /// and a manifest using such a value under an older `contract` is caught by
 /// that field's own `FromStr` rather than by this table.
-pub const CONTRACT_FIELDS: &[ContractField] = &[
-    // v2's per-architecture file selector. One row per key: `contract = "v1"`
-    // has no `[[models.files]]` selector at all, so writing any of them under
-    // it is refused rather than honored by a daemon whose peers would ignore
-    // it.
-    ContractField {
-        since: Contract::V2,
-        rule: FieldRule::Added,
-        table: "models.files",
-        key: "accel",
-    },
-    ContractField {
-        since: Contract::V2,
-        rule: FieldRule::Added,
-        table: "models.files",
-        key: "cuda_major",
-    },
-    ContractField {
-        since: Contract::V2,
-        rule: FieldRule::Added,
-        table: "models.files",
-        key: "cuda_sm",
-    },
-    ContractField {
-        since: Contract::V2,
-        rule: FieldRule::Added,
-        table: "models.files",
-        key: "gfx",
-    },
-    ContractField {
-        since: Contract::V2,
-        rule: FieldRule::Added,
-        table: "models.files",
-        key: "vulkan_api",
-    },
-    ContractField {
-        since: Contract::V2,
-        rule: FieldRule::Added,
-        table: "models.files",
-        key: "optional",
-    },
-];
+pub const CONTRACT_FIELDS: &[ContractField] = &[];
 
 /// `[network]` — outbound network policy.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -933,18 +845,19 @@ impl VoiceEntry {
 /// host. Hugging Face is reached by writing its plain resolve URL, with no
 /// special treatment.
 ///
-/// From [`Contract::V2`] an entry may also carry a **host selector** —
-/// `accel`, `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api` — written in the same
-/// vocabulary [`SubprocessAsset`] uses for a build. Entries sharing a
+/// An entry may also carry a **host selector** — `accel`, `cuda_major`,
+/// `cuda_sm`, `gfx`, `vulkan_api` — written in the same vocabulary
+/// [`SubprocessAsset`] uses for a build. Entries sharing a
 /// `destination` are then variants of one file: the daemon scores each against
 /// the host exactly as it scores build variants, downloads the best match, and
 /// leaves the rest alone. That is what lets a model publish per-architecture
 /// weights, or a kernel cache compiled for one GPU, without a separate build of
 /// the backend to carry them.
 ///
-/// An entry with no selector matches every host — which is what every entry in
-/// every v1 manifest is, and why the selector could be added without changing
-/// what any of them mean.
+/// An entry with no selector matches every host, which is what an entry
+/// declaring only `url` and `destination` is. That is what lets the selector
+/// sit in v1 rather than needing a generation to gate it: it changes nothing
+/// about a manifest that does not use it.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FileSpec {
@@ -1310,24 +1223,13 @@ fn applies_to(declared: Contract) -> bool {
 /// field declared if *any* entry declares it; a plain table (`[backend]`) is
 /// checked once.
 fn declares(raw: &toml::Table, field: &ContractField) -> bool {
-    /// Descend `path` from `table`, then report whether the table it lands in
-    /// declares `key`. An array segment is satisfied by *any* of its entries,
-    /// which is what makes one `[[models.files]]` entry anywhere in the
-    /// document count as a declaration.
-    fn walk(table: &toml::Table, path: &[(&str, bool)], key: &str) -> bool {
-        let Some(((segment, is_array), rest)) = path.split_first() else {
-            return table.contains_key(key);
-        };
-        match table.get(*segment) {
-            Some(toml::Value::Array(entries)) if *is_array => entries
-                .iter()
-                .filter_map(toml::Value::as_table)
-                .any(|entry| walk(entry, rest, key)),
-            Some(toml::Value::Table(inner)) if !*is_array => walk(inner, rest, key),
-            _ => false,
-        }
+    match raw.get(field.table) {
+        Some(toml::Value::Array(entries)) if field.is_array_table() => entries
+            .iter()
+            .any(|entry| entry.as_table().is_some_and(|t| t.contains_key(field.key))),
+        Some(toml::Value::Table(table)) if !field.is_array_table() => table.contains_key(field.key),
+        _ => false,
     }
-    walk(raw, &field.segments(), field.key)
 }
 
 /// The first [`CONTRACT_FIELDS`] rule the document breaks, in table order, as
@@ -1724,10 +1626,11 @@ mod tests {
     /// one already installed.
     ///
     /// Both parsers exist so an installed backend never disappears from the
-    /// catalog over a rule tightened after it was installed. The divergence
-    /// itself is exercised by `a_file_selector_requires_contract_v2`; what
-    /// this pins is that `parse_installed` is a real second entry point which
-    /// still runs every *other* guard, rather than a way around all of them.
+    /// catalog over a rule tightened after it was installed. With
+    /// `CONTRACT_FIELDS` still empty the two agree on every input, so this
+    /// pins the split itself: `parse_installed` must remain a real second
+    /// entry point that runs every other guard, or the first v2 field will
+    /// find it collapsed back into `parse`.
     #[test]
     fn an_installed_manifest_skips_only_the_contract_field_rule() {
         Manifest::parse(VALID).expect("a well-formed manifest parses");
@@ -2342,34 +2245,6 @@ mod tests {
         assert!(!a.cudnn);
     }
 
-    /// The v2 file selector is refused under `contract = "v1"`, by name.
-    ///
-    /// This is the whole reason the selector needed a generation: a v1 daemon
-    /// reads the variants of one destination as ordinary files and downloads
-    /// every one of them onto the same path.
-    #[test]
-    fn a_file_selector_requires_contract_v2() {
-        let text = with_model(
-            r#"
-            files = [
-                { url = "https://h/x.bin", destination = "m/x.bin", accel = "cuda" },
-            ]"#,
-        );
-        let message = Manifest::parse(&text)
-            .expect_err("a v1 manifest may not select a file by host")
-            .to_string();
-        assert!(
-            message.contains("[[models.files]].accel") && message.contains("v2"),
-            "the refusal must name the field and the generation that has it: {message}"
-        );
-        // The installed path skips the contract rule and nothing else, so a
-        // backend already on disk keeps loading whatever it declares.
-        Manifest::parse_installed(&text).expect("an installed manifest skips the contract rule");
-        // Raising the generation is the other documented fix.
-        let raised = text.replace(r#"contract = "v1""#, r#"contract = "v2""#);
-        Manifest::parse(&raised).expect("the same manifest parses under v2");
-    }
-
     /// Variants of one destination parse, keep manifest order, and may leave
     /// every discriminator off — the looseness a data file is allowed and a
     /// build is not.
@@ -2388,8 +2263,7 @@ mod tests {
                   gfx = ["gfx1100"], optional = true },
                 { url = "https://h/w.bin", destination = "m/w.bin" },
             ]"#,
-        )
-        .replace(r#"contract = "v1""#, r#"contract = "v2""#);
+        );
         let m = Manifest::parse(&text).expect("a v2 selector parses");
         let files = &m.models[0].files;
         assert_eq!(files.len(), 5);
@@ -2424,8 +2298,7 @@ mod tests {
             files = [
                 {{ url = "https://h/x.bin", destination = "m/x.bin", accel = "cpu", {field} }},
             ]"#
-            ))
-            .replace(r#"contract = "v1""#, r#"contract = "v2""#);
+            ));
             let message = Manifest::parse(&text)
                 .expect_err("a discriminator without its family must not parse")
                 .to_string();
@@ -2448,8 +2321,7 @@ mod tests {
                   optional = true },
                 { url = "https://h/b.bin", destination = "c/k.bin", accel = "rocm" },
             ]"#,
-        )
-        .replace(r#"contract = "v1""#, r#"contract = "v2""#);
+        );
         let message = Manifest::parse(&text)
             .expect_err("variants may not disagree on `optional`")
             .to_string();

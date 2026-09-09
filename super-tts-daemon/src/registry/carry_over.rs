@@ -315,7 +315,7 @@ mod tests {
     version    = "1.0.0"
     kind       = "subprocess"
     entrypoint = "y"
-    contract   = "v2"
+    contract   = "v1"
     license    = "Apache-2.0"
     description = "Test backend."
 
