@@ -131,16 +131,70 @@ pub(super) async fn stop_stale_unit(unit: &str) {
     warn!("{unit} is still loaded after being stopped; the spawn may be refused");
 }
 
+/// Where the NVIDIA driver keeps its PTX-to-SASS translations, relative to the
+/// cache directory the sandbox grants.
+pub(super) const NV_CACHE_DIR: &str = "nv";
+
+/// How large that cache may grow, in bytes.
+///
+/// Set rather than left to the driver's own default, which is around a
+/// gigabyte: the cache is per backend, so the default would be inherited once
+/// per installed backend and a few of them would quietly cost several
+/// gigabytes. 512 MiB is sized from measurement — one cold load of a 0.6B model
+/// wrote 1192 entries totalling 108 MB — so it holds several models before the
+/// driver starts evicting the least recently used.
+const NV_CACHE_MAXSIZE: u64 = 512 * 1024 * 1024;
+
+/// The environment the unit is spawned with.
+///
+/// Split out for the same reason as [`hardening_params`]: every line here is
+/// silent when it goes missing. The backend keeps working and merely pays for
+/// something on every load, which is exactly the kind of regression that
+/// survives review.
+///
+/// The cache directory is handed over three ways, because three different
+/// consumers look for it three different ways:
+///
+/// - `SUPER_TTS_BACKEND_CACHE_DIR`, for a backend that reads the contract.
+/// - `XDG_CACHE_HOME`, for a library that resolves its own cache the XDG way,
+///   so it lands here rather than under the read-only `$HOME`.
+/// - `CUDA_CACHE_PATH`, because the NVIDIA driver does neither: it hardcodes
+///   `$HOME/.nv/ComputeCache` and ignores XDG, which makes it the one consumer
+///   the line above misses. `ProtectHome=read-only` then lets it *read* a cache
+///   it can never write, so on any machine that has not run this backend
+///   outside the sandbox the PTX-to-SASS translation is redone on every load,
+///   forever. That is below `CubeCL`'s own cache and invisible to it.
+///
+/// Per backend rather than shared between them, deliberately. Sharing would
+/// only pay between backends pinned to the same `CubeCL` revision, since the
+/// driver keys on the PTX itself, and it would make one sandbox's writes
+/// readable as executable GPU code by another — which is the isolation the
+/// per-backend cache directory exists to provide.
+fn env_params(socket: &Path, backend_dir: &Path, cache_dir: &Path) -> Vec<String> {
+    vec![
+        format!("--setenv=SUPER_TTS_BACKEND_SOCKET={}", socket.display()),
+        format!("--setenv=SUPER_TTS_BACKEND_DIR={}", backend_dir.display()),
+        format!(
+            "--setenv=SUPER_TTS_BACKEND_CACHE_DIR={}",
+            cache_dir.display()
+        ),
+        format!("--setenv=XDG_CACHE_HOME={}", cache_dir.display()),
+        format!(
+            "--setenv=CUDA_CACHE_PATH={}",
+            cache_dir.join(NV_CACHE_DIR).display()
+        ),
+        format!("--setenv=CUDA_CACHE_MAXSIZE={NV_CACHE_MAXSIZE}"),
+        "--setenv=RUST_LOG=info".to_string(),
+    ]
+}
+
 /// Spawn the backend binary in a hardened `systemd-run --user` transient unit.
 ///
 /// `devices` is the model's declared `supported_devices`; it decides whether
 /// this unit is granted the GPU device nodes. See [`needs_gpu_access`].
 ///
 /// `cache_dir` is the backend's durable scratch directory (see
-/// [`super::backend_cache_dir`]). It is handed over twice: as
-/// `SUPER_TTS_BACKEND_CACHE_DIR` for a backend that reads the contract, and as
-/// `XDG_CACHE_HOME` so a library that resolves its own cache the XDG way lands
-/// there too, rather than under the read-only `$HOME`.
+/// [`super::backend_cache_dir`]). What it is handed over as is [`env_params`].
 pub(super) async fn spawn_systemd_unit(
     unit: &str,
     binary: &Path,
@@ -164,21 +218,8 @@ pub(super) async fn spawn_systemd_unit(
     ) {
         cmd.arg("-p").arg(param);
     }
-    cmd.arg(format!(
-        "--setenv=SUPER_TTS_BACKEND_SOCKET={}",
-        socket.display()
-    ))
-    .arg(format!(
-        "--setenv=SUPER_TTS_BACKEND_DIR={}",
-        backend_dir.display()
-    ))
-    .arg(format!(
-        "--setenv=SUPER_TTS_BACKEND_CACHE_DIR={}",
-        cache_dir.display()
-    ))
-    .arg(format!("--setenv=XDG_CACHE_HOME={}", cache_dir.display()))
-    .arg("--setenv=RUST_LOG=info")
-    .arg(binary);
+    cmd.args(env_params(socket, backend_dir, cache_dir))
+        .arg(binary);
 
     let output = cmd.output().await.context("failed to run systemd-run")?;
     if !output.status.success() {
@@ -313,8 +354,8 @@ fn hardening_params(
 #[cfg(test)]
 mod tests {
     use super::{
-        Device, FALLBACK_RENDER_NODE, gpu_device_nodes_in, hardening_params, needs_gpu_access,
-        stop_stale_unit,
+        Device, FALLBACK_RENDER_NODE, env_params, gpu_device_nodes_in, hardening_params,
+        needs_gpu_access, stop_stale_unit,
     };
     use std::path::{Path, PathBuf};
 
@@ -468,6 +509,52 @@ mod tests {
             params.contains(&"ReadWritePaths=/run/user/1000/tts/backends".to_string()),
             "the socket dir must stay writable: {params:?}"
         );
+    }
+
+    /// Every cache the backend's libraries reach for must land in the one
+    /// writable directory, including the one that does not follow XDG.
+    ///
+    /// The NVIDIA driver hardcodes `$HOME/.nv/ComputeCache`, which
+    /// `ProtectHome=read-only` makes readable and unwritable — so without
+    /// `CUDA_CACHE_PATH` the PTX-to-SASS translation is redone on every load
+    /// and nothing says so. One cold load of a 0.6B model was 1192 entries and
+    /// 108 MB of work to redo.
+    #[test]
+    fn every_cache_lands_in_the_granted_directory() {
+        let cache = Path::new("/cache/super-tts/backends/app-super-tts-qwen-tts");
+        let env = env_params(
+            Path::new("/run/user/1000/tts/backends/m.sock"),
+            Path::new("/data/backends/app.super-tts.qwen-tts"),
+            cache,
+        );
+        for expected in [
+            "--setenv=SUPER_TTS_BACKEND_CACHE_DIR=/cache/super-tts/backends/app-super-tts-qwen-tts",
+            "--setenv=XDG_CACHE_HOME=/cache/super-tts/backends/app-super-tts-qwen-tts",
+            "--setenv=CUDA_CACHE_PATH=/cache/super-tts/backends/app-super-tts-qwen-tts/nv",
+        ] {
+            assert!(
+                env.contains(&expected.to_string()),
+                "{expected} must be set: {env:?}"
+            );
+        }
+        // Bounded, so a few installed backends cannot each inherit the
+        // driver's own gigabyte default.
+        assert!(
+            env.iter()
+                .any(|e| e.starts_with("--setenv=CUDA_CACHE_MAXSIZE=")),
+            "the driver cache must be capped: {env:?}"
+        );
+        // Every path handed over must be inside the one writable grant, or it
+        // is a write the sandbox will refuse.
+        for entry in &env {
+            if let Some((_, value)) = entry.split_once('=').and_then(|(_, v)| v.split_once('=')) {
+                assert!(
+                    !value.starts_with("/cache/")
+                        || value.starts_with(&cache.display().to_string()),
+                    "{entry} points outside the granted cache dir"
+                );
+            }
+        }
     }
 
     /// Verify the systemd sandbox actually *enforces* its restrictions: a probe

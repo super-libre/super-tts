@@ -173,6 +173,11 @@ impl SubprocessBackend {
         let cache_dir = backend_cache_dir(backend_dir)?;
         std::fs::create_dir_all(&cache_dir)
             .with_context(|| format!("creating backend cache dir {}", cache_dir.display()))?;
+        // The NVIDIA driver creates its own cache directory, but only where it
+        // is allowed to: created here so the grant is in place before the unit
+        // starts, exactly as the parent above is.
+        std::fs::create_dir_all(cache_dir.join(systemd::NV_CACHE_DIR))
+            .with_context(|| format!("creating driver cache dir under {}", cache_dir.display()))?;
 
         let unit = format!(
             "super-tts-backend-{}-{}",

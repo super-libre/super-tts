@@ -40,6 +40,8 @@ backend directory and the following environment:
 | `SUPER_TTS_BACKEND_DIR`    | Absolute path to the backend directory; model files live under it at the configured `dest` paths. |
 | `SUPER_TTS_BACKEND_CACHE_DIR` | Absolute path to a writable directory the backend may keep regenerable data in, private to it and preserved across runs. The daemon creates it; it is the **only** durable writable path the sandbox grants. |
 | `XDG_CACHE_HOME`           | Set to the same directory, so a library that resolves its own cache the XDG way lands there instead of under the read-only `$HOME`. |
+| `CUDA_CACHE_PATH`          | Set to `<cache dir>/nv`. The NVIDIA driver keeps its PTX-to-SASS translations under `$HOME/.nv/ComputeCache` and ignores XDG, so it is the one consumer the line above misses — and `ProtectHome=read-only` would let it read a cache it can never write, redoing the translation on every load. |
+| `CUDA_CACHE_MAXSIZE`       | Bounds that cache. The driver's own default is around a gigabyte, and the cache is per backend, so the default would be inherited once per installed backend. |
 
 On startup the backend binds `SUPER_TTS_BACKEND_SOCKET`, begins serving
 `/v1`, and reports `state: "starting"` from `GET /v1/status` until a
@@ -81,7 +83,7 @@ unit. The backend cannot relax these restrictions; design against them:
 | `ProtectSystem=strict`            | The entire filesystem is read-only …                           |
 | `ReadOnlyPaths=<backend dir>`     | … including the backend's own directory: the daemon provisions model files before the unit spawns, and the backend never writes there. |
 | `ReadWritePaths=<socket dir>`     | The socket directory is writable.                              |
-| `ReadWritePaths=<cache dir>`      | `SUPER_TTS_BACKEND_CACHE_DIR` is writable, and is the only writable path whose contents survive the process. |
+| `ReadWritePaths=<cache dir>`      | `SUPER_TTS_BACKEND_CACHE_DIR` is writable, and is the only writable path whose contents survive the process. Every cache the daemon points a library at lives under it, including the driver's. |
 | `ProtectHome=read-only`, `PrivateTmp=yes` | `$HOME` is readable but not writable; `/tmp` is private and writable, but it is discarded with the unit — scratch only, never a cache. |
 | `NoNewPrivileges=yes`             | The process cannot acquire new privileges.                     |
 | `SystemCallFilter=@system-service` | A seccomp allowlist; privileged syscall groups are denied.    |
