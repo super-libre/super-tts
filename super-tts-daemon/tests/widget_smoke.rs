@@ -330,8 +330,17 @@ async fn subscription_recovers_from_invalid_session() {
     // `events_stream` call will get 401 invalid_session; the helper
     // must `session::forget` and re-`obtain` (which under
     // SUPER_TTS_AUTO_APPROVE returns a fresh real token).
-    session::save(TEST_APP_ID, "deadbeef_never_minted_by_daemon")
-        .expect("plant fake token in keyring");
+    // Planted with the scopes the subscription asks for, so `obtain` reuses it
+    // and the daemon is the one that rejects it — which is the path under test.
+    // A record with no scopes would be replaced before it was ever presented.
+    let granted: Vec<String> = TEST_SCOPES.iter().map(|s| (*s).to_string()).collect();
+    session::save(
+        TEST_APP_ID,
+        "deadbeef_never_minted_by_daemon",
+        TEST_SCOPES,
+        &granted,
+    )
+    .expect("plant fake token in keyring");
 
     let mut config =
         WidgetSubscriptionConfig::new(TEST_APP_ID, TEST_APP_NAME, TEST_SCOPES, TEST_TOPICS);
