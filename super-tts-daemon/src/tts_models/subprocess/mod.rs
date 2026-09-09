@@ -148,6 +148,13 @@ impl SubprocessBackend {
             binary.display()
         );
 
+        // The one writable, durable path the sandbox grants. Created here
+        // rather than by the backend: the unit's `ReadWritePaths` needs the
+        // directory to exist when it spawns.
+        let cache_dir = backend_cache_dir(backend_dir)?;
+        std::fs::create_dir_all(&cache_dir)
+            .with_context(|| format!("creating backend cache dir {}", cache_dir.display()))?;
+
         let unit = format!(
             "super-tts-backend-{}-{}",
             sanitize(model_name),
@@ -159,6 +166,7 @@ impl SubprocessBackend {
             &binary,
             backend_dir,
             socket_dir,
+            &cache_dir,
             &socket,
             &model.supported_devices,
         )
@@ -485,6 +493,30 @@ fn load_body(name: &str, provider: Option<&str>, device_pref: &str) -> serde_jso
         load["device"] = serde_json::json!(device_pref);
     }
     load
+}
+
+/// The writable, durable cache directory granted to a backend's sandbox.
+///
+/// Everything else the sandbox exposes is read-only or discarded: the backend
+/// directory is `ReadOnlyPaths`, `$HOME` is `ProtectHome=read-only`, and the
+/// writable `/tmp` is `PrivateTmp`, so it dies with the unit. A backend with
+/// nothing to keep never notices. One that compiles its GPU kernels at runtime
+/// does: `CubeCL` (the Burn backends) spends about twenty seconds compiling a
+/// few hundred kernels, caches them keyed by build and device, and without a
+/// durable home pays that on *every* load rather than once per install.
+///
+/// Keyed on the backend directory's name — the backend id the installer names
+/// it after — so backends never share a cache, and an in-place upgrade keeps
+/// the one it warmed. [`sanitize`] is what keeps a directory name from
+/// steering the path anywhere else.
+fn backend_cache_dir(backend_dir: &Path) -> Result<PathBuf> {
+    let key = backend_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("backend directory has no name to key its cache on")?;
+    Ok(super_tts_shared::paths::cache_dir()
+        .join("backends")
+        .join(sanitize(key)))
 }
 
 fn sanitize(s: &str) -> String {

@@ -79,11 +79,18 @@ pub async fn cleanup_orphan_units() {
 ///
 /// `devices` is the model's declared `supported_devices`; it decides whether
 /// this unit is granted the GPU device nodes. See [`needs_gpu_access`].
+///
+/// `cache_dir` is the backend's durable scratch directory (see
+/// [`super::backend_cache_dir`]). It is handed over twice: as
+/// `SUPER_TTS_BACKEND_CACHE_DIR` for a backend that reads the contract, and as
+/// `XDG_CACHE_HOME` so a library that resolves its own cache the XDG way lands
+/// there too, rather than under the read-only `$HOME`.
 pub(super) async fn spawn_systemd_unit(
     unit: &str,
     binary: &Path,
     backend_dir: &Path,
     socket_dir: &Path,
+    cache_dir: &Path,
     socket: &Path,
     devices: &[Device],
 ) -> Result<()> {
@@ -93,7 +100,7 @@ pub(super) async fn spawn_systemd_unit(
         .arg("--quiet")
         // Garbage-collect the transient unit when it exits/fails.
         .arg("--collect");
-    for param in hardening_params(backend_dir, socket_dir, needs_gpu_access(devices)) {
+    for param in hardening_params(backend_dir, socket_dir, cache_dir, needs_gpu_access(devices)) {
         cmd.arg("-p").arg(param);
     }
     cmd.arg(format!(
@@ -104,6 +111,11 @@ pub(super) async fn spawn_systemd_unit(
         "--setenv=SUPER_TTS_BACKEND_DIR={}",
         backend_dir.display()
     ))
+    .arg(format!(
+        "--setenv=SUPER_TTS_BACKEND_CACHE_DIR={}",
+        cache_dir.display()
+    ))
+    .arg(format!("--setenv=XDG_CACHE_HOME={}", cache_dir.display()))
     .arg("--setenv=RUST_LOG=info")
     .arg(binary);
 
@@ -192,7 +204,10 @@ fn gpu_device_nodes_in(dri_dir: &Path) -> Vec<String> {
 /// - `PrivateNetwork`: no network — the daemon already provisioned files.
 /// - `ProtectSystem=strict` + `ProtectHome=read-only`: the filesystem is
 ///   read-only (the binary + model under `$HOME` stay visible read-only); only
-///   the socket dir is writable.
+///   the socket dir and the backend's cache dir are writable.
+/// - `ReadWritePaths=<cache dir>`: the one place a backend may keep something
+///   across runs. `PrivateTmp` is writable too but is discarded with the unit,
+///   which is no home for a kernel cache that costs twenty seconds to rebuild.
 /// - `PrivateTmp`, `NoNewPrivileges`, `SystemCallFilter=@system-service`.
 /// - `PrivateDevices` (models declaring no GPU): a private `/dev` holding just
 ///   the pseudo-devices, so the GPU nodes are not there to open.
@@ -208,13 +223,19 @@ fn gpu_device_nodes_in(dri_dir: &Path) -> Vec<String> {
 /// ever move to the system manager, but the CPU-only restriction cannot lean
 /// on them. `PrivateDevices` carries it instead: it is a mount namespace, so
 /// it applies to user units exactly as `PrivateTmp` does.
-fn hardening_params(backend_dir: &Path, socket_dir: &Path, gpu_access: bool) -> Vec<String> {
+fn hardening_params(
+    backend_dir: &Path,
+    socket_dir: &Path,
+    cache_dir: &Path,
+    gpu_access: bool,
+) -> Vec<String> {
     let mut params = vec![
         "PrivateNetwork=yes".to_string(),
         "ProtectSystem=strict".to_string(),
         "ProtectHome=read-only".to_string(),
         format!("ReadOnlyPaths={}", backend_dir.display()),
         format!("ReadWritePaths={}", socket_dir.display()),
+        format!("ReadWritePaths={}", cache_dir.display()),
         "PrivateTmp=yes".to_string(),
         "NoNewPrivileges=yes".to_string(),
         "DevicePolicy=closed".to_string(),
@@ -245,7 +266,7 @@ mod tests {
     /// nothing. `sandbox_is_enforced` proves the denial end-to-end.
     #[test]
     fn a_cpu_only_model_gets_no_gpu_device_nodes() {
-        let params = hardening_params(Path::new("/backend"), Path::new("/sock"), false);
+        let params = hardening_params(Path::new("/backend"), Path::new("/sock"), Path::new("/cache"), false);
         assert!(
             params.iter().any(|p| p == "PrivateDevices=yes"),
             "cpu-only unit has no enforceable device restriction: {params:?}"
@@ -262,7 +283,7 @@ mod tests {
     /// rather than as a permission problem.
     #[test]
     fn a_gpu_backend_gets_the_nodes_every_runtime_needs() {
-        let params = hardening_params(Path::new("/backend"), Path::new("/sock"), true);
+        let params = hardening_params(Path::new("/backend"), Path::new("/sock"), Path::new("/cache"), true);
         assert!(!params.iter().any(|p| p == "PrivateDevices=yes"));
         for node in [
             "DeviceAllow=/dev/nvidia0 rw",
@@ -346,11 +367,44 @@ mod tests {
         );
     }
 
+    /// The cache directory must be granted as writable, and must not be
+    /// confused with the backend directory, which stays read-only. Both are
+    /// under `$HOME` on a real install, where `ProtectHome=read-only` covers
+    /// them until `ReadWritePaths` carves the cache back out; dropping that
+    /// line is silent — the backend keeps working and merely recompiles its
+    /// kernels on every load — so it is asserted here rather than left to the
+    /// env-gated enforcement test.
+    #[test]
+    fn the_cache_dir_is_the_second_writable_path() {
+        let params = hardening_params(
+            Path::new("/data/backends/app.super-tts.qwen-tts"),
+            Path::new("/run/user/1000/tts/backends"),
+            Path::new("/cache/super-tts/backends/app-super-tts-qwen-tts"),
+            true,
+        );
+        assert!(
+            params.contains(
+                &"ReadWritePaths=/cache/super-tts/backends/app-super-tts-qwen-tts".to_string()
+            ),
+            "the cache dir must be writable: {params:?}"
+        );
+        assert!(
+            params.contains(&"ReadOnlyPaths=/data/backends/app.super-tts.qwen-tts".to_string()),
+            "the backend dir must stay read-only: {params:?}"
+        );
+        assert!(
+            params.contains(&"ReadWritePaths=/run/user/1000/tts/backends".to_string()),
+            "the socket dir must stay writable: {params:?}"
+        );
+    }
+
     /// Verify the systemd sandbox actually *enforces* its restrictions: a probe
     /// run under the same hardening as a real backend must be denied network,
     /// writes to `$HOME` and the system, host `/tmp` visibility, and
     /// non-allowed devices — while keeping `NoNewPrivileges` set and the socket
-    /// dir writable.
+    /// and cache dirs writable. The cache dir sits *under* `$HOME`, so it is
+    /// also the proof that its `ReadWritePaths` beats `ProtectHome=read-only`
+    /// rather than being shadowed by it.
     ///
     /// Requires a systemd user session; gated behind `SUPER_TTS_TEST_SANDBOX=1`.
     #[tokio::test]
@@ -362,8 +416,10 @@ mod tests {
         let base = PathBuf::from(&home).join(".cache/super-tts-sandbox-test");
         let backend_dir = base.join("backend");
         let socket_dir = base.join("sock");
+        let cache_dir = base.join("cache");
         std::fs::create_dir_all(&backend_dir).unwrap();
         std::fs::create_dir_all(&socket_dir).unwrap();
+        std::fs::create_dir_all(&cache_dir).unwrap();
         std::fs::write(backend_dir.join("backend.toml"), "probe = true\n").unwrap();
 
         // A host /tmp marker the private-tmp sandbox must NOT see.
@@ -379,11 +435,14 @@ touch /etc/.sbx_$$ 2>/dev/null && echo ETC_WRITABLE || echo ETC_RO
 grep -q "NoNewPrivs:[[:space:]]*1" /proc/self/status && echo NNP_SET || echo NNP_UNSET
 [ -e "{marker}" ] && echo TMP_LEAK || echo TMP_PRIVATE
 touch "{sock}/.sbx_$$" 2>/dev/null && {{ echo SOCK_RW; rm -f "{sock}/.sbx_$$"; }} || echo SOCK_RO
+touch "{cache}/.sbx_$$" 2>/dev/null && {{ echo CACHE_RW; rm -f "{cache}/.sbx_$$"; }} || echo CACHE_RO
+touch "{backend}/.sbx_$$" 2>/dev/null && echo BACKEND_WRITABLE || echo BACKEND_RO
 [ -r "{backend}/backend.toml" ] && echo BACKEND_READABLE || echo BACKEND_HIDDEN
 [ -e /dev/nvidia0 ] && echo GPU_NODE_PRESENT || echo GPU_NODE_ABSENT
 "#,
             marker = marker,
             sock = socket_dir.display(),
+            cache = cache_dir.display(),
             backend = backend_dir.display(),
         );
 
@@ -392,7 +451,7 @@ touch "{sock}/.sbx_$$" 2>/dev/null && {{ echo SOCK_RW; rm -f "{sock}/.sbx_$$"; }
             .arg("--pipe")
             .arg("--quiet")
             .arg("--collect");
-        for p in hardening_params(&backend_dir, &socket_dir, true) {
+        for p in hardening_params(&backend_dir, &socket_dir, &cache_dir, true) {
             cmd.arg("-p").arg(p);
         }
         cmd.arg("--").arg("sh").arg("-c").arg(&probe);
@@ -410,6 +469,8 @@ touch "{sock}/.sbx_$$" 2>/dev/null && {{ echo SOCK_RW; rm -f "{sock}/.sbx_$$"; }
             "NNP_SET",
             "TMP_PRIVATE",
             "SOCK_RW",
+            "CACHE_RW",
+            "BACKEND_RO",
             "BACKEND_READABLE",
         ] {
             assert!(
@@ -417,7 +478,14 @@ touch "{sock}/.sbx_$$" 2>/dev/null && {{ echo SOCK_RW; rm -f "{sock}/.sbx_$$"; }
                 "sandbox property not enforced: {expected}\n{stdout}\n{stderr}"
             );
         }
-        for violation in ["HOME_WRITABLE", "ETC_WRITABLE", "TMP_LEAK", "NET_LEAK"] {
+        for violation in [
+            "HOME_WRITABLE",
+            "ETC_WRITABLE",
+            "TMP_LEAK",
+            "NET_LEAK",
+            "CACHE_RO",
+            "BACKEND_WRITABLE",
+        ] {
             assert!(
                 !stdout.contains(violation),
                 "sandbox violation detected: {violation}\n{stdout}"
@@ -445,7 +513,7 @@ touch "{sock}/.sbx_$$" 2>/dev/null && {{ echo SOCK_RW; rm -f "{sock}/.sbx_$$"; }
             .arg("--pipe")
             .arg("--quiet")
             .arg("--collect");
-        for p in hardening_params(&backend_dir, &socket_dir, false) {
+        for p in hardening_params(&backend_dir, &socket_dir, &cache_dir, false) {
             cmd.arg("-p").arg(p);
         }
         cmd.arg("--").arg("sh").arg("-c").arg(&probe);
