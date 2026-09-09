@@ -130,7 +130,9 @@ pub fn select(host: &Host, entry: &IndexBackend) -> Selection {
 struct Requires {
     accel: Vec<Accel>,
     cuda_major: Option<u32>,
-    cuda_sm: Option<u32>,
+    /// The compute capabilities the candidate covers; empty is "any". An asset
+    /// contributes at most one, a file any number.
+    cuda_sm: Vec<u32>,
     cudnn: bool,
     gfx: Vec<GfxSpec>,
     vulkan_api: Option<VulkanApi>,
@@ -186,7 +188,7 @@ impl From<&IndexSubprocessAsset> for Requires {
                 .filter_map(parse_accel)
                 .collect(),
             cuda_major: a.cuda_major,
-            cuda_sm: a.cuda_sm,
+            cuda_sm: a.cuda_sm.into_iter().collect(),
             cudnn: a.cudnn,
             // A gfx target that does not parse drops out rather than widening
             // the match, the same way an unknown accel does.
@@ -205,7 +207,7 @@ impl From<&FileSpec> for Requires {
         Self {
             accel: f.accel.clone(),
             cuda_major: f.cuda_major,
-            cuda_sm: f.cuda_sm,
+            cuda_sm: f.cuda_sm.clone(),
             cudnn: false,
             gfx: f.gfx.clone(),
             vulkan_api: f.vulkan_api,
@@ -228,7 +230,7 @@ fn score(host: &Host, r: &Requires) -> Option<(u8, u32, u8, u8)> {
 
     if declares(Accel::Cuda)
         && let Some(cuda) = &host.cuda
-        && (r.cuda_sm.is_none() || r.cuda_sm == Some(cuda.compute_capability))
+        && (r.cuda_sm.is_empty() || r.cuda_sm.contains(&cuda.compute_capability))
         // An absent `cuda_major` is "any CUDA runtime" for a file, and a
         // malformed asset for an index entry — which is why the wildcard is
         // conditional rather than folded into the comparison.
@@ -238,7 +240,7 @@ fn score(host: &Host, r: &Requires) -> Option<(u8, u32, u8, u8)> {
         return Some((
             RANK_NATIVE,
             r.cuda_major.unwrap_or(0),
-            u8::from(r.cuda_sm.is_some()),
+            u8::from(!r.cuda_sm.is_empty()),
             u8::from(r.cudnn && cuda.cudnn_present),
         ));
     }
@@ -494,9 +496,12 @@ fn file_requirement(file: &FileSpec) -> String {
                 let major = file
                     .cuda_major
                     .map_or_else(|| "*".to_string(), |m| m.to_string());
-                let sm = file
-                    .cuda_sm
-                    .map_or_else(|| "*".to_string(), |s| s.to_string());
+                let sm = if file.cuda_sm.is_empty() {
+                    "*".to_string()
+                } else {
+                    let each: Vec<String> = file.cuda_sm.iter().map(ToString::to_string).collect();
+                    each.join("/")
+                };
                 format!("cuda {major} sm_{sm}")
             }
             Accel::Rocm if file.gfx.is_empty() => "rocm".to_string(),
@@ -1208,6 +1213,27 @@ mod tests {
         assert_eq!(urls(&chosen), vec!["https://h/sm90"]);
 
         let chosen = select_files(&host_cuda(86, 13, false), &m).expect("the wildcard catches it");
+        assert_eq!(urls(&chosen), vec!["https://h/any"]);
+    }
+
+    /// One variant may cover several compute capabilities, which is what a
+    /// pre-warmed kernel cache holding more than one device's entries is. It
+    /// still loses to a variant naming this host alone only by declaration
+    /// order, since both matched the host exactly.
+    #[test]
+    fn a_cuda_variant_may_cover_several_compute_capabilities() {
+        let m = model(
+            r#"
+            { url = "https://h/ada", destination = "c/k", accel = "cuda", cuda_sm = [86, 89] },
+            { url = "https://h/any", destination = "c/k", accel = "cuda" },
+            "#,
+        );
+        for sm in [86, 89] {
+            let chosen = select_files(&host_cuda(sm, 13, false), &m).expect("the list covers it");
+            assert_eq!(urls(&chosen), vec!["https://h/ada"], "sm_{sm}");
+        }
+        // A capability the list does not name falls to the wildcard behind it.
+        let chosen = select_files(&host_cuda(90, 13, false), &m).expect("the wildcard catches it");
         assert_eq!(urls(&chosen), vec!["https://h/any"]);
     }
 

@@ -473,7 +473,7 @@ pub struct SubprocessAsset {
     /// and read as a one-element list, which is what every published manifest
     /// uses; an array declares a binary carrying several runtimes, and the
     /// daemon tells it at load time which one to use. Must be non-empty.
-    #[serde(deserialize_with = "one_or_many_accel")]
+    #[serde(deserialize_with = "one_or_many")]
     pub accel: Vec<Accel>,
     /// CUDA major version this build targets. Required when `accel` contains
     /// `cuda`, forbidden otherwise.
@@ -507,20 +507,24 @@ pub struct SubprocessAsset {
     pub vulkan_api: Option<crate::arch::VulkanApi>,
 }
 
-/// Accept `accel = "cuda"` as well as `accel = ["cuda", "rocm"]`.
+/// Accept a bare value as well as a list of them: `accel = "cuda"` alongside
+/// `accel = ["cuda", "rocm"]`, `cuda_sm = 90` alongside `cuda_sm = [86, 90]`.
 ///
-/// Every manifest published so far uses the scalar form, and `backend.toml` is
-/// a pinned release asset the daemon re-reads on every scan, so the scalar has
-/// to keep parsing indefinitely.
-fn one_or_many_accel<'de, D>(d: D) -> Result<Vec<Accel>, D::Error>
+/// Every manifest published so far uses the scalar form for `accel`, and
+/// `backend.toml` is a pinned release asset the daemon re-reads on every scan,
+/// so the scalar has to keep parsing indefinitely. A field written this way can
+/// also *become* a list after the fact without a new generation, which is what
+/// makes the one-value spelling safe to offer at all.
+fn one_or_many<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum OneOrMany {
-        One(Accel),
-        Many(Vec<Accel>),
+    enum OneOrMany<T> {
+        One(T),
+        Many(Vec<T>),
     }
     Ok(match OneOrMany::deserialize(d)? {
         OneOrMany::One(a) => vec![a],
@@ -969,18 +973,26 @@ pub struct FileSpec {
     /// host". Naming a narrower variant as well is how an author gets both: a
     /// variant that matches the host's compute capability exactly outranks one
     /// that only matches its family.
-    #[serde(default, deserialize_with = "one_or_many_accel")]
+    #[serde(default, deserialize_with = "one_or_many")]
     pub accel: Vec<Accel>,
     /// Highest CUDA major version this variant needs — it matches a host whose
     /// installed CUDA runtime is at least this. Allowed only with `cuda` in
     /// `accel`; omit to match any CUDA runtime.
     #[serde(default)]
     pub cuda_major: Option<u32>,
-    /// Compute capability this variant is built for (e.g. `75`, `86`, `90`).
-    /// Allowed only with `cuda` in `accel`; omit to match any. An exact match
-    /// is preferred over a variant that omits it.
-    #[serde(default)]
-    pub cuda_sm: Option<u32>,
+    /// Compute capabilities this variant covers (e.g. `90`, or `[86, 90]`).
+    /// Allowed only with `cuda` in `accel`; empty matches any. A variant that
+    /// names the host's capability is preferred over one that does not.
+    ///
+    /// A list where an asset's `cuda_sm` is a single value, because the two are
+    /// answering different questions. A build that omits it is a fat binary
+    /// with PTX behind it, so "any capability" is a true claim and enumerating
+    /// is rarely useful. A file has no JIT to fall back on — kernels compiled
+    /// for `sm_90` are inert on `sm_86` — but one file may still carry entries
+    /// for several devices, which is exactly what a pre-warmed kernel cache is.
+    /// Saying so once beats declaring the same URL and hash under each.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub cuda_sm: Vec<u32>,
     /// AMD architecture targets this variant is built for, in `--offload-arch`
     /// spelling. Allowed only with `rocm` in `accel`; omit to match any AMD
     /// host.
@@ -1492,7 +1504,7 @@ impl Manifest {
             }
             let destination = || file.destination.clone();
             let declares = |k: Accel| file.accel.contains(&k);
-            if !declares(Accel::Cuda) && (file.cuda_major.is_some() || file.cuda_sm.is_some()) {
+            if !declares(Accel::Cuda) && (file.cuda_major.is_some() || !file.cuda_sm.is_empty()) {
                 return Err(ManifestError::FileCudaForbiddenFields {
                     model: name(),
                     destination: destination(),
@@ -2368,6 +2380,8 @@ mod tests {
             files = [
                 { url = "https://h/k-sm90.bin", destination = "c/k.bin", accel = "cuda",
                   cuda_sm = 90, optional = true },
+                { url = "https://h/k-ada.bin", destination = "c/k.bin", accel = "cuda",
+                  cuda_sm = [86, 89], optional = true },
                 { url = "https://h/k-cuda.bin", destination = "c/k.bin", accel = "cuda",
                   optional = true },
                 { url = "https://h/k-rocm.bin", destination = "c/k.bin", accel = ["rocm"],
@@ -2378,17 +2392,20 @@ mod tests {
         .replace(r#"contract = "v1""#, r#"contract = "v2""#);
         let m = Manifest::parse(&text).expect("a v2 selector parses");
         let files = &m.models[0].files;
-        assert_eq!(files.len(), 4);
-        assert_eq!(files[0].cuda_sm, Some(90));
+        assert_eq!(files.len(), 5);
+        // The bare number and the list are the same field, one spelling apart.
+        assert_eq!(files[0].cuda_sm, vec![90]);
         assert_eq!(files[0].accel, vec![Accel::Cuda]);
+        assert_eq!(files[1].cuda_sm, vec![86, 89]);
         // A CUDA variant naming no runtime major is "any CUDA host"; an asset
         // may not say that, a file may.
-        assert_eq!(files[1].cuda_major, None);
-        assert!(files[1].is_conditional());
-        assert_eq!(files[2].gfx, vec![crate::arch::GfxSpec::new(11, 0, 0)]);
+        assert_eq!(files[2].cuda_major, None);
+        assert!(files[2].cuda_sm.is_empty());
+        assert!(files[2].is_conditional());
+        assert_eq!(files[3].gfx, vec![crate::arch::GfxSpec::new(11, 0, 0)]);
         // The unconditional entry is the v1 shape and stays that way.
-        assert!(!files[3].is_conditional());
-        assert!(!files[3].optional);
+        assert!(!files[4].is_conditional());
+        assert!(!files[4].optional);
     }
 
     /// A discriminator naming a family the entry never declared is a typo that

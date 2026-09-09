@@ -689,10 +689,19 @@ a fixed path and never learns which variant it got.
 |--------------|-----------------|--------------------------------------------------------------------------------------------|
 | `accel`      | string or array | Acceleration families this variant is for. Absent — the default — matches every host.        |
 | `cuda_major` | integer         | Matches a host whose installed CUDA runtime is at least this. Requires `cuda` in `accel`.    |
-| `cuda_sm`    | integer         | Compute capability this variant is built for, e.g. `90`. Requires `cuda`.                    |
+| `cuda_sm`    | integer or array | Compute capabilities this variant covers, e.g. `90` or `[86, 89]`. Requires `cuda`.         |
 | `gfx`        | array of string | AMD architecture targets, in `--offload-arch` spelling. Requires `rocm`.                     |
 | `vulkan_api` | string          | Minimum Vulkan API version, e.g. `1.3`. Requires `vulkan`.                                   |
 | `optional`   | bool            | Whether the model can load without this destination. Default `false`. Must agree across the variants of one destination. |
+
+`cuda_sm` is a list where an asset's is a single value, because the two answer
+different questions. A build that omits it is a fat binary with PTX behind it,
+so "any capability" is a true claim and enumerating is rarely useful. A file has
+no JIT to fall back on — kernels compiled for `sm_90` are inert on `sm_86` — but
+one file may still carry entries for several devices, which is exactly what a
+pre-warmed kernel cache is. Saying so once beats declaring the same URL and hash
+under each. The bare number and the list are the same field: `cuda_sm = 90` and
+`cuda_sm = [90]` mean the same thing, as `accel` already works.
 
 Every field of a file's selector is optional, which is the one place this
 vocabulary is looser than an asset's. An asset has to *run* on the host, so it

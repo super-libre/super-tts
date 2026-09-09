@@ -79,6 +79,14 @@ fn inject_file_spec_rules(defs: &mut serde_json::Map<String, Value>) {
             { "type": "array", "items": { "$ref": "#/definitions/Accel" }, "minItems": 1 }
         ]
     });
+    // `cuda_sm` takes the same one-or-many spelling: a variant covering one
+    // compute capability writes the bare number, one covering several a list.
+    file["properties"]["cuda_sm"] = json!({
+        "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 1 }
+        ]
+    });
     for (family, forbidden) in [
         ("cuda", json!({ "cuda_major": false, "cuda_sm": false })),
         ("rocm", json!({ "gfx": false })),
