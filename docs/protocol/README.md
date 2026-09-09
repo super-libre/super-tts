@@ -123,6 +123,8 @@ position could be appended without a second endpoint family. See
 | `/v1/pipeline/{stage}/model/{model}/device/list` | `GET` | `settings` | [pipeline/device.md](./endpoints/v1/pipeline/device.md#get-pipelinestagemodelmodeldevicelist) |
 | `/v1/pipeline/{stage}/model/{model}/language` | `GET`, `POST`, `DELETE` | `settings` | [pipeline/language.md](./endpoints/v1/pipeline/language.md) |
 | `/v1/pipeline/{stage}/model/{model}/language/list` | `GET` | `settings` | [pipeline/language.md](./endpoints/v1/pipeline/language.md#get-pipelinestagemodelmodellanguagelist) |
+| `/v1/pipeline/{stage}/model/{model}/voice` | `GET`, `POST`, `DELETE` | `settings` | [pipeline/voice.md](./endpoints/v1/pipeline/voice.md) |
+| `/v1/pipeline/{stage}/model/{model}/voice/list` | `GET` | `settings` | [pipeline/voice.md](./endpoints/v1/pipeline/voice.md#get-pipelinestagemodelmodelvoicelist) |
 
 A position this build does not have answers `404 unknown_stage` — so
 `GET /v1/pipeline/2` is an error today, and the shape of the answer when it

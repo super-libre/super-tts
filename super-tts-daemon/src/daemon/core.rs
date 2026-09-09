@@ -63,6 +63,10 @@ impl SuperTTSDaemon {
             | Command::GetModelLanguage { .. }
             | Command::ClearModelLanguage { .. }
             | Command::ListModelLanguages { .. }) => self.handle_model_language(cmd).await,
+            cmd @ (Command::SetModelVoice { .. }
+            | Command::GetModelVoice { .. }
+            | Command::ClearModelVoice { .. }
+            | Command::ListModelVoices { .. }) => self.handle_model_voice(cmd).await,
             Command::SetAllowOnlineModels { enabled } => {
                 self.handle_set_allow_online_models(enabled).await
             }

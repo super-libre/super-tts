@@ -966,7 +966,7 @@ async fn open_device_thread() -> Result<Playback, SpeakError> {
 /// manifest allows an empty list for a model whose voices are all cloned or
 /// described — there is then nothing to check against, and refusing every id
 /// would break a model that resolves them itself.
-fn check_voice(
+pub(crate) fn check_voice(
     definition: &crate::tts_models::ModelDefinition,
     voice: &str,
 ) -> Result<(), SpeakError> {
@@ -987,7 +987,7 @@ fn check_voice(
     }
     if kind == VoiceKind::Preset
         && !definition.voices.is_empty()
-        && !definition.voices.iter().any(|v| v == voice)
+        && !definition.voices.iter().any(|v| v.id == voice)
     {
         return Err(SpeakError::UnknownVoice(format!(
             "model '{}' declares no voice '{voice}'",
@@ -1014,6 +1014,8 @@ impl crate::daemon::types::SuperTTSDaemon {
     ) -> super_tts_shared::models::protocol::DaemonResponse {
         use crate::output::notice::{Failure, Origin};
         use super_tts_shared::models::protocol::{DaemonResponse, ErrorCode};
+
+        let (voice, language) = self.stored_defaults(voice, language).await;
 
         let result = self
             .speech
@@ -1059,6 +1061,66 @@ impl crate::daemon::types::SuperTTSDaemon {
             }
             e => DaemonResponse::error(&e.to_string()),
         }
+    }
+
+    /// Fill in what an utterance did not name from the loaded model's stored
+    /// settings.
+    ///
+    /// Most callers name nothing: a keyboard shortcut has no UI to choose with,
+    /// and the settings app speaks with whatever the model is configured to
+    /// use. So the per-model voice and language are applied here, one layer
+    /// above the synthesis path, rather than by each client — a setting only
+    /// the app knew to send would leave every shortcut and every applet
+    /// speaking in a different voice from the one the user picked, which is
+    /// exactly what happened while nothing resolved them at all.
+    ///
+    /// A field the request *did* name is left alone. A stored value is a
+    /// default, not a policy: `speak --voice` and the Voices page's preview
+    /// both name one deliberately, and overriding either would play the wrong
+    /// voice back at someone auditioning a clone.
+    async fn stored_defaults(
+        &self,
+        voice: Option<String>,
+        language: Option<String>,
+    ) -> (Option<String>, Option<String>) {
+        if voice.is_some() && language.is_some() {
+            return (voice, language);
+        }
+        // The definition is copied out and the model guard dropped before the
+        // config is read, so the two locks are never held at once and no
+        // ordering between them can block a writer.
+        let definition = {
+            let guard = self.model.read().await;
+            guard.as_ref().map(|loaded| loaded.definition.clone())
+        };
+        let Some(def) = definition else {
+            return (voice, language);
+        };
+
+        let config = self.config.read().await;
+        let language = language.or_else(|| {
+            crate::daemon::language::resolve_language(
+                def.is_multilingual,
+                config.model_language(&def.source, &def.name),
+                config.primary_language(),
+                &def.supported_languages,
+            )
+            .wire
+        });
+        let voice = voice.or_else(|| {
+            let stored = config.model_voice(&def.source, &def.name)?;
+            // A stored voice the model no longer declares is dropped rather
+            // than sent: it was a default the user is not naming today, and
+            // refusing the utterance over a backend that dropped a voice in an
+            // update would take speech away entirely. Naming one explicitly
+            // still fails loudly, which is what a caller who named it wants.
+            if let Err(e) = check_voice(&def, stored) {
+                warn!("ignoring the stored voice for {}: {e}", def.name);
+                return None;
+            }
+            Some(stored.to_owned())
+        });
+        (voice, language)
     }
 
     /// Handle `Command::StopSpeaking`. Stopping when nothing is speaking is a

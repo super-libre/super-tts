@@ -187,6 +187,9 @@ pub struct AppModel {
     // Speech language state (global Primary Language + per-model picker).
     pub language: crate::state::language::LanguageState,
 
+    // The active model's voice: which one it speaks in, and which it could.
+    pub voice: crate::state::VoiceState,
+
     // Installed-backend catalog and per-backend configuration state.
     /// Backends discovered by the daemon, with the models/secrets/options
     /// each declares. Drives the per-backend sections on the Models page.

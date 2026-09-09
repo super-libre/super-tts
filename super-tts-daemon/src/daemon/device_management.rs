@@ -1461,6 +1461,7 @@ mod tests {
             processing_interval: std::time::Duration::from_secs(1),
             supported_devices: devices,
             voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+            default_voice: None,
             clone_ref_seconds: None,
             clone_needs_transcript: false,
             voices: Vec::new(),

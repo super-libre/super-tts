@@ -143,6 +143,18 @@ pub struct DaemonResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_languages: Option<Vec<String>>,
 
+    /// The voice resolution block for
+    /// `GET /pipeline/{stage}/model/{model}/voice`. See
+    /// docs/protocol/endpoints/v1/pipeline/voice.md.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<Value>,
+
+    /// The voices one model can be pinned to, for
+    /// `/pipeline/{stage}/model/{model}/voice/list` — its manifest presets and,
+    /// when it clones, the stored cloned voices as `voice:<uuid>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_voices: Option<Vec<Value>>,
+
     /// Every pipeline stage, in order — the body of `GET /pipeline`.
     ///
     /// A typed report rather than a `Value`: the stage shape is published in
@@ -375,6 +387,18 @@ impl DaemonResponse {
     #[must_use]
     pub fn with_language(mut self, language: Value) -> Self {
         self.language = Some(language);
+        self
+    }
+
+    #[must_use]
+    pub fn with_voice(mut self, voice: Value) -> Self {
+        self.voice = Some(voice);
+        self
+    }
+
+    #[must_use]
+    pub fn with_available_voices(mut self, voices: Vec<Value>) -> Self {
+        self.available_voices = Some(voices);
         self
     }
 

@@ -11,9 +11,10 @@
 //!
 //! This is the model's *language*, not its voice. The language decides how text
 //! is pronounced — which phonemizer, which lexicon — where the voice decides
-//! who says it, and the voice is a per-utterance field on `POST /speak` rather
-//! than a stored preference. They interact, since a voice trained on one
-//! language can sound wrong reading another, but they are chosen separately.
+//! who says it. They interact, since a voice trained on one language can sound
+//! wrong reading another, but they are chosen separately: the voice is
+//! [`super::voice`], a preference of exactly this shape, and it is also a
+//! per-utterance field on `POST /speak` where this one is not.
 //!
 //! The symmetry with [`super::device`] goes one level further: the override and
 //! the languages on offer are separate endpoints, exactly as the device
@@ -77,7 +78,11 @@ struct LanguageBody {
 /// `Err` carries the response to send: no such stage, a daemon that could not
 /// report its pipeline, no backend selected for the stage, or a backend that
 /// does not serve this model.
-async fn resolve_source(s: &AppState, stage: u32, model: &str) -> Result<String, Box<Response>> {
+pub(super) async fn resolve_source(
+    s: &AppState,
+    stage: u32,
+    model: &str,
+) -> Result<String, Box<Response>> {
     if Stage::resolve(stage).is_none() {
         return Err(Box::new(unknown_stage(stage)));
     }

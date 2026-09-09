@@ -28,6 +28,7 @@ pub(crate) mod device;
 pub(crate) mod language;
 pub(crate) mod model;
 pub(crate) mod stage;
+pub(crate) mod voice;
 
 use crate::daemon::http::internal::helpers::dispatch::{build_request, dispatch, narrowed};
 use crate::daemon::http::state::AppState;
@@ -182,4 +183,5 @@ pub(crate) fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(device::get_model_device, device::set_model_device))
         .routes(routes!(device::list_model_devices))
         .merge(language::routes())
+        .merge(voice::routes())
 }

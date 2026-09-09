@@ -21,7 +21,14 @@ fn model(kinds: Vec<VoiceKind>, voices: &[&str]) -> ModelDefinition {
         voice_kinds: kinds,
         clone_ref_seconds: None,
         clone_needs_transcript: false,
-        voices: voices.iter().map(|v| (*v).to_string()).collect(),
+        voices: voices
+            .iter()
+            .map(|v| crate::tts_models::model_definition::PresetVoice {
+                id: (*v).to_string(),
+                label: (*v).to_string(),
+            })
+            .collect(),
+        default_voice: None,
         realtime: false,
         provider: None,
     }

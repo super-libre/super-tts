@@ -10,7 +10,7 @@ use crate::daemon::backends::BackendInfo;
 use crate::state::ContextPage;
 use crate::ui::icons;
 use crate::ui::messages::{
-    DownloadMessage, LanguageMessage, Message, ModelsPageMessage, ShellMessage,
+    DownloadMessage, LanguageMessage, Message, ModelsPageMessage, ShellMessage, VoiceMessage,
 };
 
 use super::chips::{
@@ -84,6 +84,132 @@ pub(super) fn backend_header(
         .spacing(spacing.space_s)
         .align_y(Alignment::Center)
         .into()
+}
+
+/// The voice dropdown for the active-backend card.
+///
+/// A dropdown rather than the search sheet the language control opens, because
+/// the two lists are not the same size: a language picker chooses among some
+/// sixty tags and needs a search box, where a model offers nine preset voices
+/// or a handful of cloned ones and a list is faster than a sheet.
+///
+/// Row 0 is always the model's own default, so clearing the preference is a
+/// pick like any other rather than a second control. A model that declares no
+/// `default_voice` — every cloning model — labels that row as the state it
+/// really is: nothing chosen, and speech refused until something is.
+///
+/// Returns `None` when there is nothing to pick from: a model whose voices are
+/// all described takes free text and has no list, and one that clones before
+/// any clip has been recorded has an empty library. The caller skips the push
+/// rather than rendering an empty control.
+fn voice_dropdown<'a>(
+    backend: &'a BackendInfo,
+    selected_model: &str,
+    app: &'a AppModel,
+) -> Option<Element<'a, Message>> {
+    // Stale-block guard, the same one the language button uses: the two values
+    // below describe one model, and a card drawing another must not read them.
+    if app.voice.target.as_ref() != Some(&(backend.source.clone(), selected_model.to_string())) {
+        return None;
+    }
+    let block = app.voice.resolution.as_ref()?;
+    if app.voice.choices.is_empty() {
+        return None;
+    }
+
+    let default_row = block.default.as_ref().map_or_else(
+        || "No voice chosen".to_string(),
+        |id| {
+            // Named, not just "Default": a user comparing two rows should not
+            // have to remember which voice the manifest picked.
+            let label = app
+                .voice
+                .choices
+                .iter()
+                .find(|v| &v.id == id)
+                .map_or(id.as_str(), |v| v.label.as_str());
+            format!("{label} · default")
+        },
+    );
+    let mut labels: Vec<String> = vec![default_row];
+    // Cloned voices are marked. They sit in the same list as the presets
+    // because they are the same choice to the user, but one of them is a
+    // recording they made and the other is shipped with the model, and a list
+    // that did not say could put two identical labels side by side.
+    labels.extend(app.voice.choices.iter().map(|v| {
+        if v.kind == "cloned" {
+            format!("{} · cloned", v.label)
+        } else {
+            v.label.clone()
+        }
+    }));
+
+    // The selected row is the *stored* voice, not the effective one: with no
+    // preference set the default row is what is selected, which is exactly what
+    // `override: null` means.
+    let selected = block.model_override.as_ref().and_then(|id| {
+        app.voice
+            .choices
+            .iter()
+            .position(|v| &v.id == id)
+            .map(|i| i + 1)
+    });
+
+    // The ids are cloned into the closure rather than indexed out of `app` on
+    // press: the catalog can be replaced by a refresh between render and click,
+    // and an index into a list that has since changed would store the wrong
+    // voice.
+    let ids: Vec<String> = app.voice.choices.iter().map(|v| v.id.clone()).collect();
+    Some(
+        widget::dropdown(labels, selected.or(Some(0)), move |index| {
+            Message::Voice(VoiceMessage::ModelVoiceSelected(
+                index.checked_sub(1).map(|i| ids[i].clone()),
+            ))
+        })
+        .into(),
+    )
+}
+
+/// A warning for the one state in which the model cannot speak at all: no
+/// voice in effect, and no free-text description to fall back on.
+///
+/// This is what a cloning model looks like before any clip has been recorded,
+/// and before this control existed it was invisible — the card said the model
+/// was loaded and ready, and the first utterance came back "this model speaks
+/// in a cloned voice, so a request has to name one" with nowhere in the app to
+/// name one. Saying it on the card turns a failure at speak time into a state
+/// the user can see and fix.
+///
+/// A model that takes described voices is exempt: it has nothing to enumerate
+/// and needs nothing chosen, so an empty list there is not a problem.
+fn voice_warning<'a>(
+    backend: &'a BackendInfo,
+    selected_model: &str,
+    app: &'a AppModel,
+) -> Option<Element<'a, Message>> {
+    if app.voice.target.as_ref() != Some(&(backend.source.clone(), selected_model.to_string())) {
+        return None;
+    }
+    let block = app.voice.resolution.as_ref()?;
+    if block.effective.is_some() || block.kinds.iter().any(|k| k == "described") {
+        return None;
+    }
+    let detail = if block.kinds.iter().any(|k| k == "cloned") {
+        "No voice chosen — record one on the Voices page"
+    } else {
+        "No voice chosen"
+    };
+    // The same warning glyph the VRAM notice uses, so the two read as one kind
+    // of message rather than two.
+    Some(
+        row![
+            icons::phosphor_warning(icons::WARNING, 16.0),
+            text::body(detail),
+        ]
+        .spacing(cosmic::theme::spacing().space_xxs)
+        .align_y(Alignment::Center)
+        .into(),
+    )
 }
 
 /// Per-model language trigger button for the active-backend card.
@@ -295,7 +421,15 @@ pub(super) fn loaded_model_summary<'a>(
     let mut summary = row![label]
         .spacing(spacing.space_xs)
         .align_y(Alignment::Center);
-    // Per-model language trigger, inline before Unload, for a multilingual model.
+    // Per-model voice and language, inline before Unload. Voice first: it is
+    // the one a user changes between utterances, and the one that decides
+    // whether a cloning model can speak at all.
+    if let Some(warning) = voice_warning(backend, &app.current_model, app) {
+        summary = summary.push(warning);
+    }
+    if let Some(voice) = voice_dropdown(backend, &app.current_model, app) {
+        summary = summary.push(voice);
+    }
     if let Some(lang_button) = language_button(backend, &app.current_model, app) {
         summary = summary.push(lang_button);
     }

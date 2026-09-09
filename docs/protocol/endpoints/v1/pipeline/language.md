@@ -33,9 +33,10 @@ needed).
 **This is not the voice.** A model's language decides how text is pronounced —
 which phonemizer and which lexicon — while its `voice` decides who says it.
 They interact (a voice trained on one language may sound wrong reading
-another), but they are chosen separately: the language is a stored preference
-set here, the voice is a per-utterance field on
-[`POST /speak`](../speak.md).
+another), but they are chosen separately: the voice is
+[`/voice`](./voice.md), a stored preference of exactly this shape, and it is
+*also* a per-utterance field on [`POST /speak`](../speak.md), where this one is
+not.
 
 > **Moved from `/backends/{source}/models/{model}/language`.** The model's
 > backend has to be filling a stage now, where the old spelling could reach any

@@ -157,6 +157,34 @@ pub enum Command {
         source: String,
         model: String,
     },
+    /// Set the voice a specific `(source, model)` speaks in by default.
+    SetModelVoice {
+        source: String,
+        model: String,
+        voice: String,
+    },
+    /// Read the resolved voice block for a specific `(source, model)`.
+    GetModelVoice {
+        source: String,
+        model: String,
+    },
+    /// Clear the stored voice for a specific `(source, model)`, which returns
+    /// it to the manifest's `default_voice`.
+    ClearModelVoice {
+        source: String,
+        model: String,
+    },
+    /// The voices a specific `(source, model)` can be pinned to.
+    ///
+    /// Not simply the manifest's `[[models.voices]]`: a model that clones can
+    /// also be pinned to a stored `voice:<uuid>`, and one whose voices are all
+    /// described or cloned declares no presets at all. Both sides are derived
+    /// from the same rule in the daemon, so a picker cannot offer a value the
+    /// setter refuses.
+    ListModelVoices {
+        source: String,
+        model: String,
+    },
     SetAllowOnlineModels {
         enabled: bool,
     },

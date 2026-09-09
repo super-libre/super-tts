@@ -51,6 +51,7 @@ fn definition() -> ModelDefinition {
         processing_interval: Duration::from_millis(0),
         supported_devices: vec![Device::None],
         voice_kinds: vec![VoiceKind::Preset],
+        default_voice: None,
         clone_ref_seconds: None,
         clone_needs_transcript: false,
         voices: Vec::new(),
