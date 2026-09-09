@@ -15,15 +15,36 @@ impl SuperTTSDaemon {
     /// preference) is resolved into the concrete accelerator right here
     /// rather than by each caller.
     ///
+    /// Being the one place every load passes through, it is also where loads
+    /// are serialized. A load takes minutes and every caller empties the model
+    /// slot before starting, so without this two of them overlap: the startup
+    /// auto-load and a user's pick would both spawn a backend, put two models
+    /// on one GPU, and compile kernels into the same cache at once. The gate is
+    /// taken here rather than in each caller because there is no caller that
+    /// should be exempt, and one that forgot would look exactly like this bug.
+    ///
+    /// A request that is superseded while it waits gives up instead of loading
+    /// a model nobody is asking for any more. That is an error rather than a
+    /// silent return so the caller's log says what happened — the way this
+    /// failed before was by saying nothing at all.
+    ///
     /// # Errors
-    /// Returns an error if no installed backend serves the model, the backend
-    /// kind is unsupported in this build, or instantiation fails.
+    /// Returns an error if a newer load superseded this one while it waited,
+    /// no installed backend serves the model, the backend kind is unsupported
+    /// in this build, or instantiation fails.
     pub async fn instantiate_backend(
         &self,
         name: &str,
         source: &str,
         device_pref: &str,
     ) -> Result<(Box<dyn Synthesize>, ModelDefinition)> {
+        // Claimed before queueing, so waiting here is what reveals a newer
+        // request rather than hiding it.
+        let ticket = self.loading.ticket();
+        let Some(_gate) = self.loading.enter(ticket).await else {
+            bail!("loading {name} was superseded by a newer model load");
+        };
+
         let (backend, def) = {
             let backends = self.backends.read().await;
             let (b, d) = backends::find_model(&backends, name, source)
