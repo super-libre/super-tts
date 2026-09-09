@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -124,7 +124,19 @@ fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-async fn synthesize(State(s): State<Arc<AppState>>, _body: String) -> axum::response::Response {
+/// `POST /v1/synthesize` — a framed s16le ramp, and the `x-tts-option-*`
+/// headers the request carried echoed into the mark frame as `options`.
+///
+/// The echo rides on the mark because that is the one frame in the stream with
+/// a payload a test can read without decoding audio, and `Mark` ignores a field
+/// it does not know. It is what lets `option_headers_reach_the_subprocess`
+/// assert the daemon injected the user's settings on the *streaming* path,
+/// which builds its own request rather than going through `request`.
+async fn synthesize(
+    State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
+    _body: String,
+) -> axum::response::Response {
     use axum::http::header::CONTENT_TYPE;
 
     if !s.loaded.load(Ordering::SeqCst) {
@@ -143,10 +155,19 @@ async fn synthesize(State(s): State<Arc<AppState>>, _body: String) -> axum::resp
     for chunk in pcm.chunks(pcm.len() / MOCK_AUDIO_FRAMES) {
         body.extend(frame(KIND_AUDIO, chunk));
     }
-    body.extend(frame(
-        KIND_MARK,
-        br#"{"start_ms":0,"end_ms":40,"start_char":0,"end_char":5}"#,
-    ));
+    let mut options: Vec<String> = headers
+        .iter()
+        .filter_map(|(k, v)| {
+            let name = k.as_str().strip_prefix("x-tts-option-")?;
+            Some(format!("{name}={}", v.to_str().unwrap_or("?")))
+        })
+        .collect();
+    options.sort();
+    let mark = format!(
+        r#"{{"start_ms":0,"end_ms":40,"start_char":0,"end_char":5,"options":"{}"}}"#,
+        options.join(" ")
+    );
+    body.extend(frame(KIND_MARK, mark.as_bytes()));
     body.extend(frame(KIND_DONE, b"{}"));
 
     (

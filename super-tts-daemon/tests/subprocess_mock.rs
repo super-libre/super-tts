@@ -39,7 +39,38 @@ multilingual = false
 primary_language = "en"
 supported_languages = ["en"]
 supported_devices = ["cpu"]
+
+# A second model so two tests in one process do not collide: the transient unit
+# is named for the model and the pid, and the daemon itself never runs two
+# subprocess backends at once, so the name is only ambiguous under a test.
+[[models]]
+name = "mock-options"
+multilingual = false
+primary_language = "en"
+supported_languages = ["en"]
+supported_devices = ["cpu"]
 "#;
+
+/// A backend directory holding the manifest and the mock binary, plus the guard
+/// that removes it.
+///
+/// Built outside `/tmp`: `PrivateTmp=yes` in the systemd sandbox makes `/tmp`
+/// private, so a `ReadOnlyPaths=/tmp/...` bind mount fails at namespace setup.
+/// `label` keeps two tests in one process from sharing a directory, and with it
+/// a unit name.
+fn seed_backend_dir(label: &str) -> (std::path::PathBuf, CleanupDir) {
+    let dir = dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(format!(
+            "super-tts-mock-test-{label}-{}",
+            std::process::id()
+        ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cleanup = CleanupDir(dir.clone());
+    std::fs::write(dir.join("backend.toml"), MOCK_TOML).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_mock_backend"), dir.join("mock-backend")).unwrap();
+    (dir, cleanup)
+}
 
 #[tokio::test]
 async fn subprocess_orchestration_against_mock() {
@@ -53,18 +84,10 @@ async fn subprocess_orchestration_against_mock() {
     // runs with SUPER_TTS_TEST_SUBPROCESS=1, never on CI.
     super_tts_daemon::install_crypto_provider();
 
-    // Build a backend dir outside /tmp: PrivateTmp=yes in the systemd sandbox makes
-    // /tmp private, so ReadOnlyPaths=/tmp/... bind mounts fail at namespace setup.
-    let dir = dirs::cache_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(format!("super-tts-mock-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let _cleanup = CleanupDir(dir.clone());
-    std::fs::write(dir.join("backend.toml"), MOCK_TOML).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_mock_backend"), dir.join("mock-backend")).unwrap();
+    let (dir, _cleanup) = seed_backend_dir("orchestration");
 
     // Spawn + load via the real daemon orchestration.
-    let mut backend = SubprocessBackend::spawn(&dir, "mock", "cpu", None)
+    let mut backend = SubprocessBackend::spawn(&dir, "mock", "cpu", None, Vec::new())
         .await
         .expect("spawn + load mock backend");
 
@@ -109,6 +132,65 @@ async fn subprocess_orchestration_against_mock() {
         sink.frames.last().expect("frames were received").kind,
         FrameKind::Done,
         "the stream must end with a terminal frame"
+    );
+
+    backend.shutdown().await.expect("clean shutdown");
+}
+
+/// The contract says every `/v1` request carries the user's `[[options]]` as
+/// `x-tts-option-*` headers, whichever transport. A backend that steers on one
+/// — the Qwen backend designs its voice from a pair of them — reads them off
+/// the request, so the daemon has to put them there.
+///
+/// Asserted on `/v1/synthesize` specifically: it is the one route that builds
+/// its own request rather than going through `request`, because it streams its
+/// response, and it is the route the options are for.
+#[tokio::test]
+async fn option_headers_reach_the_subprocess() {
+    if std::env::var("SUPER_TTS_TEST_SUBPROCESS").is_err() {
+        return; // needs a systemd --user session
+    }
+    super_tts_daemon::install_crypto_provider();
+
+    let (dir, _cleanup) = seed_backend_dir("headers");
+
+    let headers = vec![
+        (
+            "x-tts-option-voice_design_preset".to_string(),
+            "Deep narrator (male)".to_string(),
+        ),
+        (
+            "x-tts-option-voice_design_description".to_string(),
+            "A hoarse pirate".to_string(),
+        ),
+    ];
+    let mut backend = SubprocessBackend::spawn(&dir, "mock-options", "cpu", None, headers)
+        .await
+        .expect("spawn + load mock backend");
+
+    let mut sink = CollectingSink::default();
+    backend
+        .synthesize(
+            &SynthesizeRequest {
+                text: "hello",
+                ..Default::default()
+            },
+            &mut sink,
+        )
+        .await
+        .expect("synthesize");
+
+    let mark = sink
+        .frames
+        .iter()
+        .find(|f| f.kind == FrameKind::Mark)
+        .expect("the mock emits one mark frame");
+    let echoed = String::from_utf8_lossy(&mark.payload);
+    assert!(
+        echoed.contains(
+            r#""options":"voice_design_description=A hoarse pirate voice_design_preset=Deep narrator (male)""#
+        ),
+        "the option headers must arrive on the streaming request: {echoed}"
     );
 
     backend.shutdown().await.expect("clean shutdown");
