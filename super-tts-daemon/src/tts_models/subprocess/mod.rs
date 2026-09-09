@@ -35,6 +35,10 @@ pub struct SubprocessBackend {
     info: ModelInfoData,
     /// Device label reported by the backend's `/v1/status` (e.g. `"cuda"`).
     device: String,
+    /// The `x-tts-secret-*` / `x-tts-option-*` pairs injected on every `/v1`
+    /// request, per the contract's request-header section. Formed once at
+    /// spawn from the user's settings, like the WASM transport's.
+    context_headers: Vec<(String, String)>,
     /// Whether [`Synthesize::shutdown`] already stopped the unit.
     ///
     /// `Drop` is the safety net for crash paths, but on the ordinary path
@@ -69,7 +73,8 @@ impl SubprocessBackend {
     /// files are downloaded into `<backend_dir>/<dest>`. `device_pref` is the
     /// resolved accelerator (`"cpu"`, `"cuda"`, `"rocm"`, `"metal"`,
     /// `"vulkan"`), or empty when none resolved, which leaves the backend to
-    /// select for itself.
+    /// select for itself. `context_headers` are the already-formed
+    /// `x-tts-secret-*` / `x-tts-option-*` pairs to inject on every request.
     ///
     /// # Errors
     /// Returns an error if provisioning, spawning, or loading fails.
@@ -78,6 +83,7 @@ impl SubprocessBackend {
         model_name: &str,
         device_pref: &str,
         tracker: Option<&Arc<crate::download_progress::DownloadProgressTracker>>,
+        context_headers: Vec<(String, String)>,
     ) -> Result<Self> {
         let manifest = Manifest::load(backend_dir)?;
 
@@ -189,6 +195,7 @@ impl SubprocessBackend {
             model_id: model_name.to_string(),
             info,
             device: "unknown".to_string(),
+            context_headers,
             stopped: false,
         };
 
@@ -256,7 +263,8 @@ impl SubprocessBackend {
         }
     }
 
-    /// One HTTP request over the backend's Unix socket.
+    /// One HTTP request over the backend's Unix socket, carrying `headers`
+    /// plus the secret/option context every `/v1` request gets.
     async fn request(
         &self,
         method: &str,
@@ -277,7 +285,7 @@ impl SubprocessBackend {
             .method(method)
             .uri(path)
             .header("host", "backend.local");
-        for (k, v) in headers {
+        for (k, v) in headers.iter().chain(&self.context_headers) {
             builder = builder.header(k.as_str(), v.as_str());
         }
         let req = builder.body(Full::new(Bytes::from(body)))?;
@@ -317,13 +325,20 @@ impl SubprocessBackend {
             let _ = conn.await;
         });
 
-        let request = hyper::Request::builder()
+        // Built here rather than through `request`, which collects the body —
+        // so the secret/option context every `/v1` request carries has to be
+        // added by hand. A backend that reads its voice off an option reads it
+        // on this path and no other.
+        let mut builder = hyper::Request::builder()
             .method("POST")
             .uri("/v1/synthesize")
             .header("host", "backend.local")
             .header("content-type", "application/json")
-            .header("x-tts-model", self.model_id.as_str())
-            .body(Full::new(Bytes::from(body)))?;
+            .header("x-tts-model", self.model_id.as_str());
+        for (k, v) in &self.context_headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+        let request = builder.body(Full::new(Bytes::from(body)))?;
 
         let resp = sender.send_request(request).await?;
         let status = resp.status().as_u16();
