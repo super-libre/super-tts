@@ -12,5 +12,5 @@ pub mod voices;
 // Re-export commonly used types
 pub use models::{
     ActionError, AudioTheme, ContextPage, DaemonStatus, ErrorScope, LanguageResolution, MenuAction,
-    ModelsTab, Page, SpeakingStatus,
+    ModelsTab, Page, SpeakingStatus, VoiceChoice, VoiceResolution, VoiceState,
 };

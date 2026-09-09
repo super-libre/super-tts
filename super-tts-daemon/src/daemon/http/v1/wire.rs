@@ -12,7 +12,7 @@
 //! out.
 
 use crate::daemon::http::wire::Ack;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use super_tts_shared::models::backends::BackendInfo;
 use super_tts_shared::models::protocol::{
     DaemonResponse, GpuHostInfo, GpuInfo, StageModelReport, StageReport,
@@ -458,6 +458,95 @@ pub(crate) struct ModelLanguageBlock {
     model_override: Option<String>,
     /// The model's own default language.
     primary: String,
+}
+
+/// How a model's voice resolves: the stored preference, or the manifest's
+/// `default_voice` when none is stored.
+#[derive(Serialize, Deserialize, ToSchema)]
+pub(crate) struct ModelVoiceBlock {
+    /// The voice an utterance naming none will actually be spoken in. `null`
+    /// when the model has neither a stored voice nor a `default_voice`, which
+    /// is the state a cloning model starts in — and the state in which speaking
+    /// is refused until a voice is set.
+    effective: Option<String>,
+    /// Which setting `effective` came from: `override` or `default`.
+    source: String,
+    /// The stored per-model voice, or `null` when none is set.
+    #[serde(rename = "override")]
+    model_override: Option<String>,
+    /// The manifest's `default_voice`, or `null` when it declares none.
+    default: Option<String>,
+    /// The `voice` id shapes this model accepts — `preset`, `cloned`,
+    /// `described`. A client offers a text field for `described`, since a
+    /// described voice is free text with no set to enumerate.
+    #[schema(example = json!(["preset"]))]
+    kinds: Vec<String>,
+}
+
+/// One model's voice resolution.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ModelVoiceState {
+    #[schema(example = "success")]
+    status: &'static str,
+    voice: ModelVoiceBlock,
+}
+
+impl FromDaemon for ModelVoiceState {
+    fn from_daemon(resp: DaemonResponse) -> Self {
+        Self {
+            status: "success",
+            voice: resp
+                .voice
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or(ModelVoiceBlock {
+                    effective: None,
+                    source: "default".to_string(),
+                    model_override: None,
+                    default: None,
+                    kinds: Vec::new(),
+                }),
+        }
+    }
+}
+
+/// One voice a model can be pinned to.
+#[derive(Serialize, Deserialize, ToSchema)]
+pub(crate) struct VoiceChoice {
+    /// The `voice` id to send, e.g. `ryan` or `voice:<uuid>`.
+    id: String,
+    /// Display name for a picker.
+    label: String,
+    /// `preset` for one the model declares, `cloned` for one from the voice
+    /// library.
+    kind: String,
+}
+
+/// The voices a model can be pinned to.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct VoiceList {
+    #[schema(example = "success")]
+    status: &'static str,
+    /// The model's presets, then the stored cloned voices when it clones.
+    /// Empty for a model whose voices are all described — free text has no
+    /// list, and a client shows a text field for it instead.
+    available_voices: Vec<VoiceChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+impl FromDaemon for VoiceList {
+    fn from_daemon(resp: DaemonResponse) -> Self {
+        Self {
+            status: "success",
+            available_voices: resp
+                .available_voices
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| serde_json::from_value(v).ok())
+                .collect(),
+            message: resp.message,
+        }
+    }
 }
 
 /// The languages a model, or the global setting, can be pinned to.

@@ -112,11 +112,16 @@ impl SuperTTSDaemon {
 
     /// Look up a model's [`ModelDefinition`] among the discovered backends by
     /// `(source, model)`. Resolution does **not** require the model to be
-    /// loaded — the per-model language endpoint works for any installed model.
+    /// loaded — the per-model language and voice endpoints work for any
+    /// installed model.
     /// The HTTP layer guards `unknown_backend` / `unknown_model` before
     /// dispatch (mirroring options.rs), so a miss here means the backend list
     /// changed between the guard and the handler.
-    async fn find_model_definition(&self, source: &str, model: &str) -> Option<ModelDefinition> {
+    pub(crate) async fn find_model_definition(
+        &self,
+        source: &str,
+        model: &str,
+    ) -> Option<ModelDefinition> {
         self.backends
             .read()
             .await

@@ -261,7 +261,10 @@ impl AppModel {
         // learns the active model only via this broadcast — e.g. the settings app
         // reconnecting after a daemon restart, where the startup load now emits
         // model_switched — would otherwise leave model_language_for unset.
-        self.load_model_language(&source, model)
+        Task::batch([
+            self.load_model_language(&source, model.clone()),
+            self.load_model_voice(&source, model),
+        ])
     }
 
     pub(in crate::core::app) fn process_download_progress_event(

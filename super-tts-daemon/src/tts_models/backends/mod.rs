@@ -227,7 +227,15 @@ fn load_backend(dir: &Path) -> anyhow::Result<DiscoveredBackend> {
             voice_kinds: entry.voice_kinds.clone(),
             clone_ref_seconds: entry.clone_ref_seconds,
             clone_needs_transcript: entry.clone_needs_transcript,
-            voices: entry.voices.iter().map(|v| v.id.clone()).collect(),
+            voices: entry
+                .voices
+                .iter()
+                .map(|v| crate::tts_models::model_definition::PresetVoice {
+                    id: v.id.clone(),
+                    label: v.display_name().to_string(),
+                })
+                .collect(),
+            default_voice: entry.default_voice.clone(),
             realtime: entry.realtime,
             provider: entry.provider.clone(),
         });

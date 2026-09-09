@@ -146,6 +146,7 @@ impl AppModel {
 
             // Speech language state
             language: crate::state::language::LanguageState::default(),
+            voice: crate::state::VoiceState::default(),
 
             // Backend catalog + per-backend configuration state
             backends: Vec::new(),

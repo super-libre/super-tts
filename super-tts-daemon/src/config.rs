@@ -78,6 +78,18 @@ pub struct ModelSettings {
     /// forced a user who wanted the GPU for one of them to accept it for both.
     #[serde(default)]
     pub device: Option<String>,
+    /// The voice this model speaks in when an utterance names none: a `voice`
+    /// id in any of the three shapes `docs/protocol/backend/config.md` defines,
+    /// or `None` for the model's manifest `default_voice`.
+    ///
+    /// Per model rather than global for the same reason the device is: a voice
+    /// id means nothing to another model. `ryan` is one of the nine speakers
+    /// the `CustomVoice` checkpoints declare and is not a voice any Kokoro build
+    /// has, and a cloned `voice:<uuid>` is refused outright by a model whose
+    /// `voice_kinds` do not include `cloned`. One global voice would be wrong
+    /// for every model but the one it was picked for.
+    #[serde(default)]
+    pub voice: Option<String>,
 }
 
 /// The device models fall back to when they have none of their own
@@ -519,6 +531,37 @@ impl DaemonConfig {
             .and_then(|m| m.get(model))
             .and_then(|s| s.language.as_deref())
     }
+
+    /// Set (`Some`) or clear (`None`) the voice a model speaks in by default.
+    pub fn update_model_voice(&mut self, source: String, model: String, voice: Option<String>) {
+        match voice {
+            Some(v) => {
+                self.backends
+                    .models
+                    .entry(source)
+                    .or_default()
+                    .entry(model)
+                    .or_default()
+                    .voice = Some(v);
+            }
+            None => {
+                if let Some(models) = self.backends.models.get_mut(&source)
+                    && let Some(settings) = models.get_mut(&model)
+                {
+                    settings.voice = None;
+                }
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn model_voice(&self, source: &str, model: &str) -> Option<&str> {
+        self.backends
+            .models
+            .get(source)
+            .and_then(|m| m.get(model))
+            .and_then(|s| s.voice.as_deref())
+    }
 }
 
 #[cfg(test)]
@@ -546,6 +589,42 @@ mod language_config_tests {
             Some("fr")
         );
         assert_eq!(back.model_language("github.com/x/kokoro", "absent"), None);
+    }
+
+    /// The voice rides in the same per-model record as the language and the
+    /// device, so it has to survive the same round trip through TOML.
+    #[test]
+    fn a_model_voice_round_trips_through_toml() {
+        let mut cfg = DaemonConfig::default();
+        cfg.update_model_voice(
+            "github.com/x/qwen".into(),
+            "qwen3-tts-0.6b-custom-voice".into(),
+            Some("aiden".into()),
+        );
+        let toml = toml::to_string(&cfg).expect("config serializes");
+        let back: DaemonConfig = toml::from_str(&toml).expect("config parses");
+        assert_eq!(
+            back.model_voice("github.com/x/qwen", "qwen3-tts-0.6b-custom-voice"),
+            Some("aiden")
+        );
+        assert_eq!(back.model_voice("github.com/x/qwen", "absent"), None);
+    }
+
+    /// A voice and a language set on the same model do not overwrite each
+    /// other: both live in one `ModelSettings`, so a careless `or_default`
+    /// would blank whichever was written first.
+    #[test]
+    fn a_voice_and_a_language_coexist_on_one_model() {
+        let mut cfg = DaemonConfig::default();
+        cfg.update_model_language("s".into(), "m".into(), Some("fr".into()));
+        cfg.update_model_voice("s".into(), "m".into(), Some("ryan".into()));
+        assert_eq!(cfg.model_language("s", "m"), Some("fr"));
+        assert_eq!(cfg.model_voice("s", "m"), Some("ryan"));
+
+        // And clearing one leaves the other alone.
+        cfg.update_model_voice("s".into(), "m".into(), None);
+        assert_eq!(cfg.model_voice("s", "m"), None);
+        assert_eq!(cfg.model_language("s", "m"), Some("fr"));
     }
 
     #[test]

@@ -516,6 +516,7 @@ async fn list_backends_catalog_and_option_override() {
             processing_interval: Duration::from_secs(1),
             supported_devices: vec![super_tts_registry_types::manifest::Device::None],
             voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+            default_voice: None,
             clone_ref_seconds: None,
             clone_needs_transcript: false,
             voices: Vec::new(),
@@ -686,6 +687,7 @@ fn fixture_backend_devices(
             processing_interval: Duration::from_secs(1),
             supported_devices,
             voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+            default_voice: None,
             clone_ref_seconds: None,
             clone_needs_transcript: false,
             voices: Vec::new(),
@@ -936,6 +938,7 @@ async fn seed_loaded_model(daemon: &SuperTTSDaemon, name: &str, source: &str) {
         processing_interval: Duration::from_secs(1),
         supported_devices: vec![super_tts_registry_types::manifest::Device::None],
         voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
+        default_voice: None,
         clone_ref_seconds: None,
         clone_needs_transcript: false,
         voices: Vec::new(),
@@ -1967,6 +1970,171 @@ async fn list_model_languages_follows_what_the_setter_accepts() {
         .await;
     assert_eq!(response.status, "success");
     assert_eq!(response.available_languages, Some(Vec::new()));
+}
+
+/// The voice list is what the setter takes, and the setter takes only what the
+/// list offered. A picker filled from anywhere else offers ids that fail on
+/// click, which is the failure this pairing exists to prevent.
+#[tokio::test]
+async fn list_model_voices_follows_what_the_setter_accepts() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
+    backend.models[0].voices = vec![
+        crate::tts_models::model_definition::PresetVoice {
+            id: "af_bella".to_string(),
+            label: "Bella (American, female)".to_string(),
+        },
+        crate::tts_models::model_definition::PresetVoice {
+            id: "am_adam".to_string(),
+            label: "Adam (American, male)".to_string(),
+        },
+    ];
+    *daemon.backends.write().await = vec![backend];
+
+    let response = daemon
+        .handle_list_model_voices(source.to_string(), "kokoro-82m".to_string())
+        .await;
+    assert_eq!(response.status, "success");
+    let offered = response.available_voices.expect("a list of voices");
+    assert_eq!(offered.len(), 2);
+    // The label rides along: a picker showing `af_bella` where the manifest
+    // wrote "Bella (American, female)" is the reason this is not a list of ids.
+    assert_eq!(offered[0]["label"], "Bella (American, female)");
+    assert_eq!(offered[0]["kind"], "preset");
+
+    for voice in ["af_bella", "am_adam"] {
+        let response = daemon
+            .handle_set_model_voice(
+                source.to_string(),
+                "kokoro-82m".to_string(),
+                voice.to_string(),
+            )
+            .await;
+        assert_eq!(
+            response.status, "success",
+            "the list offered `{voice}` but the setter refused it"
+        );
+    }
+}
+
+/// A voice the model does not declare is refused rather than stored. Storing it
+/// would look accepted and then fail on every utterance that followed, which is
+/// the worst of the three possible answers.
+#[tokio::test]
+async fn setting_a_voice_the_model_does_not_have_is_refused() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
+    backend.models[0].voices = vec![crate::tts_models::model_definition::PresetVoice {
+        id: "af_bella".to_string(),
+        label: "Bella".to_string(),
+    }];
+    *daemon.backends.write().await = vec![backend];
+
+    let response = daemon
+        .handle_set_model_voice(
+            source.to_string(),
+            "kokoro-82m".to_string(),
+            "ryan".to_string(),
+        )
+        .await;
+    assert_eq!(response.status, "error");
+
+    // A cloned id is refused too: this model's `voice_kinds` is preset-only, so
+    // the shape is wrong whatever the library holds.
+    let response = daemon
+        .handle_set_model_voice(
+            source.to_string(),
+            "kokoro-82m".to_string(),
+            "voice:0b2f8c1e-1111-2222-3333-444455556666".to_string(),
+        )
+        .await;
+    assert_eq!(response.status, "error");
+}
+
+/// Setting, reading and clearing round-trip, and the block says which of the
+/// two sources answered.
+#[tokio::test]
+async fn a_stored_voice_survives_until_it_is_cleared() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
+    backend.models[0].voices = vec![crate::tts_models::model_definition::PresetVoice {
+        id: "af_bella".to_string(),
+        label: "Bella".to_string(),
+    }];
+    backend.models[0].default_voice = Some("af_bella".to_string());
+    *daemon.backends.write().await = vec![backend];
+
+    let block = |resp: super_tts_shared::models::protocol::DaemonResponse| {
+        resp.voice.expect("a voice block")
+    };
+
+    // Nothing stored: the manifest's default answers, and says so.
+    let before = block(
+        daemon
+            .handle_get_model_voice(source.to_string(), "kokoro-82m".to_string())
+            .await,
+    );
+    assert_eq!(before["effective"], "af_bella");
+    assert_eq!(before["source"], "default");
+    assert!(before["override"].is_null());
+
+    let after = block(
+        daemon
+            .handle_set_model_voice(
+                source.to_string(),
+                "kokoro-82m".to_string(),
+                "af_bella".to_string(),
+            )
+            .await,
+    );
+    assert_eq!(after["source"], "override");
+    assert_eq!(after["override"], "af_bella");
+
+    let cleared = block(
+        daemon
+            .handle_clear_model_voice(source.to_string(), "kokoro-82m".to_string())
+            .await,
+    );
+    assert_eq!(cleared["source"], "default");
+    assert!(cleared["override"].is_null());
+}
+
+/// A model with no `default_voice` and nothing stored reports no voice at all,
+/// rather than inventing one. That `null` is what a client renders as "choose a
+/// voice" — and the state in which speaking is refused, which is what the user
+/// hit before this control existed.
+#[tokio::test]
+async fn a_model_with_no_default_reports_no_voice() {
+    let daemon = test_daemon().await;
+    let source = "github.com/super-tts/kokoro";
+    let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
+    backend.models[0].voice_kinds = vec![super_tts_registry_types::manifest::VoiceKind::Cloned];
+    *daemon.backends.write().await = vec![backend];
+
+    let response = daemon
+        .handle_get_model_voice(source.to_string(), "kokoro-82m".to_string())
+        .await;
+    let block = response.voice.expect("a voice block");
+    assert!(block["effective"].is_null());
+    assert!(block["default"].is_null());
+    assert_eq!(block["kinds"][0], "cloned");
+}
+
+/// Listing the voices of a model no backend serves is `unknown_model`, the same
+/// classified 404 its language sibling answers with.
+#[tokio::test]
+async fn list_model_voices_refuses_an_unknown_model() {
+    let daemon = test_daemon().await;
+
+    let response = daemon
+        .handle_list_model_voices("github.com/x/absent".to_string(), "nope".to_string())
+        .await;
+    assert_eq!(response.status, "error");
+    assert_eq!(response.error_code, Some(ErrorCode::InvalidModel));
+    assert!(response.available_voices.is_none());
 }
 
 /// Listing the languages of a model no backend serves is `unknown_model`, the

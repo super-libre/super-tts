@@ -21,6 +21,15 @@ use std::time::Duration;
 
 use super_tts_registry_types::manifest::{Device, VoiceKind};
 
+/// One preset voice a model declares, as a picker needs it.
+#[derive(Clone, Debug)]
+pub struct PresetVoice {
+    /// The `voice` id sent on `POST /speak`.
+    pub id: String,
+    /// Display name — the manifest's `label`, or the id when it wrote none.
+    pub label: String,
+}
+
 /// Fully resolved description of a single model served by a backend.
 ///
 /// Built by the daemon from a discovered backend's `backend.toml` entry; not a
@@ -65,13 +74,24 @@ pub struct ModelDefinition {
     /// reference clip's transcript. See
     /// [`ModelEntry::clone_needs_transcript`](super_tts_registry_types::manifest::ModelEntry::clone_needs_transcript).
     pub clone_needs_transcript: bool,
-    /// Ids of the preset voices the model declares in `[[models.voices]]`.
+    /// The preset voices the model declares in `[[models.voices]]`.
     ///
     /// Empty when it declares none, which the manifest allows for a model
     /// whose voices are entirely cloned or described. A preset id is checked
     /// against this list only when there is a list to check it against —
     /// otherwise there is nothing to say it is wrong.
-    pub voices: Vec<String>,
+    ///
+    /// The label rides along because a picker needs it and nothing else
+    /// publishes it: `voice/list` is built from this, and a list of bare ids
+    /// would offer the user `ono_anna` where the manifest wrote
+    /// `Ono Anna (Japanese, female)`.
+    pub voices: Vec<PresetVoice>,
+    /// The voice an utterance names none is spoken in, from `default_voice`.
+    ///
+    /// `None` for a model whose voices are all cloned or described: there is
+    /// no id it could fall back to, which is why those models refuse an
+    /// utterance that names no voice until one is stored for them.
+    pub default_voice: Option<String>,
     /// Whether this model is reached over the realtime WebSocket path
     /// (the realtime WIT's `ws-server.handle`) rather than batch
     /// `POST /v1/synthesize`.

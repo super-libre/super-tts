@@ -112,7 +112,8 @@ impl AppModel {
                 // has to be read after the load rather than assumed from what
                 // was staged before it.
                 let mut tasks = vec![
-                    self.load_model_language(&source, model),
+                    self.load_model_language(&source, model.clone()),
+                    self.load_model_voice(&source, model),
                     self.load_running_device(),
                 ];
                 // The Voices page states what the loaded model can do with a
@@ -238,7 +239,8 @@ impl AppModel {
                 self.models_page.staged_device = None;
                 // Wire point 1: a model is up, so its language block can fill
                 // the card's language control.
-                tasks.push(self.load_model_language(&source, model));
+                tasks.push(self.load_model_language(&source, model.clone()));
+                tasks.push(self.load_model_voice(&source, model));
             }
             (Some((model, source)), false) => {
                 // Selected but not running — the daemon kept the choice through
@@ -250,6 +252,7 @@ impl AppModel {
                 // picker; a leftover from a previous staging would block it.
                 self.models_page.staged_device = None;
                 tasks.push(self.load_model_language(&source, model.clone()));
+                tasks.push(self.load_model_voice(&source, model.clone()));
                 tasks.push(self.load_model_device(&source, model));
             }
             (None, _) => {

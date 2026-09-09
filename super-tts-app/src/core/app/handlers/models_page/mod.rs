@@ -118,6 +118,7 @@ impl AppModel {
                 // picker before Load, rather than after it.
                 Task::batch([
                     self.load_model_language(&source, model.clone()),
+                    self.load_model_voice(&source, model.clone()),
                     self.load_model_device(&source, model),
                 ])
             }

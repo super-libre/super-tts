@@ -3070,6 +3070,420 @@
         ]
       }
     },
+    "/v1/pipeline/{stage}/model/{model}/voice": {
+      "get": {
+        "tags": [
+          "pipeline"
+        ],
+        "summary": "Read a model's voice",
+        "description": "The voice this model speaks in when an utterance names none, and what decided it: the stored per-model preference, or the manifest's `default_voice`.\n\nAddressed by the stage that runs the model rather than by \"the active model\", so it can be read whether or not the model is loaded — that is how a card shows its voice before Load.\n\n`effective` is `null` when the model has neither a stored voice nor a `default_voice`. That is not a quirk: a model whose voices are all cloned has no id it could fall back to, and speaking will be refused until one is set. A client should treat a null `effective` as a control the user must fill in, not as an optional one.\n\nWhat the preference *may* be set to is `GET /pipeline/{stage}/model/{model}/voice/list`.",
+        "operationId": "get_model_voice",
+        "parameters": [
+          {
+            "name": "stage",
+            "in": "path",
+            "description": "Pipeline position. `1` synthesizes — text in, audio out — and is the only position this build has; any other is a `404 unknown_stage` naming the ones that do exist.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 1
+          },
+          {
+            "name": "model",
+            "in": "path",
+            "description": "The model's name, as `GET /pipeline/{stage}/model/list` spells it. Resolved against the backend filling this stage.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How this model's voice resolves.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelVoiceState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The stage has no backend selected, so there is nothing to resolve `model` against (`invalid_backend`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token unknown, expired, or its binary changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReasonEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the `settings` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stage (`unknown_stage`), or this stage's backend serves no such model (`unknown_model`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-client rate limit hit; back off and retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_token": [
+              "settings"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "pipeline"
+        ],
+        "summary": "Set a model's voice",
+        "description": "Stores the voice this model speaks in when an utterance names none. Kept against `(source, model)`, so it survives model switches and does not follow whichever model happens to be loaded — a voice id means nothing to another model, and one global voice would be wrong for every model but the one it was picked for.\n\nA voice the model cannot resolve is refused rather than stored: a shape its `voice_kinds` does not include, or a preset id it does not declare. Offer what `GET /pipeline/{stage}/model/{model}/voice/list` returns, plus a free-text `desc:<text>` when the block's `kinds` includes `described`.\n\n`POST /speak` may still name a voice for one utterance, and that wins. This is the default it falls back to.\n\nThe new value applies to the next utterance; one already being spoken finishes in the voice it started in. Clear it with `DELETE` rather than by setting an empty string.",
+        "operationId": "set_model_voice",
+        "parameters": [
+          {
+            "name": "stage",
+            "in": "path",
+            "description": "Pipeline position. `1` synthesizes — text in, audio out — and is the only position this build has; any other is a `404 unknown_stage` naming the ones that do exist.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 1
+          },
+          {
+            "name": "model",
+            "in": "path",
+            "description": "The model's name, as `GET /pipeline/{stage}/model/list` spells it. Resolved against the backend filling this stage.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; this is the resulting resolution, with `source` now `override`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelVoiceState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`voice` was empty, or is not one this model can resolve (`invalid_value`), or the stage has no backend selected (`invalid_backend`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token unknown, expired, or its binary changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReasonEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the `settings` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stage (`unknown_stage`), or this stage's backend serves no such model (`unknown_model`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-client rate limit hit; back off and retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_token": [
+              "settings"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "pipeline"
+        ],
+        "summary": "Clear a model's voice",
+        "description": "Removes the stored voice, returning this model to its manifest `default_voice`.\n\nAnswers with the same resolution `GET` does, so a card can render the result of its own click without a second read — `source` will now be `default`, and `effective` will be `null` for a model that declares no default, which is the state where speaking is refused until a voice is chosen again.",
+        "operationId": "clear_model_voice",
+        "parameters": [
+          {
+            "name": "stage",
+            "in": "path",
+            "description": "Pipeline position. `1` synthesizes — text in, audio out — and is the only position this build has; any other is a `404 unknown_stage` naming the ones that do exist.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 1
+          },
+          {
+            "name": "model",
+            "in": "path",
+            "description": "The model's name, as `GET /pipeline/{stage}/model/list` spells it. Resolved against the backend filling this stage.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared; this is the resolution it fell back to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelVoiceState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The stage has no backend selected (`invalid_backend`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token unknown, expired, or its binary changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReasonEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the `settings` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stage (`unknown_stage`), or this stage's backend serves no such model (`unknown_model`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-client rate limit hit; back off and retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_token": [
+              "settings"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/pipeline/{stage}/model/{model}/voice/list": {
+      "get": {
+        "tags": [
+          "pipeline"
+        ],
+        "summary": "List the voices a model can be pinned to",
+        "description": "What `POST /pipeline/{stage}/model/{model}/voice` will accept for this model: the presets it declares, followed by the stored cloned voices when its `voice_kinds` includes `cloned`.\n\nFill a voice picker from this rather than from the manifest alone. A model that clones declares no presets, so a picker built from `[[models.voices]]` would be empty for exactly the models that refuse to speak without a voice; and a cloned voice belongs to the library, not to any one model, so the manifest could not list it.\n\nDescribed voices are not here — they are free text with no set to enumerate. A model that accepts them says so in the `kinds` of `GET /pipeline/{stage}/model/{model}/voice`, and a client offers a text field alongside this list.\n\nAn empty list with no `described` kind means the model has no voices to choose yet: record one on `POST /voice` first.",
+        "operationId": "list_model_voices",
+        "parameters": [
+          {
+            "name": "stage",
+            "in": "path",
+            "description": "Pipeline position. `1` synthesizes — text in, audio out — and is the only position this build has; any other is a `404 unknown_stage` naming the ones that do exist.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "example": 1
+          },
+          {
+            "name": "model",
+            "in": "path",
+            "description": "The model's name, as `GET /pipeline/{stage}/model/list` spells it. Resolved against the backend filling this stage.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The voices on offer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The stage has no backend selected, so there is nothing to resolve `model` against (`invalid_backend`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token unknown, expired, or its binary changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReasonEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token lacks the `settings` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stage (`unknown_stage`), or this stage's backend serves no such model (`unknown_model`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-client rate limit hit; back off and retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_token": [
+              "settings"
+            ]
+          }
+        ]
+      }
+    },
     "/v1/registry/backend/install": {
       "post": {
         "tags": [
@@ -6985,6 +7399,68 @@
           }
         }
       },
+      "ModelVoiceBlock": {
+        "type": "object",
+        "description": "How a model's voice resolves: the stored preference, or the manifest's\n`default_voice` when none is stored.",
+        "required": [
+          "source",
+          "kinds"
+        ],
+        "properties": {
+          "default": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The manifest's `default_voice`, or `null` when it declares none."
+          },
+          "effective": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The voice an utterance naming none will actually be spoken in. `null`\nwhen the model has neither a stored voice nor a `default_voice`, which\nis the state a cloning model starts in — and the state in which speaking\nis refused until a voice is set."
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The `voice` id shapes this model accepts — `preset`, `cloned`,\n`described`. A client offers a text field for `described`, since a\ndescribed voice is free text with no set to enumerate.",
+            "example": [
+              "preset"
+            ]
+          },
+          "override": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stored per-model voice, or `null` when none is set."
+          },
+          "source": {
+            "type": "string",
+            "description": "Which setting `effective` came from: `override` or `default`."
+          }
+        }
+      },
+      "ModelVoiceState": {
+        "type": "object",
+        "description": "One model's voice resolution.",
+        "required": [
+          "status",
+          "voice"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "success"
+          },
+          "voice": {
+            "$ref": "#/components/schemas/ModelVoiceBlock"
+          }
+        }
+      },
       "NotificationMethodState": {
         "type": "object",
         "description": "How failures are announced.",
@@ -8068,6 +8544,40 @@
           }
         }
       },
+      "VoiceBody": {
+        "type": "object",
+        "description": "The voice this model should speak in.",
+        "properties": {
+          "voice": {
+            "type": "string",
+            "description": "A `voice` id in a shape the model accepts: one of its presets, a\n`voice:<uuid>` from the voice library, or `desc:<text>` where the model\nbuilds voices from descriptions. Empty is refused — clear the\npreference with `DELETE`, which is a different act.",
+            "example": "ryan"
+          }
+        }
+      },
+      "VoiceChoice": {
+        "type": "object",
+        "description": "One voice a model can be pinned to.",
+        "required": [
+          "id",
+          "label",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The `voice` id to send, e.g. `ryan` or `voice:<uuid>`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`preset` for one the model declares, `cloned` for one from the voice\nlibrary."
+          },
+          "label": {
+            "type": "string",
+            "description": "Display name for a picker."
+          }
+        }
+      },
       "VoiceDeletedResponse": {
         "type": "object",
         "description": "`DELETE /voice/{id}`.",
@@ -8133,6 +8643,33 @@
           "voice_id": {
             "type": "string",
             "description": "The full wire id, `voice:<uuid>` — what `POST /speak` takes as `voice`.\nSent rather than left to the client to assemble, so the prefix is\ndefined in one place."
+          }
+        }
+      },
+      "VoiceList": {
+        "type": "object",
+        "description": "The voices a model can be pinned to.",
+        "required": [
+          "status",
+          "available_voices"
+        ],
+        "properties": {
+          "available_voices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VoiceChoice"
+            },
+            "description": "The model's presets, then the stored cloned voices when it clones.\nEmpty for a model whose voices are all described — free text has no\nlist, and a client shows a text field for it instead."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "example": "success"
           }
         }
       },

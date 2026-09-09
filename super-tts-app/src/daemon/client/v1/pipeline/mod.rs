@@ -3,7 +3,8 @@
 //!
 //! Mirrors the daemon's `v1/pipeline/` tree: [`stage`] wraps `/pipeline/{stage}`,
 //! [`backend`] the menu that fills it, [`model`] wraps `/pipeline/{stage}/model`
-//! and its verbs, [`device`] and [`language`] the two per-model preferences.
+//! and its verbs, [`device`], [`language`] and [`voice`] the per-model
+//! preferences.
 //!
 //! Super TTS has exactly one stage — `SYNTHESIS_STAGE`, text in and audio out —
 //! and every call here still takes the position as a parameter. That is not
@@ -24,6 +25,7 @@ pub(crate) mod device;
 pub(crate) mod language;
 pub(crate) mod model;
 pub(crate) mod stage;
+pub(crate) mod voice;
 
 use super_tts_shared::daemon::http_client::HttpResult;
 

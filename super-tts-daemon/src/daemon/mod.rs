@@ -19,3 +19,4 @@ pub mod status_handlers;
 pub(crate) mod test_fixtures;
 pub mod theme_handlers;
 pub mod types;
+pub mod voice_handlers;

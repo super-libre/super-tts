@@ -211,12 +211,15 @@ pub fn page(app: &AppModel) -> Element<'_, Message> {
         None => page_container(load_sheet::no_backend_empty_state()),
     };
 
-    widget::column::with_capacity(2)
-        .push(page_container(title_row))
-        .push(body)
-        .height(Length::Fill)
-        .spacing(0)
-        .into()
+    let mut page = widget::column::with_capacity(3).push(page_container(title_row));
+    // Above the card, where the control that failed is: a voice the daemon
+    // refused has to say so somewhere the user is already looking.
+    if let Some(message) = app.action_error_for(crate::state::ErrorScope::Models) {
+        page = page.push(page_container(crate::ui::views::common::error_banner(
+            message,
+        )));
+    }
+    page.push(body).height(Length::Fill).spacing(0).into()
 }
 
 /// Library page view: a fixed header (title + Installed/Browse tab bar) over a

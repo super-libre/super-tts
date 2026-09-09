@@ -52,6 +52,10 @@ impl TryFrom<DaemonRequest> for Command {
             "get_model_language" => cmd_get_model_language(&request),
             "clear_model_language" => cmd_clear_model_language(&request),
             "list_model_languages" => cmd_list_model_languages(&request),
+            "set_model_voice" => cmd_set_model_voice(&request),
+            "get_model_voice" => cmd_get_model_voice(&request),
+            "clear_model_voice" => cmd_clear_model_voice(&request),
+            "list_model_voices" => cmd_list_model_voices(&request),
             "set_allow_online_models" => cmd_set_allow_online_models(&request),
             "get_allow_online_models" => Ok(Command::GetAllowOnlineModels),
             "set_custom_models_dir" => Ok(cmd_set_custom_models_dir(&request)),
@@ -333,9 +337,9 @@ fn cmd_set_primary_language(request: &DaemonRequest) -> Result<Command, String> 
     Ok(Command::SetPrimaryLanguage { language })
 }
 
-/// Extract the `(source, model)` pair every per-model language command carries
-/// in `data`. Both are required.
-fn model_language_target(
+/// Extract the `(source, model)` pair every per-model setting command carries
+/// in `data` — language and voice alike. Both are required.
+fn model_setting_target(
     request: &DaemonRequest,
     command: &str,
 ) -> Result<(String, String), String> {
@@ -354,7 +358,7 @@ fn model_language_target(
 }
 
 fn cmd_set_model_language(request: &DaemonRequest) -> Result<Command, String> {
-    let (source, model) = model_language_target(request, "set_model_language")?;
+    let (source, model) = model_setting_target(request, "set_model_language")?;
     let language = request
         .data
         .as_ref()
@@ -370,12 +374,12 @@ fn cmd_set_model_language(request: &DaemonRequest) -> Result<Command, String> {
 }
 
 fn cmd_get_model_language(request: &DaemonRequest) -> Result<Command, String> {
-    let (source, model) = model_language_target(request, "get_model_language")?;
+    let (source, model) = model_setting_target(request, "get_model_language")?;
     Ok(Command::GetModelLanguage { source, model })
 }
 
 fn cmd_clear_model_language(request: &DaemonRequest) -> Result<Command, String> {
-    let (source, model) = model_language_target(request, "clear_model_language")?;
+    let (source, model) = model_setting_target(request, "clear_model_language")?;
     Ok(Command::ClearModelLanguage { source, model })
 }
 
@@ -386,6 +390,40 @@ fn cmd_clear_model_language(request: &DaemonRequest) -> Result<Command, String> 
 /// model, and a divergence here would be visible only as a picker whose
 /// choices all fail on submit.
 fn cmd_list_model_languages(request: &DaemonRequest) -> Result<Command, String> {
-    let (source, model) = model_language_target(request, "list_model_languages")?;
+    let (source, model) = model_setting_target(request, "list_model_languages")?;
     Ok(Command::ListModelLanguages { source, model })
+}
+
+/// The four voice verbs address a model exactly as the four language verbs do,
+/// through the same helper, so a client that can read one preference can write
+/// the other without learning a second addressing scheme.
+fn cmd_set_model_voice(request: &DaemonRequest) -> Result<Command, String> {
+    let (source, model) = model_setting_target(request, "set_model_voice")?;
+    let voice = request
+        .data
+        .as_ref()
+        .and_then(|data| data.get("voice"))
+        .and_then(|v| v.as_str())
+        .ok_or("Missing voice for set_model_voice command")?
+        .to_string();
+    Ok(Command::SetModelVoice {
+        source,
+        model,
+        voice,
+    })
+}
+
+fn cmd_get_model_voice(request: &DaemonRequest) -> Result<Command, String> {
+    let (source, model) = model_setting_target(request, "get_model_voice")?;
+    Ok(Command::GetModelVoice { source, model })
+}
+
+fn cmd_clear_model_voice(request: &DaemonRequest) -> Result<Command, String> {
+    let (source, model) = model_setting_target(request, "clear_model_voice")?;
+    Ok(Command::ClearModelVoice { source, model })
+}
+
+fn cmd_list_model_voices(request: &DaemonRequest) -> Result<Command, String> {
+    let (source, model) = model_setting_target(request, "list_model_voices")?;
+    Ok(Command::ListModelVoices { source, model })
 }

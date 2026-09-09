@@ -27,6 +27,7 @@ pub enum Message {
     NotificationMethod(NotificationMethodMessage),
     Backend(BackendMessage),
     Language(LanguageMessage),
+    Voice(VoiceMessage),
     Speech(SpeechMessage),
     Update(UpdateMessage),
     Voices(VoicesMessage),
@@ -429,6 +430,38 @@ pub enum BackendMessage {
         source: String,
         name: String,
     },
+}
+
+/// The active model's voice: which one it speaks in by default.
+///
+/// Separate from [`crate::ui::messages::VoicesPageMessage`], which is the
+/// cloned-voice library — recording, naming and previewing clips. This is the
+/// per-model preference those clips (and the model's own presets) can be
+/// chosen into.
+#[derive(Debug, Clone)]
+pub enum VoiceMessage {
+    /// Resolution block for `(source, model)`, from
+    /// `GET /pipeline/{stage}/model/{model}/voice`.
+    ModelVoiceLoaded {
+        source: String,
+        model: String,
+        block: crate::state::VoiceResolution,
+    },
+    /// The voices `(source, model)` can be pinned to.
+    ///
+    /// A separate message from the block for the same reason the language pair
+    /// is split: choosing a voice rewrites the block and leaves this list as it
+    /// was, so folding the two would blank the picker on every pick.
+    ModelVoicesListed {
+        source: String,
+        model: String,
+        voices: Vec<crate::state::VoiceChoice>,
+    },
+    /// The user picked a voice for the active model, or cleared it back to the
+    /// model's own default (`None`).
+    ModelVoiceSelected(Option<String>),
+    /// A voice request failed; carries what to show.
+    VoiceError(String),
 }
 
 /// Speech language (global Primary Language + per-model override).
