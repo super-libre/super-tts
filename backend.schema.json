@@ -82,47 +82,6 @@
           }
         }
       }
-    },
-    {
-      "if": {
-        "properties": {
-          "backend": {
-            "properties": {
-              "contract": {
-                "const": "v1"
-              }
-            },
-            "required": [
-              "contract"
-            ]
-          }
-        },
-        "required": [
-          "backend"
-        ]
-      },
-      "then": {
-        "properties": {
-          "models": {
-            "items": {
-              "properties": {
-                "files": {
-                  "items": {
-                    "properties": {
-                      "accel": false,
-                      "cuda_major": false,
-                      "cuda_sm": false,
-                      "gfx": false,
-                      "optional": false,
-                      "vulkan_api": false
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
     }
   ],
   "definitions": {
@@ -436,11 +395,6 @@
           "const": "v1",
           "description": "The v1 contract (`docs/protocol/backend/contract.md`).",
           "type": "string"
-        },
-        {
-          "const": "v2",
-          "description": "Adds the per-architecture selector on `[[models.files]]`: `accel`,\n`cuda_major`, `cuda_sm`, `gfx`, `vulkan_api` and `optional`. One\n`destination` may be published as several host-specific variants, and\nthe daemon downloads the one this machine can use — the same question\n`[[assets.subprocess]]` already answers for the executable, asked of\nthe data beside it.\n\nIt is a generation rather than an optional extra because a daemon that\ndoes not know the selector reads the variants as ordinary files and\ndownloads every one of them onto the same path. There is no spelling of\nthis that degrades safely, so the refusal has to come from the\ngeneration.",
-          "type": "string"
         }
       ]
     },
@@ -544,7 +498,7 @@
           "then": true
         }
       ],
-      "description": "One `[[models.files]]` entry: a single file to download and where to put it.\n\nSource-agnostic — a file is just a URL, fetched the same way regardless of\nhost. Hugging Face is reached by writing its plain resolve URL, with no\nspecial treatment.\n\nFrom [`Contract::V2`] an entry may also carry a **host selector** —\n`accel`, `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api` — written in the same\nvocabulary [`SubprocessAsset`] uses for a build. Entries sharing a\n`destination` are then variants of one file: the daemon scores each against\nthe host exactly as it scores build variants, downloads the best match, and\nleaves the rest alone. That is what lets a model publish per-architecture\nweights, or a kernel cache compiled for one GPU, without a separate build of\nthe backend to carry them.\n\nAn entry with no selector matches every host — which is what every entry in\nevery v1 manifest is, and why the selector could be added without changing\nwhat any of them mean.",
+      "description": "One `[[models.files]]` entry: a single file to download and where to put it.\n\nSource-agnostic — a file is just a URL, fetched the same way regardless of\nhost. Hugging Face is reached by writing its plain resolve URL, with no\nspecial treatment.\n\nAn entry may also carry a **host selector** — `accel`, `cuda_major`,\n`cuda_sm`, `gfx`, `vulkan_api` — written in the same vocabulary\n[`SubprocessAsset`] uses for a build. Entries sharing a\n`destination` are then variants of one file: the daemon scores each against\nthe host exactly as it scores build variants, downloads the best match, and\nleaves the rest alone. That is what lets a model publish per-architecture\nweights, or a kernel cache compiled for one GPU, without a separate build of\nthe backend to carry them.\n\nAn entry with no selector matches every host, which is what an entry\ndeclaring only `url` and `destination` is. That is what lets the selector\nsit in v1 rather than needing a generation to gate it: it changes nothing\nabout a manifest that does not use it.",
       "properties": {
         "accel": {
           "oneOf": [
