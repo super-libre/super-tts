@@ -1154,7 +1154,7 @@ mod tests {
             version = "1.0.0"
             kind = "subprocess"
             entrypoint = "y"
-            contract = "v2"
+            contract = "v1"
             description = "Test backend."
 
             [[models]]

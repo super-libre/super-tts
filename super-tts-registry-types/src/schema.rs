@@ -322,37 +322,15 @@ pub fn backend_schema() -> Value {
 /// enforces: fields a later generation introduced are disallowed, and fields
 /// this generation requires are required.
 ///
+/// Empty while v1 is the only generation, for the same reason the table it
+/// reads is: there is nothing for an earlier contract to be held back from.
 ///
 /// A `[[models]]`-style table is an array of objects, so the rule goes on
-/// `items`; a plain table gets it directly. A nested path like `models.files`
-/// repeats that step per segment. `false` as a property schema is what the
-/// other conditionals here use for "not under this condition" (see
+/// `items`; a plain table gets it directly. `false` as a property schema is
+/// what the other conditionals here use for "not under this condition" (see
 /// `cuda_major`), so an editor reports it the same way.
 fn contract_rules() -> Vec<Value> {
-    use crate::manifest::{CONTRACT_FIELDS, Contract, ContractField, FieldRule};
-
-    /// Descend a `then` properties-map to the object schema for `field`'s
-    /// table, creating the levels on the way. Called only from inside a rule
-    /// arm: every index auto-vivifies, and a table touched without a rule to
-    /// add would leave a `null` behind, which is not a subschema.
-    fn table_schema<'a>(then: &'a mut Value, field: &ContractField) -> &'a mut Value {
-        let segments = field.segments();
-        let (last, prefix) = segments.split_last().expect("a table path has a segment");
-        let mut node = then;
-        for (name, is_array) in prefix {
-            node = &mut node[*name];
-            if *is_array {
-                node = &mut node["items"];
-            }
-            node = &mut node["properties"];
-        }
-        node = &mut node[last.0];
-        if last.1 {
-            node = &mut node["items"];
-        }
-        node
-    }
-
+    use crate::manifest::{CONTRACT_FIELDS, Contract, FieldRule};
     Contract::ALL
         .iter()
         .filter_map(|declared| {
@@ -363,12 +341,22 @@ fn contract_rules() -> Vec<Value> {
                 // without a rule to add would emit `{"backend": null}`.
                 match field.rule {
                     FieldRule::Added if field.since > *declared => {
-                        table_schema(&mut then, field)["properties"][field.key] = json!(false);
+                        let table = &mut then[field.table];
+                        if field.is_array_table() {
+                            table["items"]["properties"][field.key] = json!(false);
+                        } else {
+                            table["properties"][field.key] = json!(false);
+                        }
                     }
                     FieldRule::RequiredFrom if *declared >= field.since => {
+                        let table = &mut then[field.table];
                         // `required` is a list, so push rather than assign —
                         // one generation may require several fields of a table.
-                        let required = &mut table_schema(&mut then, field)["required"];
+                        let required = if field.is_array_table() {
+                            &mut table["items"]["required"]
+                        } else {
+                            &mut table["required"]
+                        };
                         if !required.is_array() {
                             *required = json!([]);
                         }
