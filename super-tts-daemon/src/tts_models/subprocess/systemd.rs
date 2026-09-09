@@ -75,6 +75,62 @@ pub async fn cleanup_orphan_units() {
     }
 }
 
+/// Stop a unit of this name, if one is still around, and wait for systemd to
+/// forget it.
+///
+/// `systemd-run --unit=<name>` refuses outright when a unit of that name is
+/// already loaded — "Unit ... was already loaded or has a fragment file" — and
+/// the name is derived from the daemon's pid and the model, so every attempt
+/// at one model within one daemon asks for the same name. A load that is
+/// retried while the previous backend is still up therefore cannot spawn at
+/// all, and by then the retry has already deleted the live backend's socket:
+/// the model is unloadable until the daemon itself is restarted. That is the
+/// state a user reaches by clicking Load twice on a model whose first load is
+/// slow, which a backend that compiles its kernels at runtime frequently is.
+///
+/// Failures are logged rather than propagated. Every one of them means the
+/// unit is not running, which is what the caller wanted.
+pub(super) async fn stop_stale_unit(unit: &str) {
+    let stopped = tokio::process::Command::new("systemctl")
+        .args(["--user", "stop", unit])
+        .status()
+        .await;
+    match stopped {
+        Ok(s) if s.success() => info!("stopped a stale {unit} before relaunching it"),
+        Ok(_) => return, // Nothing of that name was running.
+        Err(e) => {
+            warn!("could not stop a stale {unit}: {e}");
+            return;
+        }
+    }
+    // A failed unit lingers under its name until it is reset, and `stop`
+    // returns before systemd has finished tearing the unit down. `--collect`
+    // often has the unit gone already, and systemctl says so on stderr; that
+    // is the expected case here, not something to print at a user.
+    let _ = tokio::process::Command::new("systemctl")
+        .args(["--user", "reset-failed", unit])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let load_state = tokio::process::Command::new("systemctl")
+            .args(["--user", "show", "-p", "LoadState", "--value", unit])
+            .output()
+            .await;
+        match load_state {
+            Ok(out) if String::from_utf8_lossy(&out.stdout).trim() == "not-found" => return,
+            Ok(_) => {}
+            Err(e) => {
+                warn!("could not read the state of {unit}: {e}");
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    warn!("{unit} is still loaded after being stopped; the spawn may be refused");
+}
+
 /// Spawn the backend binary in a hardened `systemd-run --user` transient unit.
 ///
 /// `devices` is the model's declared `supported_devices`; it decides whether
@@ -100,7 +156,12 @@ pub(super) async fn spawn_systemd_unit(
         .arg("--quiet")
         // Garbage-collect the transient unit when it exits/fails.
         .arg("--collect");
-    for param in hardening_params(backend_dir, socket_dir, cache_dir, needs_gpu_access(devices)) {
+    for param in hardening_params(
+        backend_dir,
+        socket_dir,
+        cache_dir,
+        needs_gpu_access(devices),
+    ) {
         cmd.arg("-p").arg(param);
     }
     cmd.arg(format!(
@@ -253,6 +314,7 @@ fn hardening_params(
 mod tests {
     use super::{
         Device, FALLBACK_RENDER_NODE, gpu_device_nodes_in, hardening_params, needs_gpu_access,
+        stop_stale_unit,
     };
     use std::path::{Path, PathBuf};
 
@@ -266,7 +328,12 @@ mod tests {
     /// nothing. `sandbox_is_enforced` proves the denial end-to-end.
     #[test]
     fn a_cpu_only_model_gets_no_gpu_device_nodes() {
-        let params = hardening_params(Path::new("/backend"), Path::new("/sock"), Path::new("/cache"), false);
+        let params = hardening_params(
+            Path::new("/backend"),
+            Path::new("/sock"),
+            Path::new("/cache"),
+            false,
+        );
         assert!(
             params.iter().any(|p| p == "PrivateDevices=yes"),
             "cpu-only unit has no enforceable device restriction: {params:?}"
@@ -283,7 +350,12 @@ mod tests {
     /// rather than as a permission problem.
     #[test]
     fn a_gpu_backend_gets_the_nodes_every_runtime_needs() {
-        let params = hardening_params(Path::new("/backend"), Path::new("/sock"), Path::new("/cache"), true);
+        let params = hardening_params(
+            Path::new("/backend"),
+            Path::new("/sock"),
+            Path::new("/cache"),
+            true,
+        );
         assert!(!params.iter().any(|p| p == "PrivateDevices=yes"));
         for node in [
             "DeviceAllow=/dev/nvidia0 rw",
@@ -406,6 +478,56 @@ mod tests {
     /// also the proof that its `ReadWritePaths` beats `ProtectHome=read-only`
     /// rather than being shadowed by it.
     ///
+    /// A unit name can be reused once the unit holding it has been stopped.
+    ///
+    /// The name a backend spawns under is fixed by the model and the daemon's
+    /// pid, so relaunching a model asks systemd for a name it may still be
+    /// holding — and `systemd-run` refuses rather than replacing it. This is
+    /// the whole of that failure and its repair, in the order the spawn path
+    /// performs them.
+    ///
+    /// Requires a systemd user session; gated behind `SUPER_TTS_TEST_SANDBOX=1`.
+    #[tokio::test]
+    async fn a_unit_name_is_reusable_after_its_unit_is_stopped() {
+        if std::env::var("SUPER_TTS_TEST_SANDBOX").is_err() {
+            return;
+        }
+        let unit = format!("super-tts-backend-relaunch-{}", std::process::id());
+        let spawn = || async {
+            tokio::process::Command::new("systemd-run")
+                .args([
+                    "--user",
+                    &format!("--unit={unit}"),
+                    "--quiet",
+                    "--collect",
+                    "sleep",
+                    "300",
+                ])
+                .output()
+                .await
+                .expect("systemd-run must run")
+        };
+
+        assert!(spawn().await.status.success(), "the first spawn must work");
+        let refused = spawn().await;
+        assert!(
+            !refused.status.success()
+                && String::from_utf8_lossy(&refused.stderr).contains("already loaded"),
+            "a second spawn under the same name must be refused: {refused:?}"
+        );
+
+        stop_stale_unit(&unit).await;
+        let after = spawn().await;
+        let ok = after.status.success();
+        // Stop it before asserting, so a failure here does not leave a unit
+        // running for the next test to trip over.
+        stop_stale_unit(&unit).await;
+        assert!(
+            ok,
+            "the name must be free once the unit is stopped: {after:?}"
+        );
+    }
+
     /// Requires a systemd user session; gated behind `SUPER_TTS_TEST_SANDBOX=1`.
     #[tokio::test]
     async fn sandbox_is_enforced() {

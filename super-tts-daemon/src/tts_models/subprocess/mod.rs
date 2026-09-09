@@ -139,7 +139,6 @@ impl SubprocessBackend {
             .parent()
             .context("backend socket path has no parent directory")?;
         std::fs::create_dir_all(socket_dir)?;
-        let _ = std::fs::remove_file(&socket);
 
         let binary = backend_dir.join(&manifest.backend.entrypoint);
         anyhow::ensure!(
@@ -160,6 +159,15 @@ impl SubprocessBackend {
             sanitize(model_name),
             std::process::id()
         );
+
+        // Both of these are about relaunching a model this daemon has already
+        // started once: the unit name would collide, and the socket below is
+        // the live backend's until its unit is gone. Removing the socket first
+        // — which is what this did — strands the caller when the spawn is then
+        // refused, because the old backend is still serving a path nothing can
+        // reach any more.
+        systemd::stop_stale_unit(&unit).await;
+        let _ = std::fs::remove_file(&socket);
 
         systemd::spawn_systemd_unit(
             &unit,

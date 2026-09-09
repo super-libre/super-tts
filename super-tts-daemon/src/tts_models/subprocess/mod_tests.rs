@@ -124,7 +124,10 @@ fn each_backend_gets_its_own_cache_dir() {
     let qwen = backend_cache_dir(&root.join("app.super-tts.qwen-tts")).expect("named dir");
     let kokoro = backend_cache_dir(&root.join("app.super-tts.kokoro")).expect("named dir");
     assert_ne!(qwen, kokoro);
-    assert!(qwen.ends_with("backends/app-super-tts-qwen-tts"), "{qwen:?}");
+    assert!(
+        qwen.ends_with("backends/app-super-tts-qwen-tts"),
+        "{qwen:?}"
+    );
     assert!(qwen.starts_with(super_tts_shared::paths::cache_dir()));
 }
 
