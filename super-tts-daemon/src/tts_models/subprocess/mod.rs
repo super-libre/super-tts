@@ -73,8 +73,12 @@ impl SubprocessBackend {
     /// files are downloaded into `<backend_dir>/<dest>`. `device_pref` is the
     /// resolved accelerator (`"cpu"`, `"cuda"`, `"rocm"`, `"metal"`,
     /// `"vulkan"`), or empty when none resolved, which leaves the backend to
-    /// select for itself. `context_headers` are the already-formed
-    /// `x-tts-secret-*` / `x-tts-option-*` pairs to inject on every request.
+    /// select for itself. `host` is what the machine's GPUs actually are, and
+    /// decides which variant of a per-architecture model file is fetched —
+    /// deliberately not `device_pref`, so choosing CPU on a CUDA machine does
+    /// not discard the CUDA files already on disk. `context_headers` are the
+    /// already-formed `x-tts-secret-*` / `x-tts-option-*` pairs to inject on
+    /// every request.
     ///
     /// # Errors
     /// Returns an error if provisioning, spawning, or loading fails.
@@ -82,6 +86,7 @@ impl SubprocessBackend {
         backend_dir: &Path,
         model_name: &str,
         device_pref: &str,
+        host: &crate::registry::host_detect::Host,
         tracker: Option<&Arc<crate::download_progress::DownloadProgressTracker>>,
         context_headers: Vec<(String, String)>,
     ) -> Result<Self> {
@@ -99,8 +104,17 @@ impl SubprocessBackend {
         // real time. Each file carries its own URL and destination; `parse`
         // already validated every `destination` as a safe relative path, so the
         // join below cannot escape the backend dir.
-        let items: Vec<_> = model
-            .files
+        //
+        // Entries sharing a destination are per-architecture variants of one
+        // file, so the list is resolved against the host first: exactly one
+        // variant per destination is fetched, and a manifest that declares no
+        // selector — every v1 manifest — comes back as the files it wrote.
+        // `instantiate_subprocess` resolves the same list to size the progress
+        // card, and both go through this one function so the count and the
+        // downloads cannot disagree.
+        let selected = crate::registry::compat::select_files(host, model)
+            .map_err(|reason| anyhow!("provisioning {model_name}: {reason}"))?;
+        let items: Vec<_> = selected
             .iter()
             .map(|spec| crate::tts_models::download::DownloadItem {
                 url: spec.url.clone(),

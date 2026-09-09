@@ -103,12 +103,15 @@ the lowest generation whose fields you use.
 | Generation | Covers                                                                                                                                             | First supported by |
 |------------|------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
 | `v1`       | The contract as this document describes it: discovery from `backend.toml`, `POST /v1/load`, `POST /v1/synthesize`, `POST /v1/cancel`, and the cloned-voice registration routes for models that declare them. | Super TTS 0.1.0    |
+| `v2`       | Adds the [per-architecture selector](#per-architecture-variants) on `[[models.files]]` — `accel`, `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api`, `optional` — so one `destination` may be published as several host-specific variants. No route changes. | Super TTS 0.2.0    |
 
-`v1` is currently the only generation, so every manifest declares it and there
-is no second row to choose between. The machinery below is described anyway,
-because its whole value is that it is already in place: it is what will let a
-`v2` be introduced without every Super TTS released before it having to be
-taught something first.
+Declare `v1` unless you write a file selector. `v2` is a generation rather than
+an optional extra because that selector has no safe reading for a daemon that
+does not know it: the variants of one destination look like ordinary files, so
+such a daemon would download every one of them onto the same path and serve
+whichever landed last. There is no spelling of it that degrades quietly, so the
+refusal has to come from the generation — and it comes with no field anyone had
+to add first, which is the machinery below.
 
 Extending the contract does not oblige a backend to serve all of it. Which
 routes a backend must implement is decided by the models it declares, not by
@@ -667,11 +670,69 @@ destination = "models/kokoro-82m/config.json"
 | Field         | Type   | Required | Notes                                                                |
 |---------------|--------|----------|---------------------------------------------------------------------|
 | `url`         | string | yes      | Full download URL for the file. Any host.                            |
-| `destination` | string | yes      | Relative file path (including filename) under the backend directory. |
+| `destination` | string | yes      | Relative file path (including filename) under the backend directory. Also the variant key — see below. |
 | `sha256`      | string | no       | Expected SHA-256, hex-encoded; verified after download.              |
 
 `destination` must be a relative path that stays inside the backend directory:
 absolute paths, `..` traversal, and backslashes are rejected.
+
+#### Per-architecture variants
+
+From [`contract = "v2"`](#contract-generations) an entry may also carry a
+**host selector**, written in the same vocabulary
+[`[[assets.subprocess]]`](#assets) uses for a build. Entries sharing a
+`destination` are then variants of one file: the daemon scores each against the
+machine, downloads the best match, and leaves the rest alone. The backend reads
+a fixed path and never learns which variant it got.
+
+| Field        | Type            | Notes                                                                                      |
+|--------------|-----------------|--------------------------------------------------------------------------------------------|
+| `accel`      | string or array | Acceleration families this variant is for. Absent — the default — matches every host.        |
+| `cuda_major` | integer         | Matches a host whose installed CUDA runtime is at least this. Requires `cuda` in `accel`.    |
+| `cuda_sm`    | integer         | Compute capability this variant is built for, e.g. `90`. Requires `cuda`.                    |
+| `gfx`        | array of string | AMD architecture targets, in `--offload-arch` spelling. Requires `rocm`.                     |
+| `vulkan_api` | string          | Minimum Vulkan API version, e.g. `1.3`. Requires `vulkan`.                                   |
+| `optional`   | bool            | Whether the model can load without this destination. Default `false`. Must agree across the variants of one destination. |
+
+Every field of a file's selector is optional, which is the one place this
+vocabulary is looser than an asset's. An asset has to *run* on the host, so it
+must name `cuda_major` alongside `cuda` and a `gfx` target alongside `rocm`; a
+file is data whose meaning belongs to the backend, so `accel = "cuda"` on its
+own is a legitimate "for any CUDA host". Naming a narrower variant as well is
+how you get both.
+
+```toml
+# Kernels precompiled for one card, with a wildcard CUDA build behind it and
+# nothing at all for anyone else.
+[[models.files]]
+url         = "https://example.invalid/kernels-sm90.bin"
+destination = "cache/kernels.bin"
+accel       = "cuda"
+cuda_sm     = 90
+optional    = true
+
+[[models.files]]
+url         = "https://example.invalid/kernels-cuda.bin"
+destination = "cache/kernels.bin"
+accel       = "cuda"
+optional    = true
+```
+
+**How a variant is chosen.** Host capability decides, never the user's device
+preference — what is on disk must not change when the user toggles between CPU
+and GPU. Candidates are ranked by accel family first (a native runtime over
+Vulkan over `cpu` over an entry with no selector at all), then by that family's
+own discriminators, where an exact `cuda_sm` or `gfx` beats a variant that
+matched only the family. Ties go to the first declared, so declaration order is
+your preference order. It is the same ranking that picks a build, applied to the
+data beside it.
+
+**When nothing matches.** A destination whose variants all miss the host is a
+hole, and `optional` says which kind. Weights are load-bearing, so the default
+(`false`) fails the load, naming what the host offered and what the variants
+wanted — better than a backend erroring on a file it was never handed. A
+pre-warmed kernel cache is not: `optional = true` skips the destination, and the
+model loads without it and rebuilds what it needs.
 
 ## Example: local backend (subprocess)
 

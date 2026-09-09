@@ -9,6 +9,7 @@
 //!        --features test-fixtures --test `subprocess_mock` -- --nocapture
 #![cfg(all(feature = "subprocess-backends", feature = "test-fixtures"))]
 
+use super_tts_daemon::registry::host_detect;
 use super_tts_daemon::tts_models::subprocess::SubprocessBackend;
 use super_tts_daemon::tts_models::synthesize::Synthesize;
 use super_tts_daemon::tts_models::v1::{CollectingSink, SynthesizeRequest};
@@ -87,7 +88,11 @@ async fn subprocess_orchestration_against_mock() {
     let (dir, _cleanup) = seed_backend_dir("orchestration");
 
     // Spawn + load via the real daemon orchestration.
-    let mut backend = SubprocessBackend::spawn(&dir, "mock", "cpu", None, Vec::new())
+    // The real probe: the mock declares no `[[models.files]]` at all, so
+    // selection has nothing to resolve, but `spawn` takes the host the daemon
+    // hands it and the test should exercise the same call.
+    let host = host_detect::detect();
+    let mut backend = SubprocessBackend::spawn(&dir, "mock", "cpu", &host, None, Vec::new())
         .await
         .expect("spawn + load mock backend");
 
@@ -164,7 +169,8 @@ async fn option_headers_reach_the_subprocess() {
             "A hoarse pirate".to_string(),
         ),
     ];
-    let mut backend = SubprocessBackend::spawn(&dir, "mock-options", "cpu", None, headers)
+    let host = host_detect::detect();
+    let mut backend = SubprocessBackend::spawn(&dir, "mock-options", "cpu", &host, None, headers)
         .await
         .expect("spawn + load mock backend");
 
