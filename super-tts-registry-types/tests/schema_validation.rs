@@ -237,6 +237,63 @@ fn rejects_contract_violations() {
     }
 }
 
+/// The v2 file selector is refused below its generation, and its
+/// forbidden-without-its-family rule holds within it.
+///
+/// Its own test because the rule lives two array levels down (`models` ->
+/// `files`), which is the nesting the schema builder had to learn to emit;
+/// without it the rule attaches to a property named `"models.files"` and
+/// matches nothing, silently.
+#[test]
+fn the_schema_gates_the_file_selector_on_its_generation() {
+    // `sub_base` with one model carrying `files`, at the given contract.
+    fn with_file(contract: &str, file: &Value) -> Value {
+        let mut d = sub_base();
+        d["backend"]["contract"] = json!(contract);
+        d["models"] = json!([{ "name": "m",
+            "primary_language": "en", "supported_languages": ["en"],
+            "supported_devices": ["cpu", "gpu"],
+            "files": [file] }]);
+        d
+    }
+
+    let v = backend_validator();
+    let plain = json!({ "url": "https://example.com/k.bin", "destination": "c/k.bin" });
+    let selector = json!({ "url": "https://example.com/k.bin",
+                           "destination": "c/k.bin", "accel": "cuda" });
+
+    assert!(
+        v.is_valid(&with_file("v1", &plain)),
+        "a plain file is what every v1 manifest declares"
+    );
+    let cases: Vec<(&str, Value)> = vec![
+        ("accel under v1", with_file("v1", &selector)),
+        (
+            "optional under v1",
+            with_file(
+                "v1",
+                &json!({ "url": "https://example.com/k.bin",
+                         "destination": "c/k.bin", "optional": true }),
+            ),
+        ),
+        (
+            "cuda_sm on a cpu variant",
+            with_file(
+                "v2",
+                &json!({ "url": "https://example.com/k.bin", "destination": "c/k.bin",
+                         "accel": "cpu", "cuda_sm": 90 }),
+            ),
+        ),
+    ];
+    for (label, doc) in cases {
+        assert!(!v.is_valid(&doc), "{label}: should have failed validation");
+    }
+    assert!(
+        v.is_valid(&with_file("v2", &selector)),
+        "the same selector must validate under the generation that has it"
+    );
+}
+
 /// The `base_url` rule is narrow: the option may be declared, and every other
 /// option keeps its `default`. Without this the conditional could be widened to
 /// ban defaults outright and the rejection case above would still pass.
@@ -523,6 +580,24 @@ fn allows_documented_optionals() {
     let mut other = wasm_base();
     other["backend"]["license"] = json!("other");
     assert!(v.is_valid(&other), "license = \"other\" must validate");
+    // The same selector, under the generation that has it. Paired with the
+    // v1 rejection above so the rule is pinned as gating on the generation,
+    // not as banning the field outright.
+    let mut v2_variants = sub_base();
+    v2_variants["backend"]["contract"] = json!("v2");
+    v2_variants["models"] = json!([{ "name": "m",
+        "primary_language": "en", "supported_languages": ["en"],
+        "supported_devices": ["cpu", "gpu"],
+        "files": [
+            { "url": "https://example.com/k-sm90.bin", "destination": "c/k.bin",
+              "accel": "cuda", "cuda_sm": 90, "optional": true },
+            { "url": "https://example.com/k-rocm.bin", "destination": "c/k.bin",
+              "accel": ["rocm"], "gfx": ["gfx1100"], "optional": true }
+        ] }]);
+    assert!(
+        v.is_valid(&v2_variants),
+        "per-architecture file variants must validate under contract v2"
+    );
     // cuda_major without cuda_sm — the wildcard-SM build.
     let mut wildcard = sub_base();
     wildcard["assets"]["subprocess"] = json!([

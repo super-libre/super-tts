@@ -88,7 +88,9 @@ described never receives these calls and need not implement them.
 The manifest's [`contract`](./config.md#contract-generations) names a
 *generation* of this agreement — which fields a `backend.toml` may declare and
 which routes exist to be served. Each generation extends the one before it.
-`v1` is the only generation so far, and it is everything on this page.
+`v1` is everything on this page. `v2` adds only manifest fields — the
+[per-architecture file selector](./config.md#per-architecture-variants) — and
+leaves every route here untouched.
 
 A generation does not oblige a backend to serve all of it. What a backend must
 implement follows from the models it declares, not from the generation it

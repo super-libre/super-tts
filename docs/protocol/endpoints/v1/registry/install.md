@@ -90,7 +90,9 @@ being named like a build one. Each skip is logged.
 
 Model files are not part of either copy. The daemon downloads each
 [`[[models.files]]`](../../../backend/config.md#modelsfiles) entry into its
-`destination` at load time.
+`destination` at load time — one file per destination, since entries sharing a
+destination are [per-architecture variants](../../../backend/config.md#per-architecture-variants)
+of which this machine takes at most one.
 
 The directory must already contain the file `[backend].entrypoint` names — the
 `.wasm` component or the executable. A registry release ships it built and

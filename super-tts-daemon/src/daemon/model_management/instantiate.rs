@@ -34,8 +34,14 @@ impl SuperTTSDaemon {
         let instance: Box<dyn Synthesize> = match backend.kind.as_str() {
             "wasm" => self.instantiate_wasm(&backend, &def).await?,
             "subprocess" => {
-                let resolved = resolve_device_for_backend(device_pref, &backend.dir).await;
-                self.instantiate_subprocess(&backend, name, &resolved)
+                // One probe for the two questions this load asks of the
+                // machine: which accelerator the installed asset resolves to,
+                // and which per-architecture model files to download.
+                let host = tokio::task::spawn_blocking(crate::registry::host_detect::detect)
+                    .await
+                    .ok();
+                let resolved = resolve_device_for_backend(device_pref, &backend.dir, host.as_ref());
+                self.instantiate_subprocess(&backend, name, &resolved, host)
                     .await?
             }
             other => bail!("backend {} declares unknown kind '{other}'", backend.source),
@@ -105,6 +111,7 @@ impl SuperTTSDaemon {
         backend: &DiscoveredBackend,
         name: &str,
         device_pref: &str,
+        host: Option<Host>,
     ) -> Result<Box<dyn Synthesize>> {
         // The same secret/option headers the WASM transport is handed: a
         // subprocess backend reads its `[[options]]` off the request too.
@@ -113,16 +120,32 @@ impl SuperTTSDaemon {
         let overrides = self.backend_option_overrides(backend).await?;
         let headers = self.backend_headers(backend, &overrides).await?;
 
+        // A failed probe is not a reason to download nothing: a machine with
+        // no accelerator is exactly what an unprobeable one looks like from
+        // here, so unconditional and `cpu` variants still resolve, and a
+        // destination that has only GPU variants fails with a reason naming
+        // the empty probe rather than silently fetching a file this host
+        // cannot use.
+        let host = host.unwrap_or_else(|| Host {
+            target_triple: String::new(),
+            cuda: None,
+            rocm: None,
+            vulkan: None,
+        });
+
         // Count the files we'll provision so the tracker's denominator is
         // accurate from the first broadcast. Each `[[models.files]]` entry is
-        // one file. Empty-files models (cloud-only) skip the tracker entirely —
-        // there is nothing to download.
+        // one file, less the per-architecture variants this host does not take
+        // — `SubprocessBackend::spawn` resolves the same list the same way, so
+        // the card counts exactly what arrives. Empty-files models (cloud-only)
+        // skip the tracker entirely: there is nothing to download.
         let manifest = crate::tts_models::backends::manifest::Manifest::load(&backend.dir)?;
-        let total_files = manifest
-            .models
-            .iter()
-            .find(|m| m.name == name)
-            .map_or(0, |m| m.files.len());
+        let total_files = match manifest.models.iter().find(|m| m.name == name) {
+            Some(model) => crate::registry::compat::select_files(&host, model)
+                .map_err(|reason| anyhow!("provisioning {name}: {reason}"))?
+                .len(),
+            None => 0,
+        };
 
         let tracker = if total_files == 0 {
             None
@@ -157,6 +180,7 @@ impl SuperTTSDaemon {
             &backend.dir,
             name,
             device_pref,
+            &host,
             tracker.as_ref(),
             headers,
         )
@@ -183,6 +207,7 @@ impl SuperTTSDaemon {
         backend: &DiscoveredBackend,
         _name: &str,
         _device_pref: &str,
+        _host: Option<Host>,
     ) -> Result<Box<dyn Synthesize>> {
         bail!(
             "backend {} is a subprocess backend, unsupported in this build (rebuild with --features subprocess-backends)",
@@ -358,16 +383,18 @@ impl SuperTTSDaemon {
 /// record for the asset's declared accel list, and the host's detected
 /// capability — a dual-runtime asset resolves by which the *host* can run,
 /// not by which entry the asset lists first.
-async fn resolve_device_for_backend(device_pref: &str, backend_dir: &std::path::Path) -> String {
+///
+/// `host` is `None` when detection itself failed, which degrades `resolve_accel`
+/// to its list-order fallback rather than blocking the load.
+fn resolve_device_for_backend(
+    device_pref: &str,
+    backend_dir: &std::path::Path,
+    host: Option<&Host>,
+) -> String {
     let installed_accel = installed::read(backend_dir)
         .map(|r| r.selected.accel)
         .unwrap_or_default();
-    // Best-effort: detection failure degrades `resolve_accel` to its
-    // list-order fallback rather than blocking the load.
-    let host = tokio::task::spawn_blocking(crate::registry::host_detect::detect)
-        .await
-        .ok();
-    resolve_accel(device_pref, &installed_accel, host.as_ref())
+    resolve_accel(device_pref, &installed_accel, host)
 }
 
 /// Turn the user's `cpu`/`gpu` preference into the accelerator the backend is

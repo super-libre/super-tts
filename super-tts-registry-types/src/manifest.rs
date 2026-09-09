@@ -136,15 +136,28 @@ impl fmt::Display for Kind {
 pub enum Contract {
     /// The v1 contract (`docs/protocol/backend/contract.md`).
     V1,
+    /// Adds the per-architecture selector on `[[models.files]]`: `accel`,
+    /// `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api` and `optional`. One
+    /// `destination` may be published as several host-specific variants, and
+    /// the daemon downloads the one this machine can use — the same question
+    /// `[[assets.subprocess]]` already answers for the executable, asked of
+    /// the data beside it.
+    ///
+    /// It is a generation rather than an optional extra because a daemon that
+    /// does not know the selector reads the variants as ordinary files and
+    /// downloads every one of them onto the same path. There is no spelling of
+    /// this that degrades safely, so the refusal has to come from the
+    /// generation.
+    V2,
 }
 
 impl Contract {
     /// The newest generation this crate understands. A manifest may not
     /// declare anything above it, because the closed enum refuses to parse it.
-    pub const LATEST: Self = Self::V1;
+    pub const LATEST: Self = Self::V2;
 
     /// Every generation, oldest first.
-    pub const ALL: &'static [Self] = &[Self::V1];
+    pub const ALL: &'static [Self] = &[Self::V1, Self::V2];
 
     /// The generation immediately before this one; `None` for the first.
     #[must_use]
@@ -179,6 +192,7 @@ impl Contract {
             // The manifest and its `[backend].contract` field both date from
             // the first Super TTS release; there is no earlier daemon to gate.
             Self::V1 => "0.1.0",
+            Self::V2 => "0.2.0",
         }
     }
 }
@@ -187,6 +201,7 @@ impl fmt::Display for Contract {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::V1 => write!(f, "v1"),
+            Self::V2 => write!(f, "v2"),
         }
     }
 }
@@ -251,8 +266,12 @@ pub struct ContractField {
     pub since: Contract,
     /// Which rule this row expresses.
     pub rule: FieldRule,
-    /// The top-level table the field lives in: `backend` for `[backend]`,
-    /// `models` for each `[[models]]` entry, and so on.
+    /// The table the field lives in, as a dotted path: `backend` for
+    /// `[backend]`, `models` for each `[[models]]` entry, `models.files` for
+    /// each `[[models.files]]` entry under one, and so on. Every segment must
+    /// appear in [`ARRAY_TABLES`] if it is an array of tables, because the
+    /// raw-document walk and the schema builder both decide at each step
+    /// whether to descend into an array or a plain table.
     pub table: &'static str,
     /// The field's key within that table.
     pub key: &'static str,
@@ -275,12 +294,33 @@ impl ContractField {
     ///
     /// The single answer for every consumer: the manifest spelling above, the
     /// raw-document audit, and the schema rule (which must attach to `items`
-    /// for an array). Adding a row for a table not listed here fails the
-    /// schema's own test rather than silently generating a rule that matches
-    /// nothing.
+    /// for an array). Adding a row for a table not listed in [`ARRAY_TABLES`]
+    /// fails the schema's own test rather than silently generating a rule that
+    /// matches nothing.
     #[must_use]
     pub fn is_array_table(&self) -> bool {
-        matches!(self.table, "models" | "secrets" | "options")
+        ARRAY_TABLES.contains(&self.table)
+    }
+
+    /// The path's segments, outermost first, each paired with whether that
+    /// segment is an array of tables.
+    ///
+    /// `models.files` walks `("models", true)` then `("files", true)`: the
+    /// consumer descends into every `[[models]]` entry, then into every
+    /// `[[models.files]]` entry under it. A single-segment path yields one
+    /// pair and behaves exactly as it did before nesting existed.
+    #[must_use]
+    pub fn segments(&self) -> Vec<(&'static str, bool)> {
+        let mut out = Vec::new();
+        let mut end = 0;
+        for segment in self.table.split('.') {
+            // `end` walks the original string so each level can be looked up
+            // whole: `models`, then `models.files`. The `+ 1` is the separator,
+            // which every segment but the first is preceded by.
+            end += segment.len() + usize::from(end != 0);
+            out.push((segment, ARRAY_TABLES.contains(&&self.table[..end])));
+        }
+        out
     }
 
     /// The name of this table's type in the generated JSON schema, or `None`
@@ -290,6 +330,7 @@ impl ContractField {
         match self.table {
             "backend" => Some("BackendMeta"),
             "models" => Some("ModelEntry"),
+            "models.files" => Some("FileSpec"),
             "secrets" => Some("Secret"),
             "options" => Some("Opt"),
             _ => None,
@@ -297,11 +338,17 @@ impl ContractField {
     }
 }
 
+/// Every manifest table spelled as an array of tables (`[[models]]`), by its
+/// dotted path.
+///
+/// A nested table lists each of its own prefixes, not just its full path:
+/// walking `models.files` has to know that `models` is an array before it can
+/// look inside one, and the schema builder has to emit an `items` level for it.
+const ARRAY_TABLES: &[&str] = &["models", "models.files", "secrets", "options"];
+
 /// Every field rule a generation after v1 introduces.
 ///
-/// Empty while v1 is the only generation: there is no earlier contract for a
-/// field to be withheld from. It is the extension point rather than dead
-/// weight — adding a field to a v2 means adding a row here, and both
+/// Adding a field to a new generation means adding a row here, and both
 /// [`Manifest::parse`] and the published JSON Schema learn the rule from it
 /// without being taught separately.
 ///
@@ -309,7 +356,48 @@ impl ContractField {
 /// set instead — a new `VoiceKind`, a new `Device` — cannot be expressed here,
 /// and a manifest using such a value under an older `contract` is caught by
 /// that field's own `FromStr` rather than by this table.
-pub const CONTRACT_FIELDS: &[ContractField] = &[];
+pub const CONTRACT_FIELDS: &[ContractField] = &[
+    // v2's per-architecture file selector. One row per key: `contract = "v1"`
+    // has no `[[models.files]]` selector at all, so writing any of them under
+    // it is refused rather than honored by a daemon whose peers would ignore
+    // it.
+    ContractField {
+        since: Contract::V2,
+        rule: FieldRule::Added,
+        table: "models.files",
+        key: "accel",
+    },
+    ContractField {
+        since: Contract::V2,
+        rule: FieldRule::Added,
+        table: "models.files",
+        key: "cuda_major",
+    },
+    ContractField {
+        since: Contract::V2,
+        rule: FieldRule::Added,
+        table: "models.files",
+        key: "cuda_sm",
+    },
+    ContractField {
+        since: Contract::V2,
+        rule: FieldRule::Added,
+        table: "models.files",
+        key: "gfx",
+    },
+    ContractField {
+        since: Contract::V2,
+        rule: FieldRule::Added,
+        table: "models.files",
+        key: "vulkan_api",
+    },
+    ContractField {
+        since: Contract::V2,
+        rule: FieldRule::Added,
+        table: "models.files",
+        key: "optional",
+    },
+];
 
 /// `[network]` — outbound network policy.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -385,7 +473,7 @@ pub struct SubprocessAsset {
     /// and read as a one-element list, which is what every published manifest
     /// uses; an array declares a binary carrying several runtimes, and the
     /// daemon tells it at load time which one to use. Must be non-empty.
-    #[serde(deserialize_with = "one_or_many_accel")]
+    #[serde(deserialize_with = "one_or_many")]
     pub accel: Vec<Accel>,
     /// CUDA major version this build targets. Required when `accel` contains
     /// `cuda`, forbidden otherwise.
@@ -419,20 +507,24 @@ pub struct SubprocessAsset {
     pub vulkan_api: Option<crate::arch::VulkanApi>,
 }
 
-/// Accept `accel = "cuda"` as well as `accel = ["cuda", "rocm"]`.
+/// Accept a bare value as well as a list of them: `accel = "cuda"` alongside
+/// `accel = ["cuda", "rocm"]`, `cuda_sm = 90` alongside `cuda_sm = [86, 90]`.
 ///
-/// Every manifest published so far uses the scalar form, and `backend.toml` is
-/// a pinned release asset the daemon re-reads on every scan, so the scalar has
-/// to keep parsing indefinitely.
-fn one_or_many_accel<'de, D>(d: D) -> Result<Vec<Accel>, D::Error>
+/// Every manifest published so far uses the scalar form for `accel`, and
+/// `backend.toml` is a pinned release asset the daemon re-reads on every scan,
+/// so the scalar has to keep parsing indefinitely. A field written this way can
+/// also *become* a list after the fact without a new generation, which is what
+/// makes the one-value spelling safe to offer at all.
+fn one_or_many<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum OneOrMany {
-        One(Accel),
-        Many(Vec<Accel>),
+    enum OneOrMany<T> {
+        One(T),
+        Many(Vec<T>),
     }
     Ok(match OneOrMany::deserialize(d)? {
         OneOrMany::One(a) => vec![a],
@@ -840,6 +932,19 @@ impl VoiceEntry {
 /// Source-agnostic — a file is just a URL, fetched the same way regardless of
 /// host. Hugging Face is reached by writing its plain resolve URL, with no
 /// special treatment.
+///
+/// From [`Contract::V2`] an entry may also carry a **host selector** —
+/// `accel`, `cuda_major`, `cuda_sm`, `gfx`, `vulkan_api` — written in the same
+/// vocabulary [`SubprocessAsset`] uses for a build. Entries sharing a
+/// `destination` are then variants of one file: the daemon scores each against
+/// the host exactly as it scores build variants, downloads the best match, and
+/// leaves the rest alone. That is what lets a model publish per-architecture
+/// weights, or a kernel cache compiled for one GPU, without a separate build of
+/// the backend to carry them.
+///
+/// An entry with no selector matches every host — which is what every entry in
+/// every v1 manifest is, and why the selector could be added without changing
+/// what any of them mean.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FileSpec {
@@ -849,10 +954,78 @@ pub struct FileSpec {
     /// Relative file path (including filename) under the backend directory to
     /// write the download to, e.g. `models/kokoro-tiny/config.json`.
     /// Validated as a safe relative path so it cannot escape the backend dir.
+    ///
+    /// Also the variant key: every entry writing to one `destination` is a
+    /// candidate for it, and exactly one of them is downloaded. The backend
+    /// therefore reads a fixed path and never learns which variant it got.
     pub destination: String,
     /// Expected SHA-256 of the file, hex-encoded, for integrity verification.
     #[serde(default)]
     pub sha256: Option<String>,
+    /// Acceleration families this variant is for. Empty — the default — is an
+    /// unconditional file that matches every host.
+    ///
+    /// Every field of a file's selector is optional, which is the one place
+    /// this vocabulary is looser than an asset's. An asset has to *run* on the
+    /// host, so `[[assets.subprocess]]` requires `cuda_major` alongside `cuda`
+    /// and `gfx` alongside `rocm`; a file is data whose meaning belongs to the
+    /// backend, so `accel = "cuda"` on its own is a legitimate "for any CUDA
+    /// host". Naming a narrower variant as well is how an author gets both: a
+    /// variant that matches the host's compute capability exactly outranks one
+    /// that only matches its family.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub accel: Vec<Accel>,
+    /// Highest CUDA major version this variant needs — it matches a host whose
+    /// installed CUDA runtime is at least this. Allowed only with `cuda` in
+    /// `accel`; omit to match any CUDA runtime.
+    #[serde(default)]
+    pub cuda_major: Option<u32>,
+    /// Compute capabilities this variant covers (e.g. `90`, or `[86, 90]`).
+    /// Allowed only with `cuda` in `accel`; empty matches any. A variant that
+    /// names the host's capability is preferred over one that does not.
+    ///
+    /// A list where an asset's `cuda_sm` is a single value, because the two are
+    /// answering different questions. A build that omits it is a fat binary
+    /// with PTX behind it, so "any capability" is a true claim and enumerating
+    /// is rarely useful. A file has no JIT to fall back on — kernels compiled
+    /// for `sm_90` are inert on `sm_86` — but one file may still carry entries
+    /// for several devices, which is exactly what a pre-warmed kernel cache is.
+    /// Saying so once beats declaring the same URL and hash under each.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub cuda_sm: Vec<u32>,
+    /// AMD architecture targets this variant is built for, in `--offload-arch`
+    /// spelling. Allowed only with `rocm` in `accel`; omit to match any AMD
+    /// host.
+    #[serde(default)]
+    pub gfx: Vec<crate::arch::GfxSpec>,
+    /// Minimum Vulkan API version a host needs to use this variant. Allowed
+    /// only with `vulkan` in `accel`.
+    #[serde(default)]
+    pub vulkan_api: Option<crate::arch::VulkanApi>,
+    /// Whether the model can load without this file. Default `false`.
+    ///
+    /// A destination none of whose variants match the host is a hole, and the
+    /// two kinds of hole want opposite handling. Weights are load-bearing: the
+    /// load fails, naming what the host offered and what the variants wanted,
+    /// which beats a backend erroring on a file it was never given. A
+    /// pre-warmed kernel cache is not: the backend compiles its own when the
+    /// file is absent, so an unlisted GPU should still load, just slower.
+    /// `optional = true` is that second case.
+    ///
+    /// It describes the destination rather than the entry, so the variants of
+    /// one destination must agree on it.
+    #[serde(default)]
+    pub optional: bool,
+}
+
+impl FileSpec {
+    /// Whether this entry names any host requirement at all. An entry that
+    /// does not is the v1 shape: it matches every host, and is the fallback
+    /// when it shares a destination with variants that do.
+    #[must_use]
+    pub fn is_conditional(&self) -> bool {
+        !self.accel.is_empty()
+    }
 }
 
 fn default_true() -> bool {
@@ -949,6 +1122,48 @@ pub enum ManifestError {
     CudnnRequiresCuda {
         /// The asset's label (its `file`, or its first `parts` entry).
         file: String,
+    },
+    /// A `[[models.files]]` entry declared `cuda_major`/`cuda_sm` without
+    /// `cuda` in `accel`.
+    #[error(
+        "model `{model}` file `{destination}` declares `cuda_major`/`cuda_sm` \
+         without `accel` containing `cuda`"
+    )]
+    FileCudaForbiddenFields {
+        /// The model declaring the file.
+        model: String,
+        /// The file's `destination`.
+        destination: String,
+    },
+    /// A `[[models.files]]` entry declared `gfx` without `rocm` in `accel`.
+    #[error("model `{model}` file `{destination}` declares `gfx` without `accel = rocm`")]
+    FileGfxRequiresRocm {
+        /// The model declaring the file.
+        model: String,
+        /// The file's `destination`.
+        destination: String,
+    },
+    /// A `[[models.files]]` entry declared `vulkan_api` without `vulkan` in
+    /// `accel`.
+    #[error("model `{model}` file `{destination}` declares `vulkan_api` without `accel = vulkan`")]
+    FileVulkanApiRequiresVulkan {
+        /// The model declaring the file.
+        model: String,
+        /// The file's `destination`.
+        destination: String,
+    },
+    /// Variants of one `destination` disagreed on `optional`.
+    ///
+    /// `optional` answers "may this destination end up empty?", which is a
+    /// property of the destination and not of whichever variant happened to
+    /// win. Two answers to one question would make the outcome depend on the
+    /// host, so the manifest has to settle it.
+    #[error("model `{model}` declares `{destination}` with variants that disagree on `optional`")]
+    FileVariantsDisagreeOnOptional {
+        /// The model declaring the file.
+        model: String,
+        /// The destination whose variants disagree.
+        destination: String,
     },
     /// Two `[[models.voices]]` under one model share an `id`.
     #[error("model `{model}` declares voice id `{id}` more than once")]
@@ -1095,13 +1310,24 @@ fn applies_to(declared: Contract) -> bool {
 /// field declared if *any* entry declares it; a plain table (`[backend]`) is
 /// checked once.
 fn declares(raw: &toml::Table, field: &ContractField) -> bool {
-    match raw.get(field.table) {
-        Some(toml::Value::Array(entries)) if field.is_array_table() => entries
-            .iter()
-            .any(|entry| entry.as_table().is_some_and(|t| t.contains_key(field.key))),
-        Some(toml::Value::Table(table)) if !field.is_array_table() => table.contains_key(field.key),
-        _ => false,
+    /// Descend `path` from `table`, then report whether the table it lands in
+    /// declares `key`. An array segment is satisfied by *any* of its entries,
+    /// which is what makes one `[[models.files]]` entry anywhere in the
+    /// document count as a declaration.
+    fn walk(table: &toml::Table, path: &[(&str, bool)], key: &str) -> bool {
+        let Some(((segment, is_array), rest)) = path.split_first() else {
+            return table.contains_key(key);
+        };
+        match table.get(*segment) {
+            Some(toml::Value::Array(entries)) if *is_array => entries
+                .iter()
+                .filter_map(toml::Value::as_table)
+                .any(|entry| walk(entry, rest, key)),
+            Some(toml::Value::Table(inner)) if !*is_array => walk(inner, rest, key),
+            _ => false,
+        }
     }
+    walk(raw, &field.segments(), field.key)
 }
 
 /// The first [`CONTRACT_FIELDS`] rule the document breaks, in table order, as
@@ -1200,15 +1426,8 @@ impl Manifest {
         if m.capabilities.streaming_input {
             return Err(ManifestError::StreamingInputReserved);
         }
-        // Each file's `destination` is joined onto the backend dir before the
-        // daemon writes the download; reject any value that would escape it.
-        // The guard lives in the canonical parser so every consumer inherits it.
         for model in &m.models {
-            for file in &model.files {
-                if !crate::is_safe_relative_path(&file.destination) {
-                    return Err(ManifestError::UnsafeDestination(file.destination.clone()));
-                }
-            }
+            Self::validate_files(model)?;
             Self::validate_voices(model)?;
         }
         // A subprocess build variant names its archive with exactly one of
@@ -1259,6 +1478,61 @@ impl Manifest {
             }
         }
         Ok(m)
+    }
+
+    /// Path safety and selector coherence for one model's `[[models.files]]`.
+    ///
+    /// The cross-field rules mirror `[[assets.subprocess]]`, minus the two
+    /// requirements a data file has no basis for: a file may declare `cuda`
+    /// without a `cuda_major` and `rocm` without a `gfx`, because "any CUDA
+    /// host" and "any AMD host" are things a file can honestly mean and a
+    /// binary cannot. What is refused is the same in both places — a
+    /// discriminator naming a family the entry never declared, which is a typo
+    /// that would otherwise select nothing and say nothing.
+    fn validate_files(model: &ModelEntry) -> Result<(), ManifestError> {
+        let name = || model.name.clone();
+        // Destination -> the `optional` its first variant declared.
+        let mut optional_by_destination: std::collections::HashMap<&str, bool> =
+            std::collections::HashMap::new();
+
+        for file in &model.files {
+            // Joined onto the backend dir before the daemon writes the
+            // download; reject any value that would escape it. The guard lives
+            // in the canonical parser so every consumer inherits it.
+            if !crate::is_safe_relative_path(&file.destination) {
+                return Err(ManifestError::UnsafeDestination(file.destination.clone()));
+            }
+            let destination = || file.destination.clone();
+            let declares = |k: Accel| file.accel.contains(&k);
+            if !declares(Accel::Cuda) && (file.cuda_major.is_some() || !file.cuda_sm.is_empty()) {
+                return Err(ManifestError::FileCudaForbiddenFields {
+                    model: name(),
+                    destination: destination(),
+                });
+            }
+            if !declares(Accel::Rocm) && !file.gfx.is_empty() {
+                return Err(ManifestError::FileGfxRequiresRocm {
+                    model: name(),
+                    destination: destination(),
+                });
+            }
+            if !declares(Accel::Vulkan) && file.vulkan_api.is_some() {
+                return Err(ManifestError::FileVulkanApiRequiresVulkan {
+                    model: name(),
+                    destination: destination(),
+                });
+            }
+            match optional_by_destination.insert(file.destination.as_str(), file.optional) {
+                Some(first) if first != file.optional => {
+                    return Err(ManifestError::FileVariantsDisagreeOnOptional {
+                        model: name(),
+                        destination: destination(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Voice and synthesis-bound coherence for one `[[models]]` entry.
@@ -1450,11 +1724,10 @@ mod tests {
     /// one already installed.
     ///
     /// Both parsers exist so an installed backend never disappears from the
-    /// catalog over a rule tightened after it was installed. With
-    /// `CONTRACT_FIELDS` still empty the two agree on every input, so this
-    /// pins the split itself: `parse_installed` must remain a real second
-    /// entry point that runs every other guard, or the first v2 field will
-    /// find it collapsed back into `parse`.
+    /// catalog over a rule tightened after it was installed. The divergence
+    /// itself is exercised by `a_file_selector_requires_contract_v2`; what
+    /// this pins is that `parse_installed` is a real second entry point which
+    /// still runs every *other* guard, rather than a way around all of them.
     #[test]
     fn an_installed_manifest_skips_only_the_contract_field_rule() {
         Manifest::parse(VALID).expect("a well-formed manifest parses");
@@ -2067,6 +2340,123 @@ mod tests {
         assert_eq!(a.cuda_major, Some(13));
         assert_eq!(a.cuda_sm, None);
         assert!(!a.cudnn);
+    }
+
+    /// The v2 file selector is refused under `contract = "v1"`, by name.
+    ///
+    /// This is the whole reason the selector needed a generation: a v1 daemon
+    /// reads the variants of one destination as ordinary files and downloads
+    /// every one of them onto the same path.
+    #[test]
+    fn a_file_selector_requires_contract_v2() {
+        let text = with_model(
+            r#"
+            files = [
+                { url = "https://h/x.bin", destination = "m/x.bin", accel = "cuda" },
+            ]"#,
+        );
+        let message = Manifest::parse(&text)
+            .expect_err("a v1 manifest may not select a file by host")
+            .to_string();
+        assert!(
+            message.contains("[[models.files]].accel") && message.contains("v2"),
+            "the refusal must name the field and the generation that has it: {message}"
+        );
+        // The installed path skips the contract rule and nothing else, so a
+        // backend already on disk keeps loading whatever it declares.
+        Manifest::parse_installed(&text).expect("an installed manifest skips the contract rule");
+        // Raising the generation is the other documented fix.
+        let raised = text.replace(r#"contract = "v1""#, r#"contract = "v2""#);
+        Manifest::parse(&raised).expect("the same manifest parses under v2");
+    }
+
+    /// Variants of one destination parse, keep manifest order, and may leave
+    /// every discriminator off — the looseness a data file is allowed and a
+    /// build is not.
+    #[test]
+    fn parses_per_architecture_file_variants() {
+        let text = with_model(
+            r#"
+            files = [
+                { url = "https://h/k-sm90.bin", destination = "c/k.bin", accel = "cuda",
+                  cuda_sm = 90, optional = true },
+                { url = "https://h/k-ada.bin", destination = "c/k.bin", accel = "cuda",
+                  cuda_sm = [86, 89], optional = true },
+                { url = "https://h/k-cuda.bin", destination = "c/k.bin", accel = "cuda",
+                  optional = true },
+                { url = "https://h/k-rocm.bin", destination = "c/k.bin", accel = ["rocm"],
+                  gfx = ["gfx1100"], optional = true },
+                { url = "https://h/w.bin", destination = "m/w.bin" },
+            ]"#,
+        )
+        .replace(r#"contract = "v1""#, r#"contract = "v2""#);
+        let m = Manifest::parse(&text).expect("a v2 selector parses");
+        let files = &m.models[0].files;
+        assert_eq!(files.len(), 5);
+        // The bare number and the list are the same field, one spelling apart.
+        assert_eq!(files[0].cuda_sm, vec![90]);
+        assert_eq!(files[0].accel, vec![Accel::Cuda]);
+        assert_eq!(files[1].cuda_sm, vec![86, 89]);
+        // A CUDA variant naming no runtime major is "any CUDA host"; an asset
+        // may not say that, a file may.
+        assert_eq!(files[2].cuda_major, None);
+        assert!(files[2].cuda_sm.is_empty());
+        assert!(files[2].is_conditional());
+        assert_eq!(files[3].gfx, vec![crate::arch::GfxSpec::new(11, 0, 0)]);
+        // The unconditional entry is the v1 shape and stays that way.
+        assert!(!files[4].is_conditional());
+        assert!(!files[4].optional);
+    }
+
+    /// A discriminator naming a family the entry never declared is a typo that
+    /// would otherwise select nothing and say nothing, so it is refused — the
+    /// same rule `[[assets.subprocess]]` gets.
+    #[test]
+    fn a_file_discriminator_requires_its_family() {
+        let cases = [
+            ("cuda_sm = 90", "cuda"),
+            (r#"gfx = ["gfx1100"]"#, "gfx"),
+            (r#"vulkan_api = "1.3""#, "vulkan"),
+        ];
+        for (field, expected) in cases {
+            let text = with_model(&format!(
+                r#"
+            files = [
+                {{ url = "https://h/x.bin", destination = "m/x.bin", accel = "cpu", {field} }},
+            ]"#
+            ))
+            .replace(r#"contract = "v1""#, r#"contract = "v2""#);
+            let message = Manifest::parse(&text)
+                .expect_err("a discriminator without its family must not parse")
+                .to_string();
+            assert!(
+                message.contains("m/x.bin") && message.contains(expected),
+                "the refusal must name the destination and the missing family: {message}"
+            );
+        }
+    }
+
+    /// `optional` answers "may this destination end up empty?", which is a
+    /// property of the destination. Two answers would make the outcome depend
+    /// on which variant the host happened to pick.
+    #[test]
+    fn variants_of_one_destination_must_agree_on_optional() {
+        let text = with_model(
+            r#"
+            files = [
+                { url = "https://h/a.bin", destination = "c/k.bin", accel = "cuda",
+                  optional = true },
+                { url = "https://h/b.bin", destination = "c/k.bin", accel = "rocm" },
+            ]"#,
+        )
+        .replace(r#"contract = "v1""#, r#"contract = "v2""#);
+        let message = Manifest::parse(&text)
+            .expect_err("variants may not disagree on `optional`")
+            .to_string();
+        assert!(
+            message.contains("c/k.bin") && message.contains("optional"),
+            "the refusal must name the destination: {message}"
+        );
     }
 
     #[test]

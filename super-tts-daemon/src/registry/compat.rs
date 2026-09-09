@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `select(host, entry)` — pure: no I/O, no shared state. Asset selection is
-//! driven solely by host capability (the most optimal asset the host can run);
-//! the runtime device preference is intentionally decoupled and never affects
-//! which asset is downloaded.
+//! `select(host, entry)` and `select_files(host, model)` — pure: no I/O, no
+//! shared state. Both are driven solely by host capability (the most optimal
+//! candidate the host can run); the runtime device preference is intentionally
+//! decoupled and never affects what is downloaded.
+//!
+//! The two answer the same question about two kinds of candidate — which build
+//! of the backend to install, and which variant of a model file to fetch — so
+//! they share one ranking ([`score`]) over one normalized shape
+//! ([`Requires`]). This is also the one place the manifest's architecture
+//! vocabulary (`super_tts_registry_types::arch`) meets `gpu_probe`'s.
 
 use super_tts_shared::registry::SelectedAsset;
+
+use super_tts_registry_types::arch::{GfxSpec, VulkanApi};
+use super_tts_registry_types::manifest::{Accel, FileSpec, ModelEntry};
 
 use crate::registry::host_detect::Host;
 use crate::registry::index_schema::{IndexBackend, IndexSubprocessAsset};
@@ -25,11 +34,18 @@ pub enum Selection {
 pub const GFX_FAMILY_FLOOR: u32 = 10;
 
 /// Rank of an accel family. A native accel beats a portable one, which beats
-/// the CPU. CUDA and `ROCm` never compete: a host reports a compute capability
-/// or gfx targets, not both.
-const RANK_CPU: u8 = 0;
-const RANK_VULKAN: u8 = 1;
-const RANK_NATIVE: u8 = 2;
+/// the CPU, which beats a candidate that named no requirement at all. CUDA and
+/// `ROCm` never compete: a host reports a compute capability or gfx targets,
+/// not both.
+///
+/// [`RANK_ANY`] exists only for `[[models.files]]`: an entry with no selector
+/// is every v1 file, it runs anywhere, and it must lose to any sibling variant
+/// that named this host — it is the fallback, not a peer. No asset can hold it,
+/// since `Manifest::parse` refuses an empty `accel` on a build.
+const RANK_ANY: u8 = 0;
+const RANK_CPU: u8 = 1;
+const RANK_VULKAN: u8 = 2;
+const RANK_NATIVE: u8 = 3;
 
 /// Whether an asset's declared gfx target can run on a host's.
 ///
@@ -92,7 +108,7 @@ pub fn select(host: &Host, entry: &IndexBackend) -> Selection {
     // worth more than preserving an accident on one of them.
     let best = by_target
         .iter()
-        .filter_map(|(idx, a)| score(host, a).map(|s| (s, *idx)))
+        .filter_map(|(idx, a)| score(host, &Requires::from(*a)).map(|s| (s, *idx)))
         .reduce(|best, next| if next.0 > best.0 { next } else { best });
     if let Some((_, idx)) = best {
         return Selection::Subprocess { index: idx };
@@ -102,71 +118,181 @@ pub fn select(host: &Host, entry: &IndexBackend) -> Selection {
     }
 }
 
-/// Rank an asset against the host, or `None` when it cannot run at all.
+/// What one candidate requires of the host, normalized out of whichever
+/// vocabulary it was written in: the free-form strings of an index entry, or
+/// the parsed types of a manifest's `[[models.files]]`.
+///
+/// One shape so [`score`] can be one policy. Picking a build and picking a
+/// per-architecture model file ask the same question of the same host, and a
+/// second copy of the answer would drift from this one the first time either
+/// changed.
+#[derive(Debug, Default)]
+struct Requires {
+    accel: Vec<Accel>,
+    cuda_major: Option<u32>,
+    /// The compute capabilities the candidate covers; empty is "any". An asset
+    /// contributes at most one, a file any number.
+    cuda_sm: Vec<u32>,
+    cudnn: bool,
+    gfx: Vec<GfxSpec>,
+    vulkan_api: Option<VulkanApi>,
+    /// A `vulkan_api` that was written but did not parse, kept apart from
+    /// `None` so [`score`] can fail closed on it.
+    vulkan_api_malformed: bool,
+    /// Whether a missing family discriminator — no `cuda_major`, no `gfx` —
+    /// reads as "any host of that family" or as "nothing".
+    ///
+    /// True for a `[[models.files]]` variant: `Manifest::parse` lets a file
+    /// declare `cuda` without a runtime major and `rocm` without a target,
+    /// because a file is data whose meaning belongs to the backend, and "for
+    /// any CUDA host" is a thing it can honestly say.
+    ///
+    /// False for an index asset, and not for symmetry's sake: the index is
+    /// *not* validated by `Manifest::parse`, so a published entry can carry
+    /// the same shape by accident. A build must name the runtime it links and
+    /// the ISA it was compiled for, so an entry naming neither has to match
+    /// nothing rather than everything — see
+    /// `cuda_asset_without_cuda_major_falls_back_to_cpu`.
+    wildcard_when_absent: bool,
+}
+
+/// An index entry carries `accel` as free-form strings, so one published by a
+/// newer registry may name a family this build has no word for. Dropping it is
+/// what the string comparisons here did before `Requires` existed: an unknown
+/// family matches nothing and stays out of the way of the ones that do.
+fn parse_accel(text: &str) -> Option<Accel> {
+    match text {
+        "cpu" => Some(Accel::Cpu),
+        "cuda" => Some(Accel::Cuda),
+        "metal" => Some(Accel::Metal),
+        "rocm" => Some(Accel::Rocm),
+        "vulkan" => Some(Accel::Vulkan),
+        _ => None,
+    }
+}
+
+impl From<&IndexSubprocessAsset> for Requires {
+    fn from(a: &IndexSubprocessAsset) -> Self {
+        let (vulkan_api, vulkan_api_malformed) = match a.vulkan_api.as_deref() {
+            None => (None, false),
+            Some(floor) => match floor.parse::<VulkanApi>() {
+                Ok(v) => (Some(v), false),
+                Err(_) => (None, true),
+            },
+        };
+        Self {
+            accel: a
+                .accel
+                .iter()
+                .map(String::as_str)
+                .filter_map(parse_accel)
+                .collect(),
+            cuda_major: a.cuda_major,
+            cuda_sm: a.cuda_sm.into_iter().collect(),
+            cudnn: a.cudnn,
+            // A gfx target that does not parse drops out rather than widening
+            // the match, the same way an unknown accel does.
+            gfx: a.gfx.iter().filter_map(|g| g.parse().ok()).collect(),
+            vulkan_api,
+            vulkan_api_malformed,
+            wildcard_when_absent: false,
+        }
+    }
+}
+
+impl From<&FileSpec> for Requires {
+    /// A manifest's values are already parsed, so nothing here can be
+    /// malformed — the strings were rejected at `Manifest::parse`.
+    fn from(f: &FileSpec) -> Self {
+        Self {
+            accel: f.accel.clone(),
+            cuda_major: f.cuda_major,
+            cuda_sm: f.cuda_sm.clone(),
+            cudnn: false,
+            gfx: f.gfx.clone(),
+            vulkan_api: f.vulkan_api,
+            vulkan_api_malformed: false,
+            wildcard_when_absent: true,
+        }
+    }
+}
+
+/// Rank a candidate against the host, or `None` when the host cannot use it.
 ///
 /// The tuple orders lexicographically, which is the whole preference policy:
 /// accel family first, then the family's own discriminators.
-fn score(host: &Host, a: &IndexSubprocessAsset) -> Option<(u8, u32, u8, u8)> {
-    let declares = |k: &str| a.accel.iter().any(|x| x == k);
+///
+/// Two arms read a missing discriminator as "any" for a candidate that set
+/// [`Requires::wildcard_when_absent`], which is every `[[models.files]]`
+/// variant and no asset. Both are called out where they happen.
+fn score(host: &Host, r: &Requires) -> Option<(u8, u32, u8, u8)> {
+    let declares = |k: Accel| r.accel.contains(&k);
 
-    if declares("cuda")
+    if declares(Accel::Cuda)
         && let Some(cuda) = &host.cuda
-        && (a.cuda_sm.is_none() || a.cuda_sm == Some(cuda.compute_capability))
-        && a.cuda_major.is_some_and(|m| m <= cuda.runtime_major)
+        && (r.cuda_sm.is_empty() || r.cuda_sm.contains(&cuda.compute_capability))
+        // An absent `cuda_major` is "any CUDA runtime" for a file, and a
+        // malformed asset for an index entry — which is why the wildcard is
+        // conditional rather than folded into the comparison.
+        && (r.cuda_major.is_some_and(|m| m <= cuda.runtime_major)
+            || (r.wildcard_when_absent && r.cuda_major.is_none()))
     {
         return Some((
             RANK_NATIVE,
-            a.cuda_major.unwrap_or(0),
-            u8::from(a.cuda_sm.is_some()),
-            u8::from(a.cudnn && cuda.cudnn_present),
+            r.cuda_major.unwrap_or(0),
+            u8::from(!r.cuda_sm.is_empty()),
+            u8::from(r.cudnn && cuda.cudnn_present),
         ));
     }
 
-    if declares("rocm")
+    if declares(Accel::Rocm)
         && let Some(rocm) = &host.rocm
     {
-        let targets: Vec<_> = a
-            .gfx
-            .iter()
-            .filter_map(|g| g.parse::<super_tts_registry_types::arch::GfxSpec>().ok())
-            .collect();
-        let mut best: Option<u8> = None;
-        for host_target in &rocm.gfx_targets {
-            for asset_target in &targets {
-                if gfx_runs_on(*asset_target, *host_target) {
-                    let exact = u8::from(gfx_is_exact(*asset_target, *host_target));
-                    best = Some(best.map_or(exact, |b| b.max(exact)));
+        if r.gfx.is_empty() {
+            // "Any AMD host" for a file, ranked with the inexact matches below
+            // so a variant naming this host's architecture still wins. For an
+            // asset it is a target list that named nothing, which matches
+            // nothing — fall through to whatever else it declares.
+            if r.wildcard_when_absent {
+                return Some((RANK_NATIVE, 0, 0, 0));
+            }
+        } else {
+            let mut best: Option<u8> = None;
+            for host_target in &rocm.gfx_targets {
+                for want in &r.gfx {
+                    if gfx_runs_on(*want, *host_target) {
+                        let exact = u8::from(gfx_is_exact(*want, *host_target));
+                        best = Some(best.map_or(exact, |b| b.max(exact)));
+                    }
                 }
             }
-        }
-        if let Some(exact) = best {
-            return Some((RANK_NATIVE, 0, exact, 0));
+            if let Some(exact) = best {
+                return Some((RANK_NATIVE, 0, exact, 0));
+            }
         }
     }
 
-    if declares("vulkan")
+    if declares(Accel::Vulkan)
         && let Some(vulkan) = &host.vulkan
     {
-        // A declared floor that does not parse fails closed — the asset stops
-        // matching, exactly as a bad gfx string drops out of `targets` above.
-        // The natural authoring mistake is `vulkan_api = "1.3.0"`, natural
-        // because `VulkanApi` has no patch component, and folding that into
-        // "no floor declared" would match every Vulkan host including a 1.0
-        // one that cannot run the build. Falling through rather than returning
-        // leaves any other accel the asset declares free to match.
-        let ok = match a.vulkan_api.as_deref() {
-            None => true,
-            Some(floor) => match floor.parse::<super_tts_registry_types::arch::VulkanApi>() {
-                Ok(f) => (vulkan.api_version.major, vulkan.api_version.minor) >= (f.major, f.minor),
-                Err(_) => false,
-            },
-        };
+        // A declared floor that does not parse fails closed — the candidate
+        // stops matching, exactly as a bad gfx string drops out of `gfx` in
+        // `Requires`. The natural authoring mistake is `vulkan_api = "1.3.0"`,
+        // natural because `VulkanApi` has no patch component, and folding that
+        // into "no floor declared" would match every Vulkan host including a
+        // 1.0 one that cannot run the build. Falling through rather than
+        // returning leaves any other accel the candidate declares free to
+        // match.
+        let ok = !r.vulkan_api_malformed
+            && r.vulkan_api.is_none_or(|f| {
+                (vulkan.api_version.major, vulkan.api_version.minor) >= (f.major, f.minor)
+            });
         if ok {
             return Some((RANK_VULKAN, 0, 0, 0));
         }
     }
 
-    if declares("cpu") {
+    if declares(Accel::Cpu) {
         return Some((RANK_CPU, 0, 0, 0));
     }
     None
@@ -185,6 +311,35 @@ fn score(host: &Host, a: &IndexSubprocessAsset) -> Option<(u8, u32, u8, u8)> {
 /// requirement list describes real alternatives rather than every asset
 /// published.
 fn incompatible_reason(host: &Host, candidates: &[(usize, &IndexSubprocessAsset)]) -> String {
+    let host_caps = host_capabilities(host);
+    let mut wants: Vec<String> = Vec::new();
+    for (_, a) in candidates {
+        let want = asset_requirement(a);
+        if !wants.contains(&want) {
+            wants.push(want);
+        }
+    }
+    if wants.is_empty() {
+        format!(
+            "no compatible asset for host `{}`: {host_caps}",
+            host.target_triple
+        )
+    } else {
+        format!(
+            "no compatible asset for host `{}`: {host_caps} — candidate builds require: {}",
+            host.target_triple,
+            wants.join(", ")
+        )
+    }
+}
+
+/// What this host offers, for the message a user reads when nothing matched.
+///
+/// Shared by the two refusals — no installable build, and no usable variant of
+/// a required model file — because they are the same sentence about the same
+/// machine, and a user comparing them should not have to reconcile two
+/// spellings of one GPU.
+fn host_capabilities(host: &Host) -> String {
     let mut caps = Vec::new();
     if let Some(c) = &host.cuda {
         // The runtime major is reported alongside the SM because it is the
@@ -209,26 +364,7 @@ fn incompatible_reason(host: &Host, candidates: &[(usize, &IndexSubprocessAsset)
     if caps.is_empty() {
         caps.push("cpu only".into());
     }
-    let mut wants: Vec<String> = Vec::new();
-    for (_, a) in candidates {
-        let want = asset_requirement(a);
-        if !wants.contains(&want) {
-            wants.push(want);
-        }
-    }
-    let host_caps = caps.join("; ");
-    if wants.is_empty() {
-        format!(
-            "no compatible asset for host `{}`: {host_caps}",
-            host.target_triple
-        )
-    } else {
-        format!(
-            "no compatible asset for host `{}`: {host_caps} — candidate builds require: {}",
-            host.target_triple,
-            wants.join(", ")
-        )
-    }
+    caps.join("; ")
 }
 
 /// What one candidate asset needs, in the vocabulary its manifest declares it
@@ -254,6 +390,134 @@ fn asset_requirement(a: &IndexSubprocessAsset) -> String {
     }
     if parts.is_empty() {
         "an unspecified accel".to_string()
+    } else {
+        parts.join("+")
+    }
+}
+
+/// The `[[models.files]]` this host should download for `model`, in the order
+/// the manifest declares them.
+///
+/// Entries sharing a `destination` are variants of one file and are resolved
+/// against each other by [`score`]: the best match is downloaded, the rest are
+/// not, and the backend reads a fixed path either way. A manifest with no
+/// selector anywhere — every v1 manifest — yields its files unchanged, since an
+/// unconditional entry matches every host and no destination has a rival.
+///
+/// Host capability decides, never the user's device preference. That is the
+/// rule [`select`] follows for builds, and it matters more here: what is on
+/// disk must not change when the user toggles between CPU and GPU, or every
+/// such toggle would re-download gigabytes.
+///
+/// # Errors
+/// Returns a human-readable reason when a destination that is not `optional`
+/// has no variant this host can use — naming what the host offers and what the
+/// variants asked for, the same shape as an incompatible install.
+pub fn select_files<'a>(host: &Host, model: &'a ModelEntry) -> Result<Vec<&'a FileSpec>, String> {
+    let mut chosen: Vec<&FileSpec> = Vec::new();
+    let mut resolved: Vec<&str> = Vec::new();
+
+    for entry in &model.files {
+        let destination = entry.destination.as_str();
+        if resolved.contains(&destination) {
+            continue; // already settled with the rest of its group
+        }
+        resolved.push(destination);
+
+        let variants: Vec<&FileSpec> = model
+            .files
+            .iter()
+            .filter(|f| f.destination == entry.destination)
+            .collect();
+        // `reduce` keeping a strict improvement, not `max_by_key`: that returns
+        // the *last* maximum. First-wins is the tiebreak `select` applies to
+        // builds, for the same reason — declaration order is the author's own
+        // preference.
+        let best = variants
+            .iter()
+            .filter_map(|f| score_file(host, f).map(|s| (s, *f)))
+            .reduce(|best, next| if next.0 > best.0 { next } else { best });
+
+        match best {
+            Some((_, file)) => chosen.push(file),
+            // `Manifest::parse` makes the variants of one destination agree on
+            // `optional`, so `all` and `any` are the same question here; `all`
+            // is the one that stays right if they ever disagree.
+            None if variants.iter().all(|f| f.optional) => {
+                log::info!(
+                    "skipping optional {destination}: no variant matches this host ({})",
+                    host_capabilities(host)
+                );
+            }
+            None => return Err(unusable_reason(host, destination, &variants)),
+        }
+    }
+    Ok(chosen)
+}
+
+/// Rank one file variant, where naming no requirement means "any host".
+///
+/// [`score`] is deliberately strict about that: an index entry with an empty
+/// `accel` is a malformed asset and must not become installable. A file entry
+/// with an empty `accel` is the opposite — it is every file every v1 manifest
+/// ever declared — so the fallback is applied here, outside the shared policy.
+fn score_file(host: &Host, file: &FileSpec) -> Option<(u8, u32, u8, u8)> {
+    if file.is_conditional() {
+        score(host, &Requires::from(file))
+    } else {
+        Some((RANK_ANY, 0, 0, 0))
+    }
+}
+
+/// The refusal for a required destination no variant matched.
+fn unusable_reason(host: &Host, destination: &str, variants: &[&FileSpec]) -> String {
+    let mut wants: Vec<String> = Vec::new();
+    for file in variants {
+        let want = file_requirement(file);
+        if !wants.contains(&want) {
+            wants.push(want);
+        }
+    }
+    format!(
+        "no variant of `{destination}` runs on this host: {} — variants require: {}",
+        host_capabilities(host),
+        wants.join(", ")
+    )
+}
+
+/// What one file variant needs, in the vocabulary its manifest declares it in
+/// — the same courtesy [`asset_requirement`] pays a build, over the typed
+/// fields a manifest parses into rather than an index entry's strings.
+fn file_requirement(file: &FileSpec) -> String {
+    let mut parts = Vec::new();
+    for accel in &file.accel {
+        parts.push(match accel {
+            Accel::Cuda => {
+                let major = file
+                    .cuda_major
+                    .map_or_else(|| "*".to_string(), |m| m.to_string());
+                let sm = if file.cuda_sm.is_empty() {
+                    "*".to_string()
+                } else {
+                    let each: Vec<String> = file.cuda_sm.iter().map(ToString::to_string).collect();
+                    each.join("/")
+                };
+                format!("cuda {major} sm_{sm}")
+            }
+            Accel::Rocm if file.gfx.is_empty() => "rocm".to_string(),
+            Accel::Rocm => {
+                let targets: Vec<String> = file.gfx.iter().map(ToString::to_string).collect();
+                format!("rocm {}", targets.join(","))
+            }
+            Accel::Vulkan => match file.vulkan_api {
+                Some(v) => format!("vulkan {v}+"),
+                None => "vulkan".to_string(),
+            },
+            other => other.to_string(),
+        });
+    }
+    if parts.is_empty() {
+        "any host".to_string()
     } else {
         parts.join("+")
     }
@@ -876,5 +1140,183 @@ mod tests {
         );
         let sel = select(&host_cuda(86, 12, false), &e);
         assert!(matches!(sel, Selection::Incompatible { .. }));
+    }
+
+    /// One model with the given `files = [...]` body, built by the real parser
+    /// so a fixture that `select_files` accepts is one a manifest could
+    /// actually declare.
+    fn model(files: &str) -> ModelEntry {
+        let text = format!(
+            r#"
+            [backend]
+            source = "github.com/x/y"
+            name = "Y"
+            version = "1.0.0"
+            kind = "subprocess"
+            entrypoint = "y"
+            contract = "v2"
+            description = "Test backend."
+
+            [[models]]
+            name = "m"
+            primary_language = "en"
+            supported_languages = ["en"]
+            supported_devices = ["cpu", "gpu"]
+            files = [{files}]
+            "#
+        );
+        super_tts_registry_types::manifest::Manifest::parse(&text)
+            .expect("the fixture manifest parses")
+            .models
+            .into_iter()
+            .next()
+            .expect("one model")
+    }
+
+    fn urls<'a>(chosen: &[&'a FileSpec]) -> Vec<&'a str> {
+        chosen.iter().map(|f| f.url.as_str()).collect()
+    }
+
+    /// Every v1 manifest is a manifest of unconditional entries, and selection
+    /// must be invisible to it: same files, same order, on any host.
+    #[test]
+    fn a_manifest_without_a_selector_yields_every_file_in_order() {
+        let m = model(
+            r#"
+            { url = "https://h/a", destination = "m/a" },
+            { url = "https://h/b", destination = "m/b" },
+            "#,
+        );
+        for host in [
+            host_cpu(),
+            host_cuda(90, 13, true),
+            host_rocm(&[(11, 0, 0)]),
+        ] {
+            let chosen = select_files(&host, &m).expect("unconditional files always resolve");
+            assert_eq!(urls(&chosen), vec!["https://h/a", "https://h/b"]);
+        }
+    }
+
+    /// The wildcard/exact preference `cuda_sm` was designed for, applied to a
+    /// file: an sm-exact variant wins where it fits, and the wildcard behind it
+    /// catches every other CUDA host. Exactly one file per destination either
+    /// way — the point of grouping.
+    #[test]
+    fn an_exact_compute_capability_beats_a_wildcard_cuda_variant() {
+        let m = model(
+            r#"
+            { url = "https://h/sm90", destination = "c/k", accel = "cuda", cuda_sm = 90 },
+            { url = "https://h/any", destination = "c/k", accel = "cuda" },
+            "#,
+        );
+        let chosen = select_files(&host_cuda(90, 13, false), &m).expect("the exact variant fits");
+        assert_eq!(urls(&chosen), vec!["https://h/sm90"]);
+
+        let chosen = select_files(&host_cuda(86, 13, false), &m).expect("the wildcard catches it");
+        assert_eq!(urls(&chosen), vec!["https://h/any"]);
+    }
+
+    /// One variant may cover several compute capabilities, which is what a
+    /// pre-warmed kernel cache holding more than one device's entries is. It
+    /// still loses to a variant naming this host alone only by declaration
+    /// order, since both matched the host exactly.
+    #[test]
+    fn a_cuda_variant_may_cover_several_compute_capabilities() {
+        let m = model(
+            r#"
+            { url = "https://h/ada", destination = "c/k", accel = "cuda", cuda_sm = [86, 89] },
+            { url = "https://h/any", destination = "c/k", accel = "cuda" },
+            "#,
+        );
+        for sm in [86, 89] {
+            let chosen = select_files(&host_cuda(sm, 13, false), &m).expect("the list covers it");
+            assert_eq!(urls(&chosen), vec!["https://h/ada"], "sm_{sm}");
+        }
+        // A capability the list does not name falls to the wildcard behind it.
+        let chosen = select_files(&host_cuda(90, 13, false), &m).expect("the wildcard catches it");
+        assert_eq!(urls(&chosen), vec!["https://h/any"]);
+    }
+
+    /// Declaration order is the author's preference order, so a tie goes to the
+    /// first — the same tiebreak `select` applies to builds.
+    #[test]
+    fn a_tie_between_variants_goes_to_the_first_declared() {
+        let m = model(
+            r#"
+            { url = "https://h/first", destination = "c/k", accel = "cuda" },
+            { url = "https://h/second", destination = "c/k", accel = "cuda" },
+            "#,
+        );
+        let chosen = select_files(&host_cuda(86, 13, false), &m).expect("both fit");
+        assert_eq!(urls(&chosen), vec!["https://h/first"]);
+    }
+
+    /// An entry with no selector is the fallback, not a peer: a sibling that
+    /// named this host outranks it, and it still catches everyone else.
+    #[test]
+    fn an_unconditional_entry_loses_to_a_variant_that_named_the_host() {
+        let m = model(
+            r#"
+            { url = "https://h/generic", destination = "c/k" },
+            { url = "https://h/cuda", destination = "c/k", accel = "cuda" },
+            { url = "https://h/cpu", destination = "c/k", accel = "cpu" },
+            "#,
+        );
+        let chosen = select_files(&host_cuda(86, 13, false), &m).expect("the cuda variant fits");
+        assert_eq!(urls(&chosen), vec!["https://h/cuda"]);
+
+        // No CUDA here, so the explicit `cpu` variant takes it — still ahead of
+        // the entry that asked for nothing.
+        let chosen = select_files(&host_cpu(), &m).expect("the cpu variant fits");
+        assert_eq!(urls(&chosen), vec!["https://h/cpu"]);
+    }
+
+    /// A file may say "any AMD host" where a build may not, because a build has
+    /// to be ISA for one architecture and a file does not.
+    #[test]
+    fn a_rocm_variant_may_name_no_target_and_still_lose_to_one_that_does() {
+        let m = model(
+            r#"
+            { url = "https://h/any-amd", destination = "c/k", accel = "rocm" },
+            { url = "https://h/gfx1100", destination = "c/k", accel = "rocm", gfx = ["gfx1100"] },
+            "#,
+        );
+        let chosen = select_files(&host_rocm(&[(11, 0, 0)]), &m).expect("both fit");
+        assert_eq!(urls(&chosen), vec!["https://h/gfx1100"]);
+
+        // A card neither variant names exactly still gets the wildcard.
+        let chosen = select_files(&host_rocm(&[(9, 0, 10)]), &m).expect("the wildcard fits");
+        assert_eq!(urls(&chosen), vec!["https://h/any-amd"]);
+    }
+
+    /// Weights are load-bearing, so a hole is a refusal — and the refusal has
+    /// to be actionable, which means naming both halves: what this machine is,
+    /// and what the variants asked for.
+    #[test]
+    fn a_required_destination_with_no_match_names_the_host_and_the_variants() {
+        let m = model(
+            r#"
+            { url = "https://h/cuda", destination = "m/w", accel = "cuda", cuda_sm = 90 },
+            "#,
+        );
+        let reason = select_files(&host_cpu(), &m)
+            .expect_err("a required CUDA file cannot resolve on a CPU-only host");
+        assert!(reason.contains("m/w"), "{reason}");
+        assert!(reason.contains("cpu only"), "{reason}");
+        assert!(reason.contains("cuda"), "{reason}");
+    }
+
+    /// A pre-warmed kernel cache is not load-bearing: an unlisted GPU should
+    /// load anyway and rebuild what it needs.
+    #[test]
+    fn an_optional_destination_with_no_match_is_skipped() {
+        let m = model(
+            r#"
+            { url = "https://h/kernels", destination = "c/k", accel = "cuda", optional = true },
+            { url = "https://h/weights", destination = "m/w" },
+            "#,
+        );
+        let chosen = select_files(&host_cpu(), &m).expect("an optional hole is not an error");
+        assert_eq!(urls(&chosen), vec!["https://h/weights"]);
     }
 }
