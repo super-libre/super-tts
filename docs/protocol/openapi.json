@@ -295,7 +295,7 @@
           "backends"
         ],
         "summary": "List a backend's options",
-        "description": "Every option this backend declares, each with its label, type, default, `choices`, and the value actually in effect. This is what a settings UI renders a form from: an empty `choices` is a text field, a non-empty one is a dropdown offering exactly those values.\n\nOptions are the backend's own configuration — an endpoint URL, a speaking-style preset, a timeout — declared in its manifest and injected as `x-tts-option-*` headers at model-load time. Credentials are not options; those are secrets, at `/backend/{backend_id}/secret/list`.",
+        "description": "Every option this backend declares, each with its label, type, default, `choices`, and the value actually in effect. This is what a settings UI renders a form from: an empty `choices` is a text field, a non-empty one is a dropdown offering exactly those values.\n\nOptions are the backend's own configuration — an endpoint URL, a speaking-style preset, a timeout — declared in its manifest and injected as `x-tts-option-*` headers on every request. Credentials are not options; those are secrets, at `/backend/{backend_id}/secret/list`.",
         "operationId": "list_backend_options",
         "parameters": [
           {
@@ -509,7 +509,7 @@
             }
           },
           "400": {
-            "description": "The value was empty (`invalid_request`), or the option declares `choices` and the value is not one of them (`invalid_value`). Use `DELETE` to clear an override.",
+            "description": "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, or it is `base_url` and names no host. Use `DELETE` to clear an override.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6602,6 +6602,21 @@
             ],
             "description": "Human-readable label for the UI. Falls back to `name` when absent."
           },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Inclusive bounds for a numeric option, when it declares them. The\ndaemon refuses a write outside them."
+          },
           "name": {
             "type": "string",
             "description": "`snake_case` identifier (the daemon config key; the backend reads it as\n`x-tts-option-<name>`)."
@@ -6609,12 +6624,20 @@
           "required": {
             "type": "boolean"
           },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The increment a numeric option moves in. Present with `min` and `max`\non an option a client should render as a slider; the grid is the\ncontrol's, and the daemon accepts any value within the bounds."
+          },
           "type": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The option's input type (`string` / `integer` / `bool`); absent when the\nbackend declared none."
+            "description": "The option's input type (`string` / `integer` / `float` / `bool`);\nabsent when the backend declared none, which means `string`.\n\nDrives the input a client renders, and what the daemon accepts as a\nvalue: a write of something that is not of this type is refused with\n`400 invalid_value`."
           },
           "value": {
             "type": [
@@ -6654,6 +6677,21 @@
             "type": "string",
             "description": "Human-readable label for a settings UI; falls back to `name`."
           },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Inclusive bounds for a numeric option, `null` when it declares none.\nA write outside them is refused."
+          },
           "name": {
             "type": "string",
             "description": "The option's identifier, as the backend's manifest declares it."
@@ -6661,6 +6699,14 @@
           "required": {
             "type": "boolean",
             "description": "Whether the backend refuses to load without a value."
+          },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The increment a numeric option moves in. Present with `min` and `max`\non an option a client should render as a slider rather than a field;\nthe grid belongs to the control, and any value within the bounds\nstores."
           },
           "type": {
             "type": "string",

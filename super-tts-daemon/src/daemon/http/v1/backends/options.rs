@@ -58,6 +58,15 @@ struct BackendOptionValue {
     /// field for; a non-empty list is a dropdown, and the only values a write
     /// will be allowed to store.
     choices: Vec<String>,
+    /// Inclusive bounds for a numeric option, `null` when it declares none.
+    /// A write outside them is refused.
+    min: Option<f64>,
+    max: Option<f64>,
+    /// The increment a numeric option moves in. Present with `min` and `max`
+    /// on an option a client should render as a slider rather than a field;
+    /// the grid belongs to the control, and any value within the bounds
+    /// stores.
+    step: Option<f64>,
     /// Whether the backend refuses to load without a value.
     required: bool,
     /// What is actually in effect: the user's override if set, otherwise the
@@ -102,6 +111,9 @@ fn effective(
         kind: opt.r#type.map_or("string", OptionType::as_str).to_string(),
         default,
         choices: opt.choices.iter().map(ToString::to_string).collect(),
+        min: opt.min,
+        max: opt.max,
+        step: opt.step,
         required: opt.required,
         value,
     })
@@ -120,7 +132,7 @@ values.
 
 Options are the backend's own configuration — an endpoint URL, a speaking-style \
 preset, a timeout — declared in its manifest and injected as `x-tts-option-*` headers \
-at model-load time. Credentials are not options; those are secrets, at \
+on every request. Credentials are not options; those are secrets, at \
 `/backend/{backend_id}/secret/list`.",
     params(
         ("backend_id" = String, Path,
@@ -237,7 +249,7 @@ message and the old instance keeps running rather than leaving the stage empty."
     security(("session_token" = ["settings"])),
     responses(
         (status = 200, description = "Stored; this is the new effective value.", body = OptionValue),
-        (status = 400, description = "The value was empty (`invalid_request`), or the option declares `choices` and the value is not one of them (`invalid_value`). Use `DELETE` to clear an override.", body = ErrorEnvelope),
+        (status = 400, description = "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, or it is `base_url` and names no host. Use `DELETE` to clear an override.", body = ErrorEnvelope),
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such backend (`unknown_backend`) or no such option (`unknown_option`).", body = ErrorEnvelope),
@@ -258,13 +270,30 @@ async fn set_backend_option(
     // the value verbatim, whitespace included: it may carry meaning in one the
     // daemon does not interpret.
     //
-    // Canonicalized, not validated: a value that yields no host is stored as
-    // typed rather than refused. Rejecting it here would catch garbage but not
-    // the mistake that actually misleads people — a well-formed URL naming the
-    // wrong port — and model load already refuses it with a message naming the
-    // option. What this must not do is quietly drop it.
+    // Validated here as well as canonicalized. A value yielding no host used to
+    // be stored as typed and refused at the next model load, a fair division of
+    // labour while an option write reloaded the model — it now reconfigures the
+    // running one instead, so there is no later load to catch it and storing an
+    // unreadable URL would report success while the backend kept its old
+    // endpoint. It still cannot catch the mistake that misleads people most, a
+    // well-formed URL naming the wrong port; nothing at this layer can.
     let value = if name == crate::tts_models::backends::base_url::OPTION_NAME {
-        canonical_base_url(&body.value)
+        // An all-whitespace value is not a malformed URL, it is the empty value
+        // every option refuses just below — `DELETE` is how an override is
+        // cleared — so it takes that answer rather than "not a URL".
+        match body.value.trim() {
+            "" => String::new(),
+            trimmed => match canonical_base_url(trimmed) {
+                Some(canonical) => canonical,
+                None => {
+                    return json_error_msg(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_value",
+                        &format!("option `{name}` takes a URL, and {trimmed:?} is not one"),
+                    );
+                }
+            },
+        }
     } else {
         body.value.clone()
     };
@@ -345,33 +374,48 @@ async fn delete_backend_option(
     get_backend_option_inner(s, source, name).await
 }
 
-/// The `base_url` form to store: canonical when the value can be read as a
-/// URL, trimmed otherwise.
+/// The `base_url` form to store, or `None` for a value no host can be read
+/// from.
 ///
-/// A value that yields no host is kept as the user typed it so model load can
-/// refuse it by name; dropping it here would leave the backend on its built-in
+/// Refusing is the point of the `Option`. A value that yields no host used to
+/// be stored as typed so the next model load could refuse it by name, which
+/// worked while an option write reloaded the model — it no longer does, so the
+/// write itself has to be the thing that says no. The one outcome still ruled
+/// out is dropping it silently: that would leave the backend on its built-in
 /// endpoint, sending the user's text and credentials to the vendor they had
 /// configured their way out of.
 #[cfg(feature = "wasm-backends")]
-fn canonical_base_url(value: &str) -> String {
+fn canonical_base_url(value: &str) -> Option<String> {
     crate::tts_models::backends::base_url::normalize(value)
-        .unwrap_or_else(|| value.trim().to_string())
 }
 
 /// Without the wasm transport nothing derives an endpoint from this value, so
-/// there is no canonical form to agree on — only the trim that keeps a padded
-/// value from reading back padded.
+/// there is no canonical form to agree on and nothing to read it with — only
+/// the trim that keeps a padded value from reading back padded.
 #[cfg(not(feature = "wasm-backends"))]
-fn canonical_base_url(value: &str) -> String {
-    value.trim().to_string()
+fn canonical_base_url(value: &str) -> Option<String> {
+    Some(value.trim().to_string())
 }
 
-/// Returns an error `Response` when the option declares a closed set of values
-/// and `value` is not one of them, `None` when the write can proceed.
+/// Returns an error `Response` when `value` is not one the option accepts —
+/// wrong type, or outside the closed set it declares — `None` when the write
+/// can proceed.
 ///
 /// Runs after [`guard_missing`], so a missing backend or option is already
 /// reported and this only ever looks at an option that exists — which is why
 /// both `None` arms here mean "nothing to object to" rather than "not found".
+///
+/// The two refusals are told apart in the message because they are different
+/// mistakes: a value of the wrong type is one the backend cannot read, and a
+/// value off the dropdown is one it never offered, and one outside a declared
+/// range is neither. Saying "accepts one of:" to someone who typed `warm` into
+/// a numeric field would list the numbers and leave them to infer why, and an
+/// option with no `choices` has no list to offer at all.
+///
+/// A `step` is not checked. It is the grid a slider lands on, not a bound the
+/// contract makes: a value between two notches is still inside the range the
+/// option declared it could take, and refusing it would make the option
+/// narrower than its own bounds say.
 async fn guard_not_a_choice(
     s: &AppState,
     source: &str,
@@ -380,7 +424,30 @@ async fn guard_not_a_choice(
 ) -> Option<Response> {
     let backend = find_backend(s, source).await?;
     let opt = backend.options.iter().find(|o| o.name == name)?;
-    if opt.accepts(value) {
+    if !opt.accepts_the_type(value) {
+        return Some(json_error_msg(
+            StatusCode::BAD_REQUEST,
+            "invalid_value",
+            &format!(
+                "option `{name}` takes a {}, and {value:?} is not one",
+                opt.declared_type()
+            ),
+        ));
+    }
+    if !opt.is_in_range(value) {
+        let bound = match (opt.min, opt.max) {
+            (Some(low), Some(high)) => format!("between {low} and {high}"),
+            (Some(low), None) => format!("{low} or more"),
+            (None, Some(high)) => format!("{high} or less"),
+            (None, None) => unreachable!("a value only falls outside a declared bound"),
+        };
+        return Some(json_error_msg(
+            StatusCode::BAD_REQUEST,
+            "invalid_value",
+            &format!("option `{name}` takes a value {bound}, and {value:?} is not one"),
+        ));
+    }
+    if opt.is_a_choice(value) {
         return None;
     }
     let offered = opt

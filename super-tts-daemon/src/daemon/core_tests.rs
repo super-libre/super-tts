@@ -896,6 +896,8 @@ async fn list_models_is_scoped_to_active_backend() {
 /// `tests/speak_pipeline.rs`'s subject.
 struct MockModel {
     info: crate::tts_models::synthesize::ModelInfoData,
+    /// Every context this instance has been handed, in order.
+    reconfigured: SeenContexts,
 }
 impl crate::tts_models::synthesize::ModelInfo for MockModel {
     fn info(&self) -> &crate::tts_models::synthesize::ModelInfoData {
@@ -916,12 +918,30 @@ impl crate::tts_models::synthesize::Synthesize for MockModel {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+
+    fn reconfigure(&self, context: crate::tts_models::synthesize::BackendContext) {
+        self.reconfigured.lock().unwrap().push(context);
+    }
 }
+
+/// The contexts a seeded [`MockModel`] has been handed, newest last.
+type SeenContexts =
+    std::sync::Arc<std::sync::Mutex<Vec<crate::tts_models::synthesize::BackendContext>>>;
 
 /// Place a loaded mock model in the daemon's `model` lock with the given
 /// `(name, source)`. Used to verify the always-unload semantics in
 /// `handle_set_active_backend`.
 async fn seed_loaded_model(daemon: &SuperTTSDaemon, name: &str, source: &str) {
+    seed_recording_model(daemon, name, source).await;
+}
+
+/// [`seed_loaded_model`], returning the handle on what the instance is handed
+/// by [`Synthesize::reconfigure`](crate::tts_models::synthesize::Synthesize::reconfigure).
+///
+/// Shared with the instance in the slot, so a test that finds its writes
+/// recorded here has also established that the slot still holds *that*
+/// instance — a reload would have replaced it.
+async fn seed_recording_model(daemon: &SuperTTSDaemon, name: &str, source: &str) -> SeenContexts {
     use crate::daemon::types::LoadedModel;
     use crate::tts_models::ModelDefinition;
     use crate::tts_models::synthesize::ModelInfoData;
@@ -946,15 +966,138 @@ async fn seed_loaded_model(daemon: &SuperTTSDaemon, name: &str, source: &str) {
         provider: None,
     };
     let info = ModelInfoData::new(name, source, true, true, Duration::from_secs(1));
-    *daemon.model.write().await = Some(LoadedModel::new(definition, Box::new(MockModel { info })));
+    let reconfigured: SeenContexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    *daemon.model.write().await = Some(LoadedModel::new(
+        definition,
+        Box::new(MockModel {
+            info,
+            reconfigured: std::sync::Arc::clone(&reconfigured),
+        }),
+    ));
+    reconfigured
 }
 
-/// A backend option write for the *active* backend triggers a reload so the
-/// change takes effect. If that reload fails (here: the backend isn't installed,
-/// so re-instantiation errors), the option write still succeeds — but the reload
-/// failure must be surfaced in the response, not silently swallowed.
+/// [`fixture_backend`] plus one declared option, for the config-write paths.
+fn backend_with_option(
+    source: &str,
+    option: &str,
+) -> crate::tts_models::backends::DiscoveredBackend {
+    use super_tts_registry_types::manifest::{Opt, OptionType};
+
+    let mut backend = fixture_backend("opts", source, "Opts", "m");
+    backend.options = vec![Opt {
+        name: option.to_string(),
+        label: None,
+        description: "an option".to_string(),
+        r#type: Some(OptionType::String),
+        default: None,
+        choices: Vec::new(),
+        min: None,
+        max: None,
+        step: None,
+        required: false,
+    }];
+    backend
+}
+
+/// An option write for the *active* backend reaches the running model without
+/// reloading it.
+///
+/// Both halves matter. The instance is handed the new value, so the setting is
+/// live on the next request; and it is still the same instance afterwards, so
+/// nothing unmapped and remapped the weights to deliver a header. The fixture
+/// backend cannot actually be instantiated, so a reload would have emptied the
+/// slot — finding a model there is what proves none happened.
 #[tokio::test]
-async fn set_backend_option_surfaces_reload_failure() {
+async fn an_option_write_reconfigures_the_running_model() {
+    let daemon = test_daemon().await;
+    let source = "github.com/x/opts";
+    *daemon.backends.write().await = vec![backend_with_option(source, "temperature")];
+    let seen = seed_recording_model(&daemon, "m", source).await;
+
+    let resp = daemon
+        .handle_set_backend_option(
+            source.to_string(),
+            "temperature".to_string(),
+            "1.1".to_string(),
+        )
+        .await;
+
+    assert_eq!(resp.status, "success");
+    let msg = resp.message.unwrap_or_default();
+    assert!(
+        !msg.contains("kept the old value"),
+        "the value reached the backend, so nothing should be warned about: {msg}"
+    );
+
+    let headers = {
+        let contexts = seen.lock().unwrap();
+        assert_eq!(contexts.len(), 1, "one write, one reconfigure");
+        contexts[0].headers.clone()
+    };
+    assert!(
+        headers
+            .iter()
+            .any(|(k, v)| k == "x-tts-option-temperature" && v == "1.1"),
+        "the new value must be in the headers the instance now injects: {headers:?}"
+    );
+
+    assert!(
+        daemon.model.read().await.is_some(),
+        "the model must still be loaded — a reload would have failed and emptied the slot"
+    );
+}
+
+/// Writing the value already stored is not a write.
+///
+/// The settings UI cannot help sending these: a slider commits on release, so
+/// picking one up and putting it back is a write, and re-picking the value
+/// already showing is another. Each one used to reload the model.
+#[tokio::test]
+async fn an_unchanged_option_write_does_nothing() {
+    let daemon = test_daemon().await;
+    let source = "github.com/x/opts";
+    *daemon.backends.write().await = vec![backend_with_option(source, "temperature")];
+    let seen = seed_recording_model(&daemon, "m", source).await;
+
+    for _ in 0..2 {
+        daemon
+            .handle_set_backend_option(
+                source.to_string(),
+                "temperature".to_string(),
+                "1.1".to_string(),
+            )
+            .await;
+    }
+
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "the second write stores the same value and must not reach the backend again"
+    );
+
+    // And clearing an option that was never set is equally nothing.
+    let daemon = test_daemon().await;
+    *daemon.backends.write().await = vec![backend_with_option(source, "temperature")];
+    let seen = seed_recording_model(&daemon, "m", source).await;
+    let resp = daemon
+        .handle_set_backend_option(source.to_string(), "temperature".to_string(), String::new())
+        .await;
+    assert_eq!(resp.status, "success");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "clearing an unset option changes nothing"
+    );
+}
+
+/// The option write succeeds even when the new value cannot be delivered — it
+/// is stored either way — but the response has to say so.
+///
+/// Here the loaded model names a backend that is not installed, so there is no
+/// manifest to resolve a context against. Silence would leave the settings UI
+/// showing a value the backend is not using, with nothing to say which.
+#[tokio::test]
+async fn set_backend_option_surfaces_an_undeliverable_value() {
     let daemon = test_daemon().await;
     let source = "github.com/x/not-installed";
     seed_loaded_model(&daemon, "m", source).await;
@@ -970,8 +1113,8 @@ async fn set_backend_option_surfaces_reload_failure() {
     assert_eq!(resp.status, "success", "the option write itself succeeds");
     let msg = resp.message.unwrap_or_default();
     assert!(
-        msg.to_lowercase().contains("reload"),
-        "reload failure should be surfaced, got: {msg}"
+        msg.contains("kept the old value"),
+        "an undeliverable value should be surfaced, got: {msg}"
     );
 }
 

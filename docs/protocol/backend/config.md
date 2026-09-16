@@ -259,11 +259,85 @@ description = "Container the provider returns audio in."
 type        = "string"
 default     = "wav"
 choices     = ["wav", "mp3", "opus"]
+
+[[options]]
+name        = "temperature"
+label       = "Temperature"
+description = "How freely the model samples."
+type        = "float"
+default     = 0.9
+min         = 0.6
+max         = 1.2
+step        = 0.1
 ```
 
 A `bool` option is a switch: its two values are named by its type, so there is
 nothing else to offer. Every other option is a free-text field unless it says
 otherwise.
+
+### Types
+
+The daemon stores every option as text, because an `x-tts-option-*` header is
+text. `type` is the claim about what that text parses back to, and the daemon
+keeps the claim: `POST /v1/backend/{backend_id}/option/{name}` answers
+`400 invalid_value` for a value that is not of the declared type, naming the
+type rather than listing choices — a `warm` typed into a `float` is a different
+mistake from a value that is merely off the dropdown, and saying "accepts one
+of:" to the first would leave the reader to infer why.
+
+`string` accepts anything, which is what makes it the default: an option that
+declares no type is free text and always was. `integer` takes what parses as a
+64-bit signed integer, `bool` takes exactly `true` or `false`, and `float`
+takes what parses as a double — except the infinities and not-a-number, which
+parse but are the values that turn an arithmetic bug into a silent one.
+
+A `float` is for a setting whose steps are not whole: a sampling temperature, a
+gain, a threshold. Declaring it `string` and parsing it in the backend is the
+same thing with the check moved to the far side of the wire, where the only way
+left to report the problem is to fail a synthesis the user already asked for.
+
+The type binds the manifest's own values too. A `default` or a `choices` entry
+that is not of the declared type is refused at publication, since it names a
+value the daemon would then refuse to store.
+
+### Ranges and sliders
+
+A numeric option can declare bounds. `min` and `max` are inclusive, and the
+daemon keeps them the way it keeps `choices`: a write outside them is
+`400 invalid_value`, naming the range.
+
+`step` is the increment the value moves in, and declaring all three is what
+makes the option a **slider** — the same shape-implies-control rule that makes
+a `choices` option a dropdown and a `bool` a switch. An option bounded at both
+ends with a declared grid has nothing left to type; one missing any of the
+three still does, and gets a field.
+
+The grid belongs to the control, not to the contract. The daemon enforces
+`min` and `max` and ignores `step`, because a value between two notches is
+still one the option said it could take — refusing it would make the option
+narrower than its own bounds say, and would turn every float that is not
+exactly representable into a bug report. A client that renders the slider is
+what keeps to the grid.
+
+The rules, all checked at publication:
+
+- `min`, `max` and `step` are only for `integer` and `float`. A range over
+  strings is not a thing the manifest can mean.
+- `min <= max`, and every bound is finite.
+- `step` is greater than zero, no larger than the range it divides, and needs
+  both `min` and `max` — a slider with one end has nothing to slide between.
+- An `integer` option's bounds are whole numbers, or its slider produces
+  values the option itself refuses.
+- A `default` is inside the range.
+- An option declares `choices` **or** a range, never both: a closed set is
+  already the values it accepts, and a client cannot render a dropdown and a
+  slider at once.
+
+| Field  | Type      | Notes                                                          |
+|--------|-----------|----------------------------------------------------------------|
+| `min`  | number    | Lowest value accepted, inclusive. Numeric options only.        |
+| `max`  | number    | Highest value accepted, inclusive. Numeric options only.       |
+| `step` | number    | The increment the control moves in. With `min` and `max`, renders a slider. Not enforced. |
 
 `choices` is how it says otherwise. Declaring it means the option accepts a
 closed set, and the client renders a dropdown over that set instead of a text
@@ -293,7 +367,7 @@ written before the field, and every genuinely free-form option like
 | `name`        | string         | yes      | snake_case identifier the backend reads the value by. `[a-z][a-z0-9_]*`, unique within the table. |
 | `label`       | string         | no       | Human-readable label shown in the settings UI. Falls back to `name` when absent. |
 | `description` | string         | yes      | Help text shown beside the input in the settings UI.   |
-| `type`        | string         | no       | `string`, `integer`, or `bool`. Drives the input the UI renders: `bool` gets a switch, an option with `choices` a dropdown, everything else a text field. Default `string`. |
+| `type`        | string         | no       | `string`, `integer`, `float`, or `bool`. Drives the input the UI renders — `bool` gets a switch, an option with `choices` a dropdown, everything else a text field — and what the daemon accepts as a value. Default `string`. |
 | `default`     | matches `type` | no       | Value used when the user sets none. Forbidden on `base_url` — see below. When `choices` is present, must be one of them. |
 | `choices`     | array of `type` | no      | The values this option accepts. Renders a dropdown, and the daemon refuses to store anything else. Omit it for an open-ended option. Entries must be unique, and a `bool` must not declare any. |
 | `required`    | bool           | no       | Whether a value must be set before the backend can load. Default `false`. |
@@ -303,10 +377,16 @@ written before the field, and every genuinely free-form option like
 An option named `base_url` is the convention for a backend's configurable
 endpoint. When the user sets one, the daemon treats its authority as
 **user-authorized egress** for the backend: it is added to the WASM transport's
-egress set at model-load time, and the SSRF resolver guard is relaxed for it
-(see [wasm.md — Network egress](./wasm.md#network-egress)). This lets a cloud
-backend be pointed at an arbitrary gateway — public, local, or on a private
-network — without re-installing the backend.
+egress set, and the SSRF resolver guard is relaxed for it (see
+[wasm.md — Network egress](./wasm.md#network-egress)). This lets a cloud backend
+be pointed at an arbitrary gateway — public, local, or on a private network —
+without re-installing the backend.
+
+The egress set is consulted per outbound connection, so changing `base_url`
+takes effect on the backend's next request. Nothing is reloaded, and the value
+is checked when it is written rather than when the model next loads: a value no
+host can be read from is refused by
+[`PUT .../option/base_url`](../endpoints/v1/backends/options.md).
 
 The name is load-bearing: the daemon recognizes `base_url` and nothing else. An
 option called `endpoint`, `api_base`, or `server_url` is a perfectly valid
