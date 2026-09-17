@@ -85,6 +85,7 @@ output rate — is not here: that is the model's manifest entry on
 
 | Value           | Meaning                                                                |
 |-----------------|------------------------------------------------------------------------|
+| `verifying`     | Checking the model files already on disk (size, and the declared SHA-256) before fetching anything. Every load opens here, and a load with nothing to fetch never leaves it, so a client must not word this phase as a download. The `download` sub-object is populated, counting bytes hashed rather than bytes received. |
 | `downloading`   | Pulling model files; the `download` sub-object is populated.            |
 | `loading_model` | Files are in place; weights are being loaded onto the chosen device.    |
 | `completed`     | The load finished; cleared on the next read after `ready`.              |
@@ -198,8 +199,9 @@ above.
 
 ## `POST /pipeline/{stage}/model/cancel`
 
-Abandon the load **this stage** has in flight, including the download feeding
-it. Typically a large local model whose files the user does not want to wait
+Abandon the load **this stage** has in flight, including the file work feeding
+it — both the `verifying` pass over what is already on disk and any download it
+starts. Typically a large local model whose files the user does not want to wait
 for.
 
 Scoped to the stage that asked: a stage with nothing of its own in flight

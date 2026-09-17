@@ -62,7 +62,7 @@ impl AppModel {
                 // failed) must keep its banner rather than be cleared here.
                 if matches!(
                     self.model_operation_state,
-                    ModelOperationState::Loading { .. } | ModelOperationState::Downloading { .. }
+                    ModelOperationState::Loading { .. } | ModelOperationState::Provisioning { .. }
                 ) {
                     Task::perform(
                         get_download_status(SYNTHESIS_STAGE),
@@ -86,7 +86,7 @@ impl AppModel {
             }
 
             DownloadMessage::NoDownloadInProgress => {
-                // Only clear a `Downloading` state. A `Loading` state means
+                // Only clear a `Provisioning` state. A `Loading` state means
                 // the `POST /pipeline/{stage}/model` call is still in flight
                 // (the subprocess might still be spawning, or the WASM
                 // component might still be initialising) — its `ModelChanged` /
@@ -100,7 +100,7 @@ impl AppModel {
                 // contract (see `ModelError` handler).
                 if matches!(
                     self.model_operation_state,
-                    ModelOperationState::Downloading { .. }
+                    ModelOperationState::Provisioning { .. }
                 ) {
                     self.model_operation_state = ModelOperationState::Ready;
                 }
