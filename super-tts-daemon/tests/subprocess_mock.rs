@@ -50,6 +50,14 @@ multilingual = false
 primary_language = "en"
 supported_languages = ["en"]
 supported_devices = ["cpu"]
+
+# A third, for the same reason.
+[[models]]
+name = "mock-reconfigure"
+multilingual = false
+primary_language = "en"
+supported_languages = ["en"]
+supported_devices = ["cpu"]
 "#;
 
 /// A backend directory holding the manifest and the mock binary, plus the guard
@@ -137,6 +145,78 @@ async fn subprocess_orchestration_against_mock() {
         sink.frames.last().expect("frames were received").kind,
         FrameKind::Done,
         "the stream must end with a terminal frame"
+    );
+
+    backend.shutdown().await.expect("clean shutdown");
+}
+
+/// Changing an option reaches a *running* backend, without reloading it.
+///
+/// The end-to-end version of the claim the daemon's option write rests on: the
+/// headers are read per request, so swapping them is enough. Same spawned unit
+/// throughout — nothing is torn down, no model is provisioned again — and the
+/// second synthesis carries the new value where the first carried the old one.
+#[tokio::test]
+async fn a_changed_option_reaches_a_running_subprocess() {
+    /// The `options` string the mock echoes back in its mark frame.
+    async fn echoed_options(backend: &SubprocessBackend) -> String {
+        let mut sink = CollectingSink::default();
+        backend
+            .synthesize(
+                &SynthesizeRequest {
+                    text: "hello",
+                    ..Default::default()
+                },
+                &mut sink,
+            )
+            .await
+            .expect("synthesize");
+        let mark = sink
+            .frames
+            .iter()
+            .find(|f| f.kind == FrameKind::Mark)
+            .expect("the mock emits one mark frame");
+        String::from_utf8_lossy(&mark.payload).into_owned()
+    }
+
+    if std::env::var("SUPER_TTS_TEST_SUBPROCESS").is_err() {
+        return; // needs a systemd --user session
+    }
+    super_tts_daemon::install_crypto_provider();
+
+    let (dir, _cleanup) = seed_backend_dir("reconfigure");
+
+    let option = "x-tts-option-voice_design_preset".to_string();
+    let mut backend = SubprocessBackend::spawn(
+        &dir,
+        "mock-reconfigure",
+        "cpu",
+        &host_detect::detect(),
+        None,
+        vec![(option.clone(), "Deep narrator (male)".to_string())],
+    )
+    .await
+    .expect("spawn + load mock backend");
+
+    let before = echoed_options(&backend).await;
+    assert!(
+        before.contains("voice_design_preset=Deep narrator (male)"),
+        "the spawn value must arrive first: {before}"
+    );
+
+    backend.reconfigure(super_tts_daemon::tts_models::synthesize::BackendContext {
+        headers: vec![(option, "Bright presenter (female)".to_string())],
+        user_allowed_hosts: Vec::new(),
+    });
+
+    let after = echoed_options(&backend).await;
+    assert!(
+        after.contains("voice_design_preset=Bright presenter (female)"),
+        "the new value must arrive on the next request, with no reload in between: {after}"
+    );
+    assert!(
+        !after.contains("Deep narrator"),
+        "the old value must be gone, not appended: {after}"
     );
 
     backend.shutdown().await.expect("clean shutdown");

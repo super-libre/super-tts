@@ -145,8 +145,12 @@ pub struct BackendOption {
     pub label: Option<String>,
     #[serde(default)]
     pub description: String,
-    /// The option's input type (`string` / `integer` / `bool`); absent when the
-    /// backend declared none.
+    /// The option's input type (`string` / `integer` / `float` / `bool`);
+    /// absent when the backend declared none, which means `string`.
+    ///
+    /// Drives the input a client renders, and what the daemon accepts as a
+    /// value: a write of something that is not of this type is refused with
+    /// `400 invalid_value`.
     #[serde(default, rename = "type")]
     pub r#type: Option<String>,
     #[serde(default)]
@@ -157,6 +161,17 @@ pub struct BackendOption {
     /// anything outside it.
     #[serde(default)]
     pub choices: Vec<String>,
+    /// Inclusive bounds for a numeric option, when it declares them. The
+    /// daemon refuses a write outside them.
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// The increment a numeric option moves in. Present with `min` and `max`
+    /// on an option a client should render as a slider; the grid is the
+    /// control's, and the daemon accepts any value within the bounds.
+    #[serde(default)]
+    pub step: Option<f64>,
     #[serde(default)]
     pub required: bool,
     /// Current effective value (override or default) reported by the daemon.
@@ -165,6 +180,20 @@ pub struct BackendOption {
 }
 
 impl BackendOption {
+    /// Whether a client should render this option as a slider: a numeric
+    /// option bounded at both ends and moving in a declared increment.
+    ///
+    /// The same shape-implies-control rule as `choices`, which renders a
+    /// dropdown. An option missing any of the three has something left to type
+    /// and gets a field instead.
+    #[must_use]
+    pub fn is_slider(&self) -> bool {
+        matches!(self.r#type.as_deref(), Some("integer" | "float"))
+            && self.min.is_some()
+            && self.max.is_some()
+            && self.step.is_some()
+    }
+
     /// Whether the backend declared this option a boolean, so a client can
     /// offer a switch rather than a free-text field.
     ///
@@ -313,6 +342,9 @@ mod tests {
             r#type: r#type.map(Into::into),
             default: default.map(Into::into),
             choices: Vec::new(),
+            min: None,
+            max: None,
+            step: None,
             required: false,
             value: value.map(Into::into),
         }

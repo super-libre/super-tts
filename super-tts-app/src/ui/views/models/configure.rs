@@ -52,6 +52,16 @@ pub fn configure_sheet<'a>(backend: &'a BackendInfo, app: &'a AppModel) -> Eleme
                 section = section.add(choice_option_row(&backend.source, option));
                 continue;
             }
+            // A numeric option bounded at both ends and moving in a declared
+            // increment has nothing left to type: both ends and the grid are
+            // the backend's, so the control is a slider and the only thing the
+            // user supplies is where on it to stop.
+            if option.is_slider() {
+                let key = (backend.source.clone(), option.name.clone());
+                let pending = app.backend_option_inputs.get(&key).map(String::as_str);
+                section = section.add(slider_option_row(&backend.source, option, pending));
+                continue;
+            }
             let key = (backend.source.clone(), option.name.clone());
             let input = app
                 .backend_option_inputs
@@ -238,6 +248,92 @@ pub(super) fn choice_option_row<'a>(
     .into()
 }
 
+/// How many decimals it takes to write `step` without losing it.
+///
+/// A slider over a fractional step has to commit the value the user stopped
+/// on, not the binary double nearest it: a 0.1 step from 0.6 reaches
+/// 0.7000000000000001, and storing that would show it back in the settings
+/// sheet and inject it into a header. Six is where a settings control stops
+/// being one.
+fn step_decimals(step: f64) -> usize {
+    (0..=6)
+        .find(|&d| format!("{step:.d$}").parse::<f64>() == Ok(step))
+        .unwrap_or(6)
+}
+
+/// One option row for a numeric option that declares `min`, `max` and `step`:
+/// the label/description over a slider, with the value it is resting on shown
+/// beside it.
+///
+/// Dragging updates the pending value only; the write fires once on release,
+/// the way the volume slider does, so a single drag is not a hundred `POST`s.
+/// The pending value rides in the same map the text rows use, so this borrows
+/// their save path whole rather than growing a second one.
+///
+/// There is no Save button for the same reason the dropdown has none: letting
+/// go is the write.
+pub(super) fn slider_option_row<'a>(
+    source: &'a str,
+    option: &'a BackendOption,
+    pending: Option<&'a str>,
+) -> Element<'a, Message> {
+    let spacing = cosmic::theme::spacing();
+    let display = option.label.clone().unwrap_or_else(|| option.name.clone());
+    let hint = option_hint(option);
+    let label = config_label(display, (!hint.is_empty()).then_some(hint), option.required);
+
+    // `is_slider` is what routed us here, so all three are present.
+    let (low, high, step) = (
+        option.min.unwrap_or(0.0),
+        option.max.unwrap_or(1.0),
+        option.step.unwrap_or(1.0),
+    );
+    let decimals = step_decimals(step);
+    // What the slider rests on: the value being dragged, else what is in
+    // effect, else the low end — an option with no value and no default has
+    // to put the handle somewhere, and the bottom of its own range is the
+    // only choice that is certainly in it.
+    let parse = |v: &str| v.trim().parse::<f64>().ok();
+    let current = pending
+        .and_then(parse)
+        .or_else(|| option.value.as_deref().and_then(parse))
+        .unwrap_or(low)
+        .clamp(low, high);
+
+    let drag_source = source.to_string();
+    let drag_name = option.name.clone();
+    let slider = widget::slider(low..=high, current, move |value| {
+        Message::Backend(BackendMessage::BackendOptionInputChanged {
+            source: drag_source.clone(),
+            name: drag_name.clone(),
+            value: format!("{value:.decimals$}"),
+        })
+    })
+    .step(step)
+    .on_release(Message::Backend(BackendMessage::BackendOptionSaved {
+        source: source.to_string(),
+        name: option.name.clone(),
+    }))
+    .width(Length::Fill);
+
+    let reading = text::body(format!("{current:.decimals$}"))
+        .width(Length::Fixed(44.0))
+        .align_x(Alignment::End);
+
+    settings::item_row(vec![
+        column![
+            label,
+            row![slider, reading]
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center),
+        ]
+        .spacing(spacing.space_xs)
+        .width(Length::Fill)
+        .into(),
+    ])
+    .into()
+}
+
 /// One option-entry row for a backend (e.g. `base_url`): the label/description
 /// over a full-width text field + Save on its own row beneath, so the input
 /// isn't squeezed to the right of the label in the narrow sheet.
@@ -305,4 +401,48 @@ pub(super) fn option_row<'a>(
             .into(),
     ])
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::step_decimals;
+
+    /// A slider commits what the user stopped on, and a fractional step does
+    /// not land on round doubles: 0.6 + 0.1 is 0.7000000000000001. Writing the
+    /// value back at the step's own precision is what keeps that out of the
+    /// settings sheet and out of the header the daemon injects.
+    #[test]
+    fn a_step_is_written_at_its_own_precision() {
+        assert_eq!(step_decimals(1.0), 0);
+        assert_eq!(step_decimals(5.0), 0);
+        assert_eq!(step_decimals(0.5), 1);
+        assert_eq!(step_decimals(0.1), 1);
+        assert_eq!(step_decimals(0.25), 2);
+        assert_eq!(step_decimals(0.001), 3);
+    }
+
+    /// The rounded value has to read back as a number inside the same range,
+    /// or the slider would write something the daemon then refuses.
+    #[test]
+    fn a_rounded_step_still_parses() {
+        let (low, high, step) = (0.6_f64, 1.2_f64, 0.1_f64);
+        let decimals = step_decimals(step);
+        let mut value = low;
+        while value <= high + f64::EPSILON {
+            let written = format!("{value:.decimals$}");
+            let parsed: f64 = written.parse().expect("a slider writes a number");
+            assert!(
+                (low..=high).contains(&parsed),
+                "{written} fell outside {low}..={high}"
+            );
+            value += step;
+        }
+    }
+
+    /// A step no decimal count can express falls back rather than looping or
+    /// writing a value that does not round-trip.
+    #[test]
+    fn an_unrepresentable_step_falls_back() {
+        assert_eq!(step_decimals(1.0 / 3.0), 6);
+    }
 }
