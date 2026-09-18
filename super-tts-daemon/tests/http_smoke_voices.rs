@@ -331,3 +331,29 @@ async fn a_settings_token_cannot_reach_the_voice_library() {
     let (s, body) = upload(&sock, "/voice?label=Sneaky", &token, wav(0.5)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
 }
+
+/// A refused upload must still be *answered*, not reset.
+///
+/// The scope check refuses on the headers alone, before anything reads the
+/// body, so the daemon has to drain what the client is still sending. Without
+/// that, hyper closes a connection whose request it never finished reading and
+/// the client gets `BrokenPipe` on the write instead of the `403` — which is
+/// what a browser reports as a bare "failed to fetch" rather than
+/// `scope_denied`.
+///
+/// A body comfortably past the socket buffer is what makes the race worth
+/// testing: the client cannot hand it all to the kernel in one write, so the
+/// answer arrives only if the daemon kept reading. Measured against a daemon
+/// without the drain, this fails ~48% of the time under load where the 0.5s
+/// clip above fails ~12%; on an idle machine neither one fails, so treat this
+/// as a canary rather than a proof.
+#[tokio::test]
+async fn a_refused_upload_is_answered_rather_than_reset() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+
+    // ~1 MiB: well past the ~208 KiB socket buffer, well under the daemon's
+    // drain limit.
+    let (s, body) = upload(&sock, "/voice?label=Oversized", &token, wav(12.0)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["message"], "scope_denied", "{body}");
+}
