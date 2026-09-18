@@ -45,13 +45,14 @@ impl AppModel {
         self.model_device_for = None;
     }
 
-    /// Set model to downloading state
-    pub(in crate::core::app) fn set_model_downloading(
+    /// Set model to the provisioning state — its files are being verified or
+    /// downloaded. Which of the two is in `progress.status`.
+    pub(in crate::core::app) fn set_model_provisioning(
         &mut self,
         target_model: String,
         progress: super_tts_shared::models::protocol::DownloadProgress,
     ) {
-        self.model_operation_state = ModelOperationState::Downloading {
+        self.model_operation_state = ModelOperationState::Provisioning {
             target_model,
             progress,
         };
@@ -91,7 +92,12 @@ impl AppModel {
     /// - `"error"` → `Error` state, surfacing the daemon's failure detail
     /// - `"completed" | "cancelled"` → no state change (`ModelChanged` /
     ///   `DownloadCancelled` carry those transitions)
-    /// - anything else (`"downloading"`, …) → `Downloading` state
+    /// - `"verifying" | "downloading"` (and anything unrecognised) →
+    ///   `Provisioning` state, which keeps the snapshot verbatim so the card
+    ///   can word itself from `progress.status`. The two phases share a state
+    ///   deliberately: both are byte-tracked work on the model's files, and
+    ///   every gate that asks "is a switch in flight?" wants the same answer
+    ///   for both.
     ///
     /// Any progress event also resets the stall watchdog (see `PingTimeout`).
     pub(in crate::core::app) fn apply_download_progress(
@@ -125,8 +131,9 @@ impl AppModel {
                 log::info!("Download finished with status: {}", progress.status);
             }
             _ => {
-                // "downloading" and other states default to downloading
-                self.set_model_downloading(target_model, progress.clone());
+                // "verifying", "downloading", and anything the daemon adds
+                // later: files are being provisioned.
+                self.set_model_provisioning(target_model, progress.clone());
             }
         }
     }
@@ -139,7 +146,7 @@ impl AppModel {
     pub(in crate::core::app) fn check_switch_stall(&mut self) {
         if !matches!(
             self.model_operation_state,
-            ModelOperationState::Loading { .. } | ModelOperationState::Downloading { .. }
+            ModelOperationState::Loading { .. } | ModelOperationState::Provisioning { .. }
         ) {
             return;
         }

@@ -26,12 +26,17 @@ use std::path::PathBuf;
 pub enum ModelOperationState {
     /// Model is ready for use
     Ready,
-    /// Downloading model files with progress information
-    Downloading {
+    /// Provisioning the model's files: verifying the copies already on disk,
+    /// and downloading the ones that are missing or stale. One state for both
+    /// phases because the daemon reports them through one byte-tracked
+    /// progress shape and the UI treats them alike; `progress.status`
+    /// (`"verifying"` / `"downloading"`) says which is running, and is the only
+    /// thing the card's wording depends on.
+    Provisioning {
         target_model: String,
         progress: super_tts_shared::models::protocol::DownloadProgress,
     },
-    /// Loading model into memory (after download completed)
+    /// Loading model into memory (after the files are all on disk)
     Loading {
         target_model: String,
         status_message: String,

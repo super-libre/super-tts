@@ -151,7 +151,7 @@ impl SuperTTSDaemon {
     /// being fetched.
     ///
     /// Mapped from the daemon's existing download tracker rather than tracked
-    /// twice: `phase` is that tracker's `status` (`downloading`,
+    /// twice: `phase` is that tracker's `status` (`verifying`, `downloading`,
     /// `loading_model`, `cancelled`, `completed`, `error`), under the name the
     /// pipeline shape gives it.
     async fn stage_switch(&self) -> Option<StageSwitch> {

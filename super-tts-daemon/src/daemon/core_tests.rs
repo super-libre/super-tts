@@ -2015,6 +2015,9 @@ async fn an_in_flight_download_reaches_the_stage_slot() {
         3,
         Arc::new(AtomicBool::new(false)),
     ));
+    // A tracker opens in its `verifying` phase; this test is about a download
+    // in flight, so put it in the phase a download is actually in.
+    tracker.mark_downloading();
     daemon
         .download_manager
         .start_download(tracker)

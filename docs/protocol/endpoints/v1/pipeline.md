@@ -155,7 +155,7 @@ loading the weights.
 
 | Field        | Type   | Notes                                                            |
 |--------------|--------|------------------------------------------------------------------|
-| `phase`      | string | `downloading`, `loading_model`, `completed`, `cancelled`, or `error` — the same vocabulary the `download_progress` event's `status` uses. |
+| `phase`      | string | `verifying`, `downloading`, `loading_model`, `completed`, `cancelled`, or `error` — the same vocabulary the `download_progress` event's `status` uses. |
 | `target`     | object | `{ model, source }` — what is being loaded, and the backend serving it. |
 | `started_at` | string | RFC 3339 timestamp of when the load began.                       |
 | `download`   | object | `{ current_file, file_index, total_files, bytes_downloaded, total_bytes, percentage, eta_seconds }`, per file — see [`download_progress`](./events.md) for what the counters mean. |
