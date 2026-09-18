@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::daemon::http::state::PeerInfo;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -11,13 +12,77 @@ use std::time::Duration;
 /// the desktop (audit 2 Tier 3 #10).
 static CONSENT_POPUP: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
-/// Identifies the consent flow uniquely: (`exe_path`, normalized
-/// `scopes`). The user verifies a *binary*, not a self-reported display
-/// name, so the deny / dedup key is keyed on the kernel-resolved
-/// `exe_path` plus the requested scope set (sorted + deduped via
-/// [`normalize_scopes`] so request order doesn't matter). `app_name` is
-/// shown in the popup but isn't part of the identity.
-pub(crate) type ConsentKey = (PathBuf, Vec<String>);
+/// Who the daemon believes is calling.
+///
+/// The two variants are the two transports, and they are not the same kind of
+/// claim. [`Self::Native`] is what the kernel says about a peer on the Unix
+/// socket; [`Self::Web`] is what a browser says about the page it is running.
+/// Keeping them as separate variants rather than one struct with optional
+/// fields is what stops a check written for one from silently passing for the
+/// other — `is_official_client` reading an absent exe path as "not official"
+/// would be correct by accident, and one refactor away from not being.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum PeerIdentity {
+    /// A process on the Unix socket, identified by `SO_PEERCRED`: its
+    /// `/proc/<pid>/exe`, as the kernel resolves it.
+    Native {
+        /// `/proc/<pid>/exe`.
+        exe_path: PathBuf,
+    },
+    /// A page on the TCP listener, identified by its `Origin`.
+    ///
+    /// **This is a weaker claim than [`Self::Native`], and deliberately so.**
+    /// The kernel vouches for an exe path; nothing vouches for an origin but
+    /// the browser that sent it. A non-browser process can put any string here.
+    /// What keeps that from mattering is that the daemon only accepts origins
+    /// the user wrote into [`TcpConfig::allowed_origins`](crate::config::TcpConfig::allowed_origins)
+    /// — so forging one gets you no further than forging an origin the user
+    /// already trusted, on a listener they already turned on.
+    ///
+    /// The consent dialog says which kind it is asking about, because "allow
+    /// this website" and "allow this program" deserve different answers.
+    Web {
+        /// The full origin as the browser sent it: scheme, host and port.
+        origin: String,
+    },
+}
+
+impl PeerIdentity {
+    /// A process on the Unix socket.
+    #[cfg(test)]
+    pub(crate) fn native(exe_path: impl Into<PathBuf>) -> Self {
+        Self::Native {
+            exe_path: exe_path.into(),
+        }
+    }
+
+    /// A browser page served from `origin`.
+    #[cfg(test)]
+    pub(crate) fn web(origin: impl Into<String>) -> Self {
+        Self::Web {
+            origin: origin.into(),
+        }
+    }
+
+    /// One line naming the caller, for logs and the consent dialog. A web peer
+    /// is named as a web peer, so a log line can never be read as naming a
+    /// binary.
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::Native { exe_path } => exe_path.display().to_string(),
+            Self::Web { origin } => format!("web origin {origin}"),
+        }
+    }
+}
+
+/// Identifies the consent flow uniquely: (`identity`, normalized `scopes`).
+/// The user verifies a *caller*, not a self-reported display name, so the
+/// deny / dedup key is keyed on the resolved [`PeerIdentity`] plus the
+/// requested scope set (sorted + deduped via [`normalize_scopes`] so request
+/// order doesn't matter). `app_name` is shown in the popup but isn't part of
+/// the identity.
+pub(crate) type ConsentKey = (PeerIdentity, Vec<String>);
 pub(crate) type ConsentLock = Arc<tokio::sync::Mutex<()>>;
 
 /// Sort + dedup a requested scope list so the consent key and the
@@ -97,7 +162,7 @@ async fn read_consent_decision(stdout: tokio::process::ChildStdout) -> ConsentDe
 pub(crate) async fn ask_user_for_consent(
     app_name: &str,
     scopes: &[String],
-    exe_path: &Path,
+    identity: &PeerIdentity,
 ) -> ConsentDecision {
     // `locate_consent_helper` already logs a specific reason on every
     // failure path (missing / un-canonicalizable / failed metadata check),
@@ -121,12 +186,23 @@ pub(crate) async fn ask_user_for_consent(
 
     let mut cmd = tokio::process::Command::new(&helper);
     cmd.env("SUPER_TTS_AUTH_APP_NAME", app_name)
-        .env("SUPER_TTS_AUTH_SCOPES", scopes.join(" "))
-        .env(
-            "SUPER_TTS_AUTH_EXE_PATH",
-            exe_path.to_string_lossy().as_ref(),
-        )
-        .stdin(std::process::Stdio::null())
+        .env("SUPER_TTS_AUTH_SCOPES", scopes.join(" "));
+    match identity {
+        PeerIdentity::Native { exe_path } => {
+            cmd.env(
+                "SUPER_TTS_AUTH_EXE_PATH",
+                exe_path.to_string_lossy().as_ref(),
+            );
+        }
+        // A web peer sets the origin variable *instead of* the exe path, never
+        // alongside it. The helper decides which dialog to show by which one it
+        // was given, so sending both would leave the user reading a sentence
+        // about a binary when a website is what is asking.
+        PeerIdentity::Web { origin } => {
+            cmd.env("SUPER_TTS_AUTH_WEB_ORIGIN", origin);
+        }
+    }
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
@@ -171,7 +247,15 @@ const OFFICIAL_CLIENT_NAMES: [&str; 3] =
 /// binaries adds no new attack surface. Returns a plain bool: failure
 /// is the common case (every third-party client) and is deliberately
 /// not logged here — the caller logs the rare success.
-pub(crate) fn is_official_client(exe_path: &Path) -> bool {
+pub(crate) fn is_official_client(identity: &PeerIdentity) -> bool {
+    let PeerIdentity::Native { exe_path } = identity else {
+        // A web peer is never first-party. The whole check below is about a
+        // binary on this filesystem, and a page has none — there is nothing to
+        // canonicalize and no ownership to verify, so the only safe answer is
+        // the consent popup. A site calling itself `super-tts-app` must not get
+        // within reach of the short-circuit.
+        return false;
+    };
     let Ok(daemon_exe) = std::env::current_exe() else {
         return false;
     };
@@ -289,38 +373,48 @@ fn verify_helper_metadata(_: &Path) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Resolve the calling process's executable path from the
-/// `axum::Extension<PeerInfo>` attached by the accept loop. Returns `Some(path)`
-/// on success and `None` when the peer can't be identified — a missing
-/// `PeerInfo`/pid (`SO_PEERCRED` unsupported, peer process gone) or a
-/// kernel-denied `/proc/<pid>/exe` readlink (Yama `ptrace_scope`, systemd
-/// `ProtectProc=`, a sandboxed daemon, pid recycling).
+/// Resolve who is calling, from the [`PeerInfo`] the accept loop attached.
+///
+/// A peer on the Unix socket is its `/proc/<pid>/exe`. `None` means the peer
+/// can't be identified — a missing `PeerInfo`/pid (`SO_PEERCRED` unsupported,
+/// peer process gone) or a kernel-denied `/proc/<pid>/exe` readlink (Yama
+/// `ptrace_scope`, systemd `ProtectProc=`, a sandboxed daemon, pid recycling).
+///
+/// A peer that arrived over TCP has no kernel-attested identity at all, so it
+/// is resolved from its `Origin` instead — see [`PeerInfo::web_origin`]. That
+/// field is only ever set by the origin gate, which has already checked the
+/// value against the user's allowlist; nothing here re-derives it from a
+/// header, so there is exactly one place an origin can enter the system.
 ///
 /// The caller **must fail closed** on `None`: the consent model verifies a
-/// *binary*, so an unidentifiable peer must not be prompted for (a
+/// *caller*, so an unidentifiable peer must not be prompted for (a
 /// `<unknown>`-labelled dialog is meaningless to approve) nor minted a token
 /// bound to a bogus identity that the `/events` exe-watch would then spuriously
 /// revoke (audit 2 Tier 3 #9). Each failure is logged with its specific reason.
-pub(crate) fn resolve_peer_exe(peer: Option<&axum::Extension<PeerInfo>>) -> Option<PathBuf> {
+pub(crate) fn resolve_peer_identity(
+    peer: Option<&PeerInfo>,
+    context: &str,
+) -> Option<PeerIdentity> {
     let Some(peer) = peer else {
-        log::warn!(
-            "auth_request: no PeerInfo extension attached — cannot identify the requesting binary"
-        );
+        log::warn!("{context}: no PeerInfo extension attached — cannot identify the caller");
         return None;
     };
-    let Some(pid) = peer.0.pid else {
+    if let Some(origin) = &peer.web_origin {
+        return Some(PeerIdentity::Web {
+            origin: origin.clone(),
+        });
+    }
+    let Some(pid) = peer.pid else {
         log::warn!(
-            "auth_request: PeerInfo had no pid (SO_PEERCRED returned no credentials); cannot resolve exe"
+            "{context}: PeerInfo had no pid (SO_PEERCRED returned no credentials); cannot resolve exe"
         );
         return None;
     };
     let path = format!("/proc/{pid}/exe");
     match std::fs::read_link(&path) {
-        Ok(p) => Some(p),
+        Ok(exe_path) => Some(PeerIdentity::Native { exe_path }),
         Err(e) => {
-            log::warn!(
-                "auth_request: read_link({path}) failed: {e}; cannot identify peer pid {pid}"
-            );
+            log::warn!("{context}: read_link({path}) failed: {e}; cannot identify peer pid {pid}");
             None
         }
     }

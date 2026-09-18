@@ -10,6 +10,7 @@
 //! Enforcing that here rather than in a router guard is what lets one endpoint
 //! serve `playback_events`, `audio_visualization` and `daemon_status` at once.
 
+use crate::daemon::http::internal::auth::consent::{PeerIdentity, resolve_peer_identity};
 use crate::daemon::http::internal::auth::middleware::AuthContext;
 use crate::daemon::http::internal::auth::tokens::TokenStore;
 use crate::daemon::http::internal::helpers::responses::{invalid_session, reason, scope_denied};
@@ -18,7 +19,6 @@ use crate::daemon::http::wire::{ErrorEnvelope, ReasonEnvelope};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use std::path::PathBuf;
 
 /// Build the raw bytes of one SSE `event: <name>\ndata: <json>\n\n` frame from
 /// an already-serialized JSON `data:` string. `data` must be single-line (no raw
@@ -209,7 +209,7 @@ pub(crate) async fn events(
         peer.and_then(|p| p.0.pid),
         s.tokens.clone(),
         ctx.token,
-        ctx.meta.exe_path,
+        ctx.meta.grantee,
     );
 
     // The handler's own `sse_tx` clone is dropped here. The forwarders
@@ -304,7 +304,7 @@ fn spawn_events_keepalive_and_exe_watch(
     peer_pid: Option<u32>,
     tokens: TokenStore,
     token_str: String,
-    stored_exe: PathBuf,
+    stored: PeerIdentity,
 ) {
     use tokio::time::{Duration, MissedTickBehavior, interval};
 
@@ -335,14 +335,23 @@ fn spawn_events_keepalive_and_exe_watch(
                     }
                 }
                 _ = exe_watch.tick() => {
+                    // No pid means a web subscriber, which has no binary to
+                    // watch: its identity is an origin, and an origin cannot
+                    // be swapped on disk mid-stream. What *can* change is the
+                    // user's allowlist, and this watch does not see that — a
+                    // stream opened while an origin was allowed outlives its
+                    // removal, until the client disconnects.
                     let Some(pid) = peer_pid else { continue; };
-                    let current = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
-                    if current.as_ref().is_some_and(|c| *c == stored_exe) {
+                    let current = resolve_peer_identity(
+                        Some(&PeerInfo::unix(Some(pid), None)),
+                        "events exe-watch",
+                    );
+                    if current.as_ref().is_some_and(|c| *c == stored) {
                         continue;
                     }
                     log::info!(
                         "widget exe_changed on pid {pid}: stored={} current={:?}; revoking session",
-                        stored_exe.display(),
+                        stored.describe(),
                         current,
                     );
                     let _ = try_emit_sse_event(

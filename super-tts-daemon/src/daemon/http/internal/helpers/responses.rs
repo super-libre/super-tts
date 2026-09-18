@@ -27,6 +27,12 @@ pub(crate) fn error_response(status: StatusCode, message: &str, reason: &str) ->
 pub(crate) mod reason {
     // invalid_session reasons
     pub(crate) const UNKNOWN: &str = "unknown";
+    /// The caller is no longer the one the token was minted for. `docs/protocol/auth.md`
+    /// specifies this as a *per-request* outcome ("the next request returns `401
+    /// invalid_session` with reason `exe_changed`"), not just the `/events`
+    /// exe-watch's 30 s tick. The name says `exe` because that was the only
+    /// grantee kind when it was written; it covers a changed web origin too.
+    pub(crate) const EXE_CHANGED: &str = "exe_changed";
 
     // auth_denied reasons
     pub(crate) const INVALID_BODY: &str = "invalid_body";
@@ -41,6 +47,11 @@ pub(crate) mod reason {
     /// binary is asking — consent requires a verifiable binary, so it fails
     /// closed (audit 2 Tier 3 #9).
     pub(crate) const PEER_UNVERIFIABLE: &str = "peer_unverifiable";
+    /// A request on the TCP listener sent no `Origin`, or sent one the user has
+    /// not put in `[http.tcp].allowed_origins`. It is the TCP counterpart of
+    /// [`UID_MISMATCH`]: on the Unix socket the kernel says who is calling, and
+    /// here the allowlist is the only thing that does.
+    pub(crate) const ORIGIN_NOT_ALLOWED: &str = "origin_not_allowed";
 }
 
 pub(crate) fn invalid_session(reason: &'static str) -> Response {

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use crate::daemon::http::internal::auth::consent::PeerIdentity;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use log::{error, info, warn};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +13,14 @@ use tokio::sync::mpsc;
 /// Schema version for the persisted sessions blob. Bump on any breaking
 /// change to `TokenMeta`'s on-disk shape so an older daemon can refuse
 /// to load a newer file rather than misinterpret fields.
-pub(crate) const SESSIONS_SCHEMA_VERSION: u32 = 2;
+///
+/// `3` moved the grantee from a flat `exe_path` to a tagged [`PeerIdentity`],
+/// so that a token minted for a web origin cannot be stored in a field that
+/// means "binary". Version 2 blobs are migrated on load by [`V2TokenMeta`]
+/// rather than discarded — a version mismatch otherwise empties the store, and
+/// every third-party client would face a fresh consent popup after what is, to
+/// the user, an ordinary update.
+pub(crate) const SESSIONS_SCHEMA_VERSION: u32 = 3;
 
 /// After a keyring write fails, suppress further attempts for this
 /// long. A locked keyring would otherwise re-prompt the user every
@@ -254,9 +261,28 @@ impl Default for TokenStore {
 pub(crate) struct TokenMeta {
     pub(crate) app_name: String,
     pub(crate) scopes: Vec<String>,
-    pub(crate) exe_path: PathBuf,
+    /// Who the user approved. Carries its own kind, so a token minted for a
+    /// binary can never be matched against a web origin or the reverse — the
+    /// comparison in [`Self::matches`] is between whole identities, not between
+    /// whichever fields happen to be populated.
+    pub(crate) grantee: PeerIdentity,
     pub(crate) issued_at: DateTime<Utc>,
     pub(crate) expires_at: DateTime<Utc>,
+}
+
+impl TokenMeta {
+    /// Is `identity` the caller this token was granted to?
+    ///
+    /// Whole-identity equality, which is what keeps the variants from leaking
+    /// into each other.
+    pub(crate) fn matches(&self, identity: &PeerIdentity) -> bool {
+        &self.grantee == identity
+    }
+
+    /// One line naming the grantee, for logs.
+    pub(crate) fn describe_grantee(&self) -> String {
+        self.grantee.describe()
+    }
 }
 
 /// On-disk wrapper for the sessions map. Keyed by token so the JSON
@@ -265,6 +291,102 @@ pub(crate) struct TokenMeta {
 pub(crate) struct SessionsFile {
     pub(crate) version: u32,
     pub(crate) sessions: HashMap<String, TokenMeta>,
+}
+
+/// A [`TokenMeta`] as version 2 wrote it, read only to migrate it forward.
+///
+/// Every session in a v2 blob predates the TCP listener, so every one of them
+/// was granted to a process on the Unix socket. The migration is therefore
+/// total and lossless — there is no v2 record whose kind is ambiguous.
+#[derive(Deserialize)]
+struct V2TokenMeta {
+    app_name: String,
+    scopes: Vec<String>,
+    exe_path: PathBuf,
+    issued_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+impl From<V2TokenMeta> for TokenMeta {
+    fn from(old: V2TokenMeta) -> Self {
+        Self {
+            app_name: old.app_name,
+            scopes: old.scopes,
+            grantee: PeerIdentity::Native {
+                exe_path: old.exe_path,
+            },
+            issued_at: old.issued_at,
+            expires_at: old.expires_at,
+        }
+    }
+}
+
+/// The v2 on-disk wrapper.
+#[derive(Deserialize)]
+struct V2SessionsFile {
+    sessions: HashMap<String, V2TokenMeta>,
+}
+
+/// What [`parse_sessions_blob`] found.
+pub(crate) struct LoadedSessions {
+    pub(crate) sessions: HashMap<String, TokenMeta>,
+    /// Whether these came from an older schema and were converted on the way
+    /// in. The caller rewrites the blob when so, which is what stops every
+    /// subsequent start from migrating the same file again.
+    pub(crate) migrated: bool,
+}
+
+/// Read a persisted blob at whatever version it was written, or `None` when it
+/// is neither a version this daemon understands nor parseable as one.
+///
+/// Migration happens here rather than at each call site so there is one place
+/// that knows which versions exist. A version this daemon has never heard of —
+/// a blob written by a *newer* daemon after a rollback — is refused rather than
+/// guessed at, which is what the version field was added for.
+pub(crate) fn parse_sessions_blob(blob: &str) -> Option<LoadedSessions> {
+    let version = serde_json::from_str::<serde_json::Value>(blob)
+        .map_err(|e| warn!("Failed to parse persisted sessions ({e})"))
+        .ok()?
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok());
+    match version {
+        Some(SESSIONS_SCHEMA_VERSION) => serde_json::from_str::<SessionsFile>(blob)
+            .map_err(|e| warn!("Failed to parse persisted sessions ({e})"))
+            .ok()
+            .map(|parsed| LoadedSessions {
+                sessions: parsed.sessions,
+                migrated: false,
+            }),
+        Some(2) => serde_json::from_str::<V2SessionsFile>(blob)
+            .map_err(|e| warn!("Failed to parse v2 persisted sessions ({e})"))
+            .ok()
+            .map(|parsed| {
+                info!(
+                    "Migrating {} persisted sessions from schema v2",
+                    parsed.sessions.len()
+                );
+                LoadedSessions {
+                    sessions: parsed
+                        .sessions
+                        .into_iter()
+                        .map(|(token, meta)| (token, meta.into()))
+                        .collect(),
+                    migrated: true,
+                }
+            }),
+        Some(other) => {
+            warn!(
+                "Persisted sessions schema version {other} is not one this daemon \
+                 understands (expected {SESSIONS_SCHEMA_VERSION} or 2); ignoring"
+            );
+            None
+        }
+        None => {
+            warn!("Persisted sessions blob carries no usable schema version; ignoring");
+            None
+        }
+    }
 }
 
 impl TokenStore {
@@ -320,25 +442,14 @@ impl TokenStore {
             }
         };
 
-        let parsed: SessionsFile = match serde_json::from_str(&blob) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Failed to parse persisted sessions ({e}); starting with empty store");
-                return Ok(store);
-            }
+        let Some(loaded) = parse_sessions_blob(&blob) else {
+            info!("Starting with an empty session store");
+            return Ok(store);
         };
 
-        if parsed.version != SESSIONS_SCHEMA_VERSION {
-            warn!(
-                "Persisted sessions schema version {} != expected {}; ignoring",
-                parsed.version, SESSIONS_SCHEMA_VERSION
-            );
-            return Ok(store);
-        }
-
         let now = Utc::now();
-        let total = parsed.sessions.len();
-        let live: HashMap<String, TokenMeta> = parsed
+        let total = loaded.sessions.len();
+        let live: HashMap<String, TokenMeta> = loaded
             .sessions
             .into_iter()
             .filter(|(_, meta)| meta.expires_at > now)
@@ -350,7 +461,9 @@ impl TokenStore {
             live.len()
         );
 
-        if pruned > 0 {
+        // A migrated blob is rewritten even with nothing pruned, so the next
+        // start reads the current schema instead of migrating again.
+        if pruned > 0 || loaded.migrated {
             // Write the cleaned map back so disk state matches memory.
             let cleaned = SessionsFile {
                 version: SESSIONS_SCHEMA_VERSION,
@@ -367,7 +480,7 @@ impl TokenStore {
         Ok(store)
     }
 
-    /// Mint a fresh 30-day session token for `(app_name, scopes, exe_path)`,
+    /// Mint a fresh 30-day session token for `(app_name, scopes, identity)`,
     /// insert it into the in-memory map, and submit the updated snapshot to the
     /// persist task. The submit happens under the lock so the persist channel's
     /// order matches lock order (audit 2 Tier 1 #4). Persistence failures are
@@ -392,7 +505,7 @@ impl TokenStore {
         &self,
         app_name: &str,
         scopes: &[String],
-        exe_path: &Path,
+        identity: &PeerIdentity,
     ) -> (String, DateTime<Utc>) {
         let token = generate_token();
         let now = Utc::now();
@@ -400,7 +513,7 @@ impl TokenStore {
         let meta = TokenMeta {
             app_name: app_name.to_string(),
             scopes: scopes.to_vec(),
-            exe_path: exe_path.to_path_buf(),
+            grantee: identity.clone(),
             issued_at: now,
             expires_at,
         };
@@ -473,9 +586,8 @@ mod tests {
     //! here. Under `cfg!(test)` no persist task is spawned and the
     //! `SessionPersister` receiver is dropped, so mint/revoke submissions
     //! are no-ops — none of these touch the system keyring.
-    use super::{TokenMeta, TokenStore};
+    use super::{PeerIdentity, TokenMeta, TokenStore};
     use chrono::{Duration as ChronoDuration, Utc};
-    use std::path::PathBuf;
 
     /// Insert a token straight into the in-memory map with an arbitrary
     /// `expires_at`, bypassing `mint`'s fixed 30-day TTL so we can pin
@@ -484,7 +596,7 @@ mod tests {
         let meta = TokenMeta {
             app_name: "test-app".to_string(),
             scopes: vec!["status".to_string()],
-            exe_path: PathBuf::from("/usr/bin/test-client"),
+            grantee: PeerIdentity::native("/usr/bin/test-client"),
             issued_at: Utc::now() - ChronoDuration::days(1),
             expires_at,
         };
@@ -498,7 +610,7 @@ mod tests {
     fn mint_then_validate_roundtrips() {
         let store = TokenStore::default();
         let scopes = vec!["speak".to_string(), "status".to_string()];
-        let exe = PathBuf::from("/usr/bin/super-tts-cli");
+        let exe = PeerIdentity::native("/usr/bin/super-tts-cli");
 
         let (token, expires_at) = store.mint("Super TTS CLI", &scopes, &exe);
         assert_eq!(token.len(), 64, "token is 32 random bytes hex-encoded");
@@ -517,7 +629,10 @@ mod tests {
 
         let meta = store.validate(&token).expect("live token must validate");
         assert_eq!(meta.scopes, scopes, "validated scopes match minted scopes");
-        assert_eq!(meta.exe_path, exe, "validated exe matches minted exe");
+        assert_eq!(
+            meta.grantee, exe,
+            "validated grantee matches minted grantee"
+        );
 
         // A second mint yields a different token.
         let (token2, _) = store.mint("Super TTS CLI", &scopes, &exe);
@@ -579,7 +694,7 @@ mod tests {
         let (token, _) = store.mint(
             "widget",
             &["status".to_string()],
-            &PathBuf::from("/usr/bin/w"),
+            &PeerIdentity::native("/usr/bin/w"),
         );
         assert!(store.validate(&token).is_ok(), "token valid before revoke");
 
@@ -596,9 +711,95 @@ mod tests {
     fn revoke_is_idempotent() {
         let store = TokenStore::default();
         store.revoke("never-existed"); // must not panic
-        let (token, _) = store.mint("app", &["status".to_string()], &PathBuf::from("/bin/a"));
+        let (token, _) = store.mint(
+            "app",
+            &["status".to_string()],
+            &PeerIdentity::native("/bin/a"),
+        );
         store.revoke(&token);
         store.revoke(&token); // second revoke is still a no-op
         assert!(matches!(store.validate(&token), Err("unknown")));
+    }
+}
+
+/// Reading a persisted sessions blob across schema versions.
+///
+/// The version field exists so a daemon never misreads a blob some other
+/// version wrote. These cover the three answers it can give: read it, migrate
+/// it, or refuse it — and in particular that a v2 blob is *migrated* rather
+/// than dropped, since dropping it would put a consent popup in front of every
+/// third-party client after an ordinary update.
+#[cfg(test)]
+mod schema_tests {
+    use super::{
+        PeerIdentity, SESSIONS_SCHEMA_VERSION, SessionsFile, TokenMeta, parse_sessions_blob,
+    };
+    use chrono::{Duration as ChronoDuration, Utc};
+    use std::collections::HashMap;
+
+    fn v2_blob(exe: &str) -> String {
+        format!(
+            r#"{{"version":2,"sessions":{{"tok":{{"app_name":"Old App","scopes":["status"],
+               "exe_path":"{exe}",
+               "issued_at":"2026-01-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_v2_blob_migrates_to_a_native_grantee() {
+        let loaded =
+            parse_sessions_blob(&v2_blob("/usr/bin/old-client")).expect("a v2 blob is readable");
+        assert!(loaded.migrated, "the caller must know to rewrite it");
+        let meta = loaded.sessions.get("tok").expect("the session survives");
+        assert_eq!(meta.app_name, "Old App");
+        assert_eq!(meta.scopes, vec!["status".to_string()]);
+        assert_eq!(
+            meta.grantee,
+            PeerIdentity::native("/usr/bin/old-client"),
+            "every v2 session predates the TCP listener, so all of them are native"
+        );
+    }
+
+    #[test]
+    fn a_current_blob_reads_without_migrating() {
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            "tok".to_string(),
+            TokenMeta {
+                app_name: "Docs".to_string(),
+                scopes: vec!["settings".to_string()],
+                grantee: PeerIdentity::web("http://127.0.0.1:8910"),
+                issued_at: Utc::now(),
+                expires_at: Utc::now() + ChronoDuration::days(30),
+            },
+        );
+        let blob = serde_json::to_string(&SessionsFile {
+            version: SESSIONS_SCHEMA_VERSION,
+            sessions,
+        })
+        .expect("serializes");
+
+        let loaded = parse_sessions_blob(&blob).expect("the current schema is readable");
+        assert!(!loaded.migrated);
+        assert_eq!(
+            loaded.sessions["tok"].grantee,
+            PeerIdentity::web("http://127.0.0.1:8910"),
+            "a web grantee round-trips through the persisted form"
+        );
+    }
+
+    /// A blob from a *newer* daemon, seen after a rollback. Refusing is the
+    /// whole point of the version field: guessing at unknown fields is how a
+    /// grant ends up meaning something it did not.
+    #[test]
+    fn an_unknown_future_version_is_refused_rather_than_guessed_at() {
+        let blob = r#"{"version":99,"sessions":{}}"#;
+        assert!(parse_sessions_blob(blob).is_none());
+    }
+
+    #[test]
+    fn a_blob_with_no_version_is_refused() {
+        assert!(parse_sessions_blob(r#"{"sessions":{}}"#).is_none());
+        assert!(parse_sessions_blob("not json at all").is_none());
     }
 }
