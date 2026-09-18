@@ -327,8 +327,16 @@ async fn serve_connection<S>(
     tokio::spawn(async move {
         let io = hyper_util::rt::TokioIo::new(stream);
         let svc = hyper_util::service::TowerToHyperService::new(app_for_conn);
+        // `.with_upgrades()` is what makes an HTTP/1.1 protocol upgrade
+        // actually happen. Without it hyper writes the `101 Switching
+        // Protocols` response and then drops the connection instead of handing
+        // the IO to `hyper::upgrade::on`, so `GET /v1/speak/stream` completed
+        // its handshake and died before the first WebSocket frame — the
+        // client's opening `send` got a broken pipe against a socket that had
+        // just been accepted.
         if let Err(e) = hyper::server::conn::http1::Builder::new()
             .serve_connection(io, svc)
+            .with_upgrades()
             .await
         {
             log::debug!("http connection finished: {e}");
