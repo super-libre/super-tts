@@ -87,6 +87,8 @@ Models that support it can speak in a voice you supply. Open the app's **Voices*
 tts speak --voice voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4 "Read this in my voice."
 ```
 
+The page offers a script to read while it records, in whichever language the daemon is set to speak, so there is nothing to improvise and nothing to type: the words you read become the clip's transcript. Each language's default is sized to fit inside the loaded model's reference budget, so the clip and its transcript describe the same audio; longer scripts are offered too, and say so when the model cannot hear all of one. One of them covers every sound in English. Pick "No script" to record in your own words instead.
+
 A voice is stored once and independently of any model — each model takes as much of the recording as it declares it can use, so switching models never means recording again. Samples live in `~/.local/share/super-tts/voices`, readable only by you, and reach nothing but the loaded model. Apps ask for them under a scope of their own: an app allowed to change every setting still cannot read your recordings unless you approve that separately.
 
 See [`/voices`](./docs/protocol/endpoints/v1/voice.md) for the endpoints, and the [`voices` scope](./docs/protocol/scopes/voices.md) for what granting it means.
@@ -109,7 +111,7 @@ The app is where you manage everything the CLI doesn't ask about. Its pages:
 |------|---------------|
 | **Models** | Pick the model to keep loaded, choose CPU or GPU, and set its language. Shows what's warm right now. |
 | **Library** | Browse the catalog, install and remove backends, and enter API keys for online providers. |
-| **Voices** | Record or import a reference clip and manage your cloned voices. |
+| **Voices** | Record a reference clip against a built-in script (or import a WAV) and manage your cloned voices. |
 | **Speech** | Playback volume and the audio cues the daemon plays. |
 | **Customization** | Appearance, and the applet's visualization style. |
 | **Connection** | Which apps hold a session token, what they may do, and revoking them. |

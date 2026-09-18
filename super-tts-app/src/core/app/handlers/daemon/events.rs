@@ -174,6 +174,35 @@ impl AppModel {
             // notifications don't drive UI state here.
             DaemonStatusEvent::LoadingModel { .. }
             | DaemonStatusEvent::ActiveBackendChanged { .. } => None,
+            // A cloned voice is being handed to the model. Tracked whoever
+            // started it — saving a clip here begins one, and so does any other
+            // client asking to speak in a voice this load has not been given —
+            // because the wait is the same wait, and a Voices page that only
+            // knew about its own requests would show a live Preview button for
+            // a voice that is not ready.
+            DaemonStatusEvent::PreparingVoice { voice, model } => {
+                log::info!("daemon is preparing voice {voice} for {model}");
+                self.voices.preparing = Some(voice);
+                None
+            }
+            DaemonStatusEvent::VoicePrepared {
+                voice,
+                model,
+                error,
+            } => {
+                // Not surfaced as a banner: nothing the user did has failed
+                // yet. The next attempt to speak in the voice tries again and
+                // reports properly if it still cannot.
+                if let Some(e) = &error {
+                    log::warn!("daemon could not prepare voice {voice} for {model}: {e}");
+                } else {
+                    log::info!("daemon prepared voice {voice} for {model}");
+                }
+                if self.voices.preparing.as_deref() == Some(voice.as_str()) {
+                    self.voices.preparing = None;
+                }
+                None
+            }
             // The daemon completed a periodic self-update check and found a
             // newer release. Re-fetch the status so the header badge and the
             // Updates page pick it up without waiting for the user to open

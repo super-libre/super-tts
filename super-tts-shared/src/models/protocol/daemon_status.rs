@@ -77,11 +77,71 @@ pub enum DaemonStatusEvent {
     /// A self-update check found a newer release. Clients refetch
     /// `GET /v1/update` for the full status including the installer asset.
     UpdateAvailable { latest_version: String },
+
+    /// A cloned voice is being handed to the loaded model, which has to derive
+    /// from the reference clip before it can speak in it.
+    ///
+    /// This is why speech in a voice can be slow to start the first time: the
+    /// derivation is real GPU work on a clip the model has not seen, and it
+    /// happens whether it was triggered by saving the clip or by the first
+    /// request to speak in it. A client that shows it can say "preparing"
+    /// instead of looking hung.
+    ///
+    /// `voice` is the `voice:<uuid>` wire id and nothing more — the label, the
+    /// transcript and the recording stay behind the `voices` scope, which is
+    /// granted separately from the `daemon_status` scope that carries this.
+    PreparingVoice { voice: String, model: String },
+
+    /// The model is ready to speak in that voice, or could not be made ready.
+    ///
+    /// Always follows a [`Self::PreparingVoice`] for the same id. `error` is
+    /// present only on failure, mirroring `download_progress`: absent means it
+    /// worked.
+    VoicePrepared {
+        voice: String,
+        model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::DaemonStatusEvent;
+
+    /// The preparation pair is what a client watches to explain a pause before
+    /// speech, so its discriminants and its one optional field have to be
+    /// exactly what the docs promise.
+    #[test]
+    fn voice_preparation_wire_shape() {
+        let started = serde_json::to_value(DaemonStatusEvent::PreparingVoice {
+            voice: "voice:2f8a2d0e".into(),
+            model: "qwen3-tts-0.6b-base".into(),
+        })
+        .expect("serializes");
+        assert_eq!(started["status"], "preparing_voice");
+        assert_eq!(started["voice"], "voice:2f8a2d0e");
+        assert_eq!(started["model"], "qwen3-tts-0.6b-base");
+
+        // Success omits `error` rather than sending a null: a client testing
+        // for its presence is testing for failure.
+        let ok = serde_json::to_value(DaemonStatusEvent::VoicePrepared {
+            voice: "voice:2f8a2d0e".into(),
+            model: "qwen3-tts-0.6b-base".into(),
+            error: None,
+        })
+        .expect("serializes");
+        assert_eq!(ok["status"], "voice_prepared");
+        assert!(ok.get("error").is_none(), "{ok}");
+
+        let failed = serde_json::to_value(DaemonStatusEvent::VoicePrepared {
+            voice: "voice:2f8a2d0e".into(),
+            model: "qwen3-tts-0.6b-base".into(),
+            error: Some("the encoder was not loaded".into()),
+        })
+        .expect("serializes");
+        assert_eq!(failed["error"], "the encoder was not loaded");
+    }
 
     /// The wire discriminant is `status`, and variant/field names match the
     /// hand-built JSON the daemon used to emit.
