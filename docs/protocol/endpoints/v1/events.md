@@ -117,9 +117,49 @@ as a separate grant.
 
 | Topic                   | Scope           | Payload                                                                                                                                                                                                                                                                          |
 |-------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `daemon_status_changed` | `daemon_status` | Heterogeneous; the `status` field discriminates: `loading_model`, `ready` (carries `model_loaded` and optionally `actual_device` / `preferred_device` / `model_name`), `model_switched` (carries the full identity of the now-active model — `model_name`, `source`, `actual_device` — so a client can record it without prior state; emitted whenever a model becomes active: a user switch, the daemon's startup load of the persisted model, or an in-place reload to apply a changed secret/option, each immediately followed by the matching `ready`), `switching_device`, `loading_model_for_device`, `device_switch_error`, `active_backend_changed` (carries `source` — the active backend's repo id, or `null` when the backend is cleared), `settings_changed` (carries `setting` — the changed setting, currently `"language"`, `"update_check_enabled"`, or `"update_beta_optin"`; signals clients to re-fetch that settings state, e.g. a per-model language that follows the global value), `update_available` (carries `latest_version` — the candidate release's tag; emitted when a check newly finds an available update or the candidate version changes; clients should refetch [`GET /update`](./update.md) on receipt). Always includes `timestamp`. |
+| `daemon_status_changed` | `daemon_status` | Heterogeneous; the `status` field discriminates: `loading_model`, `ready` (carries `model_loaded` and optionally `actual_device` / `preferred_device` / `model_name`), `model_switched` (carries the full identity of the now-active model — `model_name`, `source`, `actual_device` — so a client can record it without prior state; emitted whenever a model becomes active: a user switch, the daemon's startup load of the persisted model, or an in-place reload to apply a changed secret/option, each immediately followed by the matching `ready`), `switching_device`, `loading_model_for_device`, `device_switch_error`, `active_backend_changed` (carries `source` — the active backend's repo id, or `null` when the backend is cleared), `settings_changed` (carries `setting` — the changed setting, currently `"language"`, `"update_check_enabled"`, or `"update_beta_optin"`; signals clients to re-fetch that settings state, e.g. a per-model language that follows the global value), `update_available` (carries `latest_version` — the candidate release's tag; emitted when a check newly finds an available update or the candidate version changes; clients should refetch [`GET /update`](./update.md) on receipt), `preparing_voice` / `voice_prepared` (carry `voice` and `model`; see **Preparing a cloned voice** below). Always includes `timestamp`. |
 | `download_progress`     | `daemon_status` | `{ "model_name", "current_file", "file_index", "total_files", "bytes_downloaded", "total_bytes", "percentage", "status" ("verifying"/"downloading"/"loading_model"/"completed"/"cancelled"/"error"), "eta_seconds", "timestamp", "error"? }`. `bytes_downloaded`/`total_bytes`/`percentage` are per-file — all reset at each file boundary, so `percentage` (0–100) tracks the current file and the `file_index`/`total_files` counter conveys position in the set. Every load opens in `verifying`: each file already on disk is checked against its declared SHA-256 before anything is fetched, and `bytes_downloaded` counts the bytes hashed so far, so a multi-GB checksum reports as a moving bar rather than a stall. A load whose files are all present goes `verifying` → `loading_model` without ever reporting `downloading` — a client must therefore take its wording from `status` and not assume a download is under way. `downloading` means bytes are coming off the network for the current file. `loading_model` is emitted once all files are on disk and the backend is loading weights into memory (an untracked phase); `percentage` pins to 100 for `loading_model` and `completed`. `error` is a human-readable failure detail present only on the terminal `status` = `"error"` tick (omitted otherwise), covering any switch failure — download, spawn, or weight-load — so a client can show why a switch failed without a second request. Throttled to ~1 % increments, plus an unthrottled publish on each file boundary and status change. |
 | `registry_install`      | `daemon_status` | Backend-registry install / refresh progress — a serialized registry event (`install.progress` / `install.completed` / `install.failed` / `refresh.completed` / `refresh.failed`). |
+
+### Preparing a cloned voice
+
+Before a model can speak in a `voice:<uuid>`, the daemon hands it the reference
+clip and the backend derives what it needs from it — a speaker embedding, and
+for a clip stored with a transcript the codec codes that make it an in-context
+example. That derivation is GPU work over the whole clip, and on a clip length
+the backend has not encoded before it can run for seconds to tens of seconds.
+
+```
+event: daemon_status_changed
+data: {"status":"preparing_voice","voice":"voice:2f8a2d0e-…","model":"qwen3-tts-0.6b-base","timestamp":"…"}
+
+event: daemon_status_changed
+data: {"status":"voice_prepared","voice":"voice:2f8a2d0e-…","model":"qwen3-tts-0.6b-base","timestamp":"…"}
+```
+
+`voice_prepared` always follows `preparing_voice` for the same id, and carries
+`error` only when the preparation failed — absent means it worked, as in
+`download_progress`. A failure here is not fatal to anything: the next request
+to speak in that voice tries again and reports properly if it still cannot.
+
+**When they fire.** Once per voice per loaded model. [`POST /voice`](./voice.md)
+starts a preparation as soon as a clip is saved, so the cost lands while the
+user is still looking at the library they just added to rather than on their
+first request to speak. A voice that was never prepared that way is prepared by
+the first [`POST /speak`](./speak.md) naming it, which is what holds that request
+open. A model switch discards every preparation, so the pair fires again against
+the new model; backends may cache what they derived between loads, in which case
+the second preparation is quick but still announced.
+
+**What a client does with it.** Show that the voice is being prepared, and
+expect no audio until `voice_prepared`. A `POST /speak` issued during the
+preparation does not queue behind it — a new utterance supersedes the old one,
+so pressing again cancels the preview that was about to play.
+
+**What is in the payload.** `voice` is the wire id and nothing else. The label,
+the transcript and the recording itself stay behind the
+[`voices` scope](../../scopes/voices.md), which is granted separately from the
+`daemon_status` scope that carries this event.
 
 ## Closing the stream
 

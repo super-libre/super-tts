@@ -6,6 +6,7 @@ pub mod language;
 pub mod models;
 pub mod models_page;
 pub mod registry;
+pub mod scripts;
 pub mod update;
 pub mod voices;
 

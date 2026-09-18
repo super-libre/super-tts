@@ -225,12 +225,36 @@ pub(crate) async fn create_voice(
     .await;
 
     match created {
-        Ok(Ok(voice)) => (
-            StatusCode::CREATED,
-            [("content-type", "application/json")],
-            encode(&one(&voice)),
-        )
-            .into_response(),
+        Ok(Ok(voice)) => {
+            // Hand the clip to the loaded model now, in the background. The
+            // first use of a cloned voice is what pays to derive it — a speaker
+            // embedding, and for a clip with a transcript the codec codes of an
+            // in-context example — and that bill is seconds to tens of seconds
+            // of GPU work on a clip length nothing has encoded before. Paid
+            // here it overlaps with the user reading the library they just
+            // added to; paid on first use it lands on a Preview button that
+            // then looks broken.
+            //
+            // Spawned rather than awaited: the recording is safely stored the
+            // moment `create` returns, and making the save wait for a GPU would
+            // trade one stall for another. Nothing reads the result — the
+            // registration either warmed the cache or it did not, and speaking
+            // registers properly either way.
+            let daemon = Arc::clone(&s.daemon);
+            let voice_id = voice.voice_id();
+            tokio::spawn(async move {
+                daemon
+                    .speech
+                    .prepare_cloned_voice(&daemon.model, &voice_id)
+                    .await;
+            });
+            (
+                StatusCode::CREATED,
+                [("content-type", "application/json")],
+                encode(&one(&voice)),
+            )
+                .into_response()
+        }
         Ok(Err(e)) => error(&e),
         Err(e) => json_error_msg(
             StatusCode::INTERNAL_SERVER_ERROR,

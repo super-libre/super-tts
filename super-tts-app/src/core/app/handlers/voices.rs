@@ -13,7 +13,8 @@ use crate::daemon::client::{
     create_voice, delete_voice, list_voices, rename_voice, speak_in_voice,
 };
 use crate::state::ErrorScope;
-use crate::state::voices::{PendingSample, SampleOrigin};
+use crate::state::scripts;
+use crate::state::voices::{PendingSample, SampleOrigin, ScriptChoice};
 use crate::ui::messages::{Message, VoicesMessage};
 use cosmic::prelude::*;
 
@@ -56,6 +57,9 @@ impl AppModel {
                     unreachable!("the outer match admitted only these four")
                 };
                 log::warn!("voices: {m}");
+                // Only `PreviewFailed` can have one in flight, and clearing it
+                // unconditionally costs nothing: the other three never set it.
+                self.voices.previewing = None;
                 self.set_action_error(ErrorScope::Voices, m);
                 Task::none()
             }
@@ -70,9 +74,11 @@ impl AppModel {
             | VoicesMessage::Delete(_)
             | VoicesMessage::Deleted(_)
             | VoicesMessage::DeleteFailed { .. }
-            | VoicesMessage::Preview(_) => self.handle_voice_library(message),
+            | VoicesMessage::Preview(_)
+            | VoicesMessage::Previewed => self.handle_voice_library(message),
 
-            VoicesMessage::StartRecording
+            VoicesMessage::ScriptSelected(_)
+            | VoicesMessage::StartRecording
             | VoicesMessage::RecordingTick
             | VoicesMessage::StopRecording
             | VoicesMessage::ImportFile
@@ -122,7 +128,9 @@ impl AppModel {
                 if let Some(existing) = self.voices.voices.iter_mut().find(|v| v.id == voice.id) {
                     *existing = voice;
                 }
-                Task::none()
+                // The Models card lists this voice under its old name until
+                // something re-reads it.
+                self.reload_model_voices()
             }
 
             VoicesMessage::Delete(id) => self.delete(id),
@@ -130,7 +138,10 @@ impl AppModel {
             VoicesMessage::Deleted(id) => {
                 self.voices.deleting.retain(|d| d != &id);
                 self.voices.voices.retain(|v| v.id != id);
-                Task::none()
+                // Otherwise the Models card keeps offering a voice that no
+                // longer exists, and picking it is an error the user cannot
+                // have anticipated.
+                self.reload_model_voices()
             }
 
             VoicesMessage::DeleteFailed { id, message } => {
@@ -141,11 +152,17 @@ impl AppModel {
 
             VoicesMessage::Preview(voice_id) => self.preview(voice_id),
 
+            VoicesMessage::Previewed => {
+                self.voices.previewing = None;
+                Task::none()
+            }
+
             // Handled in the router or by the capture half. Listed rather
             // than caught by a wildcard: the enum's whole point is that a new
             // variant is a compile error at every end, and `_ =>` would make
             // one a silent no-op here.
-            other @ (VoicesMessage::StartRecording
+            other @ (VoicesMessage::ScriptSelected(_)
+            | VoicesMessage::StartRecording
             | VoicesMessage::RecordingTick
             | VoicesMessage::StopRecording
             | VoicesMessage::ImportFile
@@ -170,6 +187,18 @@ impl AppModel {
     /// both of them produce.
     fn handle_voice_capture(&mut self, message: VoicesMessage) -> Task<cosmic::Action<Message>> {
         match message {
+            VoicesMessage::ScriptSelected(id) => {
+                // An id that no longer names a script lands on `Free`, which is
+                // also where the picker's own "read your own words" row lands:
+                // both mean there is nothing to put on screen, and neither is
+                // worth an error banner.
+                self.voices.script = match id.and_then(scripts::find) {
+                    Some(script) => ScriptChoice::Chosen(script),
+                    None => ScriptChoice::Free,
+                };
+                Task::none()
+            }
+
             VoicesMessage::StartRecording => self.start_recording(),
             VoicesMessage::RecordingTick => self.recording_tick(),
             VoicesMessage::StopRecording => self.stop_recording(),
@@ -200,6 +229,9 @@ impl AppModel {
                     wav,
                     seconds,
                     origin: SampleOrigin::Imported(name),
+                    // Never script-backed: whatever the picker says, nobody
+                    // knows what words are in a file chosen off disk.
+                    script: None,
                 });
                 Task::none()
             }
@@ -210,7 +242,18 @@ impl AppModel {
             }
 
             VoicesMessage::TranscriptChanged(transcript) => {
-                self.voices.transcript_input = transcript;
+                // Dropped for a clip read from a built-in script: those words
+                // are a fact about the audio, not a field to type over, and the
+                // pending card offers no input for them. Enforced here as well
+                // as in the view so the rule survives the next edit to either.
+                if self
+                    .voices
+                    .pending
+                    .as_ref()
+                    .is_none_or(|pending| pending.script.is_none())
+                {
+                    self.voices.transcript_input = transcript;
+                }
                 Task::none()
             }
 
@@ -230,7 +273,10 @@ impl AppModel {
                 // Re-listing rather than inserting the new voice locally: the
                 // daemon owns the ordering, and one round trip is cheaper than
                 // a second sort that has to agree with it.
-                self.dispatch(Message::Voices(VoicesMessage::Refresh))
+                Task::batch([
+                    self.dispatch(Message::Voices(VoicesMessage::Refresh)),
+                    self.reload_model_voices(),
+                ])
             }
 
             VoicesMessage::SaveFailed(message) => {
@@ -252,6 +298,7 @@ impl AppModel {
             | VoicesMessage::Deleted(_)
             | VoicesMessage::DeleteFailed { .. }
             | VoicesMessage::Preview(_)
+            | VoicesMessage::Previewed
             | VoicesMessage::LoadFailed(_)
             | VoicesMessage::ImportFailed(_)
             | VoicesMessage::RenameFailed(_)
@@ -260,6 +307,26 @@ impl AppModel {
                 Task::none()
             }
         }
+    }
+
+    /// Re-read the loaded model's voice list, because the library it draws on
+    /// just changed.
+    ///
+    /// The Models card offers the voices a model can be pinned to, and that
+    /// list is the daemon's join of the model's own presets with the cloned
+    /// library. It was read when a model became selected, staged or loaded, and
+    /// at no other time — so a voice recorded here did not appear there until
+    /// the app was restarted, and a deleted one was still offered.
+    ///
+    /// Addressed to the pair the card is showing rather than to "the active
+    /// model", for the same reason every other write on that card is: a reply
+    /// that lands after a model switch must not be applied to the model the
+    /// user moved to.
+    fn reload_model_voices(&self) -> Task<cosmic::Action<Message>> {
+        let Some((source, model)) = self.voice.target.clone() else {
+            return Task::none();
+        };
+        self.load_model_voice(&source, model)
     }
 
     /// Send the pending rename, if the field holds a usable name.
@@ -301,17 +368,27 @@ impl AppModel {
 
     /// Speak the preview sentence in one voice.
     ///
-    /// Success is silent: the audio is the feedback, and the speaking badge
-    /// the events already drive says the rest.
+    /// One at a time. The request stays open until the daemon has registered
+    /// the voice with the backend and queued the audio — a first preview can
+    /// hold it for the better part of a minute while the backend encodes the
+    /// reference clip — and a second request in that window does not queue a
+    /// second preview, it cancels the first. So a press that arrives while one
+    /// is in flight is dropped rather than served, and the page greys the
+    /// buttons to say that before the press happens.
     fn preview(&mut self, voice_id: String) -> Task<cosmic::Action<Message>> {
+        if let Some(current) = self.voices.previewing.as_ref() {
+            log::debug!("voices: a preview of {current} is already in flight");
+            return Task::none();
+        }
         self.clear_action_error(ErrorScope::Voices);
+        self.voices.previewing = Some(voice_id.clone());
         Task::perform(
             speak_in_voice(PREVIEW_TEXT.to_string(), voice_id),
-            |result| match result {
-                Ok(()) => cosmic::Action::None,
-                Err(e) => cosmic::Action::App(Message::Voices(VoicesMessage::PreviewFailed(
-                    e.to_string(),
-                ))),
+            |result| {
+                cosmic::Action::App(Message::Voices(match result {
+                    Ok(()) => VoicesMessage::Previewed,
+                    Err(e) => VoicesMessage::PreviewFailed(e.to_string()),
+                }))
             },
         )
     }
@@ -363,10 +440,23 @@ impl AppModel {
         let seconds = recording.seconds();
         match recording.to_wav() {
             Ok(wav) => {
+                // A script that was just read is a transcript already written,
+                // so fill the field in rather than asking the user to type back
+                // words that were on screen a second ago. The field is empty
+                // here by construction — `start_recording` cleared it, and
+                // there is no transcript field on screen while recording — so
+                // there is nothing of the user's to overwrite.
+                let script = self
+                    .voices
+                    .script(self.language.primary_language.as_deref());
+                if let Some(script) = script {
+                    self.voices.transcript_input = script.text.to_string();
+                }
                 self.voices.pending = Some(PendingSample {
                     wav,
                     seconds,
                     origin: SampleOrigin::Recorded,
+                    script,
                 });
             }
             Err(e) => self.set_action_error(ErrorScope::Voices, e),

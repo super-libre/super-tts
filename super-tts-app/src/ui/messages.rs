@@ -54,6 +54,12 @@ pub enum VoicesMessage {
     },
     LoadFailed(String),
 
+    /// The user picked a reading script, or chose to read their own words
+    /// (`None`). Carries the script's id rather than the picker's row number:
+    /// the picker is ordered by speech language, so a row number means nothing
+    /// once the language changes underneath it.
+    ScriptSelected(Option<&'static str>),
+
     /// Open the microphone and start capturing.
     StartRecording,
     /// One tick of the level meter and elapsed readout while recording.
@@ -100,6 +106,9 @@ pub enum VoicesMessage {
 
     /// Speak a fixed sentence in this voice, so the user can hear it.
     Preview(String),
+    /// The daemon accepted the preview — registration is done and the audio is
+    /// on its way, so the row stops saying it is preparing one.
+    Previewed,
     PreviewFailed(String),
 }
 

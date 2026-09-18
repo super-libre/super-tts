@@ -27,6 +27,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use super_tts_shared::models::protocol::DaemonStatusEvent;
 
 use anyhow::{Result, anyhow, bail};
 use log::{debug, info, warn};
@@ -401,6 +402,40 @@ impl SpeechEngine {
         id
     }
 
+    /// Register a voice with the loaded model ahead of anything asking to speak
+    /// in it.
+    ///
+    /// What the first use of a cloned voice pays for is not the speaking: it is
+    /// deriving the speaker embedding and, for a clip stored with a transcript,
+    /// encoding it into the codes an in-context example is made of. On a fresh
+    /// clip length that is seconds to tens of seconds of GPU work, and landing
+    /// it on the first press of a Preview button makes a working feature look
+    /// broken. Called when a clip is saved, it lands instead where the user has
+    /// just finished recording and expects a pause — and the backend writes
+    /// what it derived to disk, so the cost is paid once rather than once per
+    /// load.
+    ///
+    /// Quiet by design: nothing is waiting on the result, a model that does not
+    /// clone has nothing to prepare, and a failure here must not make the save
+    /// that triggered it look failed. The next request to speak in the voice
+    /// registers it the usual way and reports properly if it cannot.
+    pub async fn prepare_cloned_voice(&self, model: &SharedLoadedModel, voice: &str) {
+        let guard = model.read().await;
+        let Some(loaded) = guard.as_ref() else {
+            return;
+        };
+        if !loaded
+            .definition
+            .voice_kinds
+            .contains(&super_tts_registry_types::manifest::VoiceKind::Cloned)
+        {
+            return;
+        }
+        if let Err(e) = self.ensure_cloned_voice(loaded, voice).await {
+            log::info!("voice {voice} will be registered on first use instead: {e}");
+        }
+    }
+
     /// Make sure a `voice:<uuid>` id has been registered with the loaded
     /// backend, pushing its reference clip the first time it is used.
     ///
@@ -452,7 +487,17 @@ impl SpeechEngine {
             "registering cloned voice {voice} ({:.1}s) with {}",
             clip.seconds, loaded.definition.name
         );
-        loaded
+        // Announced on `/events` around the call, not just logged: the backend
+        // has to derive an embedding — and, for a clip with a transcript, the
+        // codec codes of an in-context example — from a clip length it may
+        // never have encoded, which is GPU work measured in seconds. Every
+        // client that can speak in a cloned voice can be left waiting on it,
+        // and a pause nobody announced is indistinguishable from a hang.
+        self.publish_voice_status(DaemonStatusEvent::PreparingVoice {
+            voice: voice.to_string(),
+            model: loaded.definition.name.clone(),
+        });
+        let registered = loaded
             .instance
             .register_voice(&crate::tts_models::v1::RegisterVoiceRequest {
                 voice,
@@ -463,9 +508,25 @@ impl SpeechEngine {
                 pcm: &clip.pcm,
             })
             .await
-            .map_err(|e| SpeakError::Synthesis(format!("registering voice '{voice}': {e}")))?;
+            .map_err(|e| SpeakError::Synthesis(format!("registering voice '{voice}': {e}")));
+        self.publish_voice_status(DaemonStatusEvent::VoicePrepared {
+            voice: voice.to_string(),
+            model: loaded.definition.name.clone(),
+            error: registered.as_ref().err().map(ToString::to_string),
+        });
+        registered?;
         loaded.cloned_voices.lock().insert(voice.to_string());
         Ok(())
+    }
+
+    /// Put one voice-preparation event on the bus, if this engine has one.
+    ///
+    /// A detached engine — the one the tests build — has no bus, and preparing
+    /// a voice must work the same without it.
+    fn publish_voice_status(&self, event: DaemonStatusEvent) {
+        if let Some(events) = self.events.as_ref() {
+            events.publish_daemon_status(event);
+        }
     }
 
     /// Begin a streaming utterance.

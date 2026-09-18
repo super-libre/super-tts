@@ -243,6 +243,24 @@ impl AppModel {
                     SpeakingStatus::Idle
                 };
                 self.speaking_utterance = utterance_id;
+                if is_speaking {
+                    // Whatever the Voices page was waiting for, it is done
+                    // waiting: a voice is registered before its utterance is
+                    // accepted, so speech starting means preparation finished.
+                    //
+                    // This rather than the request returning, which is what the
+                    // page used to wait for: `POST /speak` answers once the
+                    // *last* sample is queued, so holding "Preparing…" until
+                    // then left the label up for seconds of audible speech.
+                    //
+                    // These events describe the device, not this app's
+                    // requests, so another client's utterance clears the label
+                    // too. That is the right trade: the alternative is matching
+                    // on an utterance id the preview call does not keep, to fix
+                    // a case that costs a label cleared early.
+                    self.voices.previewing = None;
+                    self.voices.preparing = None;
+                }
                 if !is_speaking {
                     // No more samples are coming, and the meter's last value
                     // would otherwise sit at whatever the final frame was.

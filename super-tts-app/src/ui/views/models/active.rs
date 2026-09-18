@@ -118,7 +118,7 @@ fn voice_dropdown<'a>(
     }
 
     let default_row = block.default.as_ref().map_or_else(
-        || "No voice chosen".to_string(),
+        || "No cloned voice chosen".to_string(),
         |id| {
             // Named, not just "Default": a user comparing two rows should not
             // have to remember which voice the manifest picked.
@@ -180,8 +180,20 @@ fn voice_dropdown<'a>(
 /// name one. Saying it on the card turns a failure at speak time into a state
 /// the user can see and fix.
 ///
+/// The wording says *why*, not just what, and splits on whether there is
+/// anything to pick. A model whose whole voice list is recordings the user
+/// made has none of its own — asked for no voice, a cloning checkpoint speaks
+/// in whatever the sampler wanders into, which is why the daemon refuses
+/// instead — so with a library the fix is one click away on this card, and with
+/// an empty one it is a recording on the Voices page. Telling someone who has
+/// already recorded a voice to go and record one is the one thing this line
+/// must not do.
+///
 /// A model that takes described voices is exempt: it has nothing to enumerate
 /// and needs nothing chosen, so an empty list there is not a problem.
+///
+/// Rendered on its own line under the controls, never inline beside them: see
+/// [`loaded_model_summary`] for why a sentence cannot share that row.
 fn voice_warning<'a>(
     backend: &'a BackendInfo,
     selected_model: &str,
@@ -194,11 +206,10 @@ fn voice_warning<'a>(
     if block.effective.is_some() || block.kinds.iter().any(|k| k == "described") {
         return None;
     }
-    let detail = if block.kinds.iter().any(|k| k == "cloned") {
-        "No voice chosen — record one on the Voices page"
-    } else {
-        "No voice chosen"
-    };
+    let detail = voice_warning_text(
+        !app.voice.choices.is_empty(),
+        block.kinds.iter().any(|k| k == "cloned"),
+    );
     // The same warning glyph the VRAM notice uses, so the two read as one kind
     // of message rather than two.
     Some(
@@ -210,6 +221,25 @@ fn voice_warning<'a>(
         .align_y(Alignment::Center)
         .into(),
     )
+}
+
+/// The wording [`voice_warning`] shows, as a rule of its own: which way out of
+/// "nothing to speak in" this user actually has.
+///
+/// `has_choices` is whether the dropdown above has anything in it, `clones`
+/// whether the model takes cloned ids at all. Kept free of [`AppModel`] so the
+/// one thing this line must never do — send someone who has already recorded a
+/// voice off to record one — is a test rather than a screenshot.
+fn voice_warning_text(has_choices: bool, clones: bool) -> &'static str {
+    match (has_choices, clones) {
+        // Something to pick, and the dropdown offering it is directly above.
+        (true, _) => "This model doesn't have built-in voices. Pick a cloned voice above.",
+        (false, true) => "This model doesn't have built-in voices. Record one on the Voices page.",
+        // Neither a list nor a way to fill one: a manifest that declares preset
+        // voices and then ships none. Nothing to send the user to, so the line
+        // states the fact and stops.
+        (false, false) => "No cloned voice chosen",
+    }
 }
 
 /// Per-model language trigger button for the active-backend card.
@@ -405,6 +435,17 @@ pub(super) fn active_backend_card<'a>(
 /// the `cpu`/`gpu` preference that asked for it — a `gpu` choice that fell back
 /// to the CPU would otherwise have this line tell the user they are on a GPU
 /// they are not on.
+///
+/// Controls on one row, prose on the next. The row has less space than it
+/// looks: `page_container` caps the page at 800px however wide the window is,
+/// so this row is ~768px and never more, against ~500px of dropdown, language
+/// button, Reload and Unload. A sentence pushed in among them is the difference
+/// between fitting and not — and what overflows is the *end* of the row, which
+/// is Unload, the only way to reach a different model on this page. So
+/// [`voice_warning`] goes underneath, the way [`no_viable_device_warning`] and
+/// [`vram_warning`] already do for the idle half of this card. The accent label
+/// is the one `Length::Fill` here, so when the fixed controls do crowd it, what
+/// gives is the model name wrapping rather than a button leaving the card.
 pub(super) fn loaded_model_summary<'a>(
     backend: &'a BackendInfo,
     app: &'a AppModel,
@@ -418,15 +459,16 @@ pub(super) fn loaded_model_summary<'a>(
     let label = text::body(format!("Active: {}{device_suffix}", app.current_model))
         .class(cosmic::theme::Text::Accent)
         .width(Length::Fill);
+    // Top-aligned, not centred: the label is the one thing here that can grow
+    // to two lines, and centring against a wrapped one drags every control down
+    // half a line with it. Anchored to the top, the row keeps its shape and the
+    // second line hangs below it.
     let mut summary = row![label]
         .spacing(spacing.space_xs)
-        .align_y(Alignment::Center);
+        .align_y(Alignment::Start);
     // Per-model voice and language, inline before Unload. Voice first: it is
     // the one a user changes between utterances, and the one that decides
     // whether a cloning model can speak at all.
-    if let Some(warning) = voice_warning(backend, &app.current_model, app) {
-        summary = summary.push(warning);
-    }
     if let Some(voice) = voice_dropdown(backend, &app.current_model, app) {
         summary = summary.push(voice);
     }
@@ -449,13 +491,18 @@ pub(super) fn loaded_model_summary<'a>(
     );
     // A leading stop glyph fronts the Unload label, mirroring the Load button's
     // play icon so load/unload read as a play/stop pair.
-    summary
-        .push(
-            button::standard("Unload")
-                .leading_icon(icons::phosphor_handle(icons::STOP))
-                .on_press(Message::ModelsPage(ModelsPageMessage::UnloadActiveModel)),
-        )
-        .into()
+    let summary = summary.push(
+        button::standard("Unload")
+            .leading_icon(icons::phosphor_handle(icons::STOP))
+            .on_press(Message::ModelsPage(ModelsPageMessage::UnloadActiveModel)),
+    );
+
+    // The "nothing to speak in" line, below the row it is about — the dropdown
+    // that answers it is the control directly above.
+    match voice_warning(backend, &app.current_model, app) {
+        Some(warning) => column![summary, warning].spacing(spacing.space_xs).into(),
+        None => summary.into(),
+    }
 }
 
 /// Pure VRAM-fit check for a staged load: given the staged `device`, the
@@ -567,8 +614,20 @@ pub(super) fn staged_model_picker<'a>(
         picker_row = picker_row.push(device_dropdown);
     }
 
-    // Per-model language trigger, inline after the device dropdown — shown only
-    // for a staged multilingual model.
+    // Per-model voice, then language, inline after the device dropdown — the
+    // same order they sit in once the model is loaded.
+    //
+    // Before Load, not only after: staging a model already reads its voice
+    // (`StageActiveModel` batches `load_model_voice` with the language and
+    // device fetches for exactly this), and a cloning model is the case that
+    // needs it — its first utterance is refused until a voice is named, so
+    // being told after the checkpoint is resident is being told a load too
+    // late. The daemon stores the pick whether or not the model is loaded.
+    if let Some(model) = staged_model
+        && let Some(voice) = voice_dropdown(backend, model, app)
+    {
+        picker_row = picker_row.push(voice);
+    }
     if let Some(model) = staged_model
         && let Some(lang_button) = language_button(backend, model, app)
     {
@@ -598,26 +657,38 @@ pub(super) fn staged_model_picker<'a>(
         );
     picker_row = picker_row.push(load_button);
 
-    // Below the picker: either the "can't be loaded here" advisory for a
-    // staged model with no viable device (blocking — Load is already
-    // disabled above), or a staged GPU load whose conservative VRAM estimate
-    // exceeds the GPU's available memory (non-blocking). The two can't both
-    // fire — the VRAM check requires a staged `gpu` device, which
-    // `no_viable_device` rules out.
+    // Below the picker, one line each. The device advisory ("can't be loaded
+    // here", blocking — Load is already disabled above) and the VRAM one (a
+    // staged GPU load whose conservative estimate exceeds free memory,
+    // non-blocking) can't both fire: the VRAM check requires a staged `gpu`
+    // device, which `no_viable_device` rules out.
+    //
+    // The voice advisory is independent of both and can join either. A cloning
+    // model with nothing chosen is worth saying whether or not the device it
+    // would load onto is also a problem — they are two different things to fix,
+    // and showing one of them only after the other is resolved would hide the
+    // one the user can fix right now.
+    let mut advisories: Vec<Element<Message>> = Vec::new();
     if no_viable_device {
-        column![
-            picker_row,
-            no_viable_device_warning(staged_model.unwrap_or_default())
-        ]
-        .spacing(spacing.space_xs)
-        .into()
+        advisories.push(no_viable_device_warning(staged_model.unwrap_or_default()));
     } else if let Some((needed, available)) = staged_vram_shortfall(backend, app) {
-        column![picker_row, vram_warning(needed, available)]
-            .spacing(spacing.space_xs)
-            .into()
-    } else {
-        picker_row.into()
+        advisories.push(vram_warning(needed, available));
     }
+    if let Some(model) = staged_model
+        && let Some(warning) = voice_warning(backend, model, app)
+    {
+        advisories.push(warning);
+    }
+    if advisories.is_empty() {
+        return picker_row.into();
+    }
+    let mut stack = widget::column::with_capacity(advisories.len() + 1)
+        .spacing(spacing.space_xs)
+        .push(picker_row);
+    for advisory in advisories {
+        stack = stack.push(advisory);
+    }
+    stack.into()
 }
 
 /// How the card names the phase the daemon reports. `verifying` is checking
@@ -743,6 +814,48 @@ mod vram_shortfall_tests {
     #[test]
     fn no_gpu_info_is_silent() {
         assert_eq!(vram_shortfall(Some("gpu"), 48 * GIB, None), None);
+    }
+}
+
+#[cfg(test)]
+mod voice_warning_text_tests {
+    //! Pin which way out the "nothing to speak in" line offers. The dropdown
+    //! and the Voices page are different answers, and offering the wrong one
+    //! is the whole failure mode: a user with a library told to go and record.
+    use super::voice_warning_text;
+
+    /// Which verb the line reaches for, lowercased. The wording is meant to be
+    /// edited; which way out it points is not, so that is all these assert on.
+    fn routes(has_choices: bool, clones: bool) -> (String, bool, bool) {
+        let text = voice_warning_text(has_choices, clones).to_lowercase();
+        let picks = text.contains("pick");
+        let records = text.contains("record");
+        (text, picks, records)
+    }
+
+    #[test]
+    fn a_library_sends_the_user_to_the_dropdown_above() {
+        for clones in [true, false] {
+            let (text, picks, records) = routes(true, clones);
+            assert!(picks, "{text}");
+            assert!(!records, "{text}");
+        }
+    }
+
+    #[test]
+    fn an_empty_library_sends_a_cloning_model_to_the_voices_page() {
+        let (text, _, records) = routes(false, true);
+        assert!(records, "{text}");
+        assert!(text.contains("voices page"), "{text}");
+    }
+
+    /// Preset voices declared and none shipped: there is nowhere to send
+    /// anyone, so the line says what is true and offers nothing.
+    #[test]
+    fn nothing_to_pick_and_nothing_to_record_just_states_it() {
+        let (text, picks, records) = routes(false, false);
+        assert!(!picks, "{text}");
+        assert!(!records, "{text}");
     }
 }
 
