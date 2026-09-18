@@ -442,12 +442,16 @@ openapi-check:
 #   --swagger  (default) the familiar Swagger UI, richer per-response examples
 #   --scalar   prose beside examples, reads better with long descriptions
 # Either page links to the other, so the choice is not final.
-# Neither offers "Try it out": the daemon is on a Unix socket, which a browser
-# cannot dial, so an interactive request form could only ever fail.
+#
+# The Swagger view offers "Try it out", which reaches a running daemon over its
+# TCP listener — a browser cannot dial the Unix socket. Nothing to configure:
+# the listener is on by default and admits any origin.
 #
 # The port is chosen by the OS unless you name one, so this never collides with
 # whatever else is already listening. The server binds before announcing, so the
-# URL it prints is always the one actually being served.
+# URL it prints is always the one actually being served. One consequence worth
+# knowing: a token is bound to the origin that asked for it, and a new port is a
+# new origin, so each run asks for consent again.
 #
 # Usage: just openapi-serve [--scalar|--swagger] [port]
 openapi-serve *args:
