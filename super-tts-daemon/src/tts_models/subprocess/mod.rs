@@ -36,9 +36,15 @@ pub struct SubprocessBackend {
     /// Device label reported by the backend's `/v1/status` (e.g. `"cuda"`).
     device: String,
     /// The `x-tts-secret-*` / `x-tts-option-*` pairs injected on every `/v1`
-    /// request, per the contract's request-header section. Formed once at
-    /// spawn from the user's settings, like the WASM transport's.
-    context_headers: Vec<(String, String)>,
+    /// request, per the contract's request-header section. Resolved from the
+    /// user's settings at spawn, like the WASM transport's, and replaced in
+    /// place by [`Synthesize::reconfigure`] when those settings change.
+    ///
+    /// Behind a lock rather than owned outright because the request paths hold
+    /// only `&self`, and because the alternative to swapping it is reloading
+    /// the model — which for a subprocess backend means tearing down the unit
+    /// and re-provisioning the weights to change a header.
+    context_headers: std::sync::RwLock<Vec<(String, String)>>,
     /// Whether [`Synthesize::shutdown`] already stopped the unit.
     ///
     /// `Drop` is the safety net for crash paths, but on the ordinary path
@@ -173,6 +179,11 @@ impl SubprocessBackend {
         let cache_dir = backend_cache_dir(backend_dir)?;
         std::fs::create_dir_all(&cache_dir)
             .with_context(|| format!("creating backend cache dir {}", cache_dir.display()))?;
+        // The NVIDIA driver creates its own cache directory, but only where it
+        // is allowed to: created here so the grant is in place before the unit
+        // starts, exactly as the parent above is.
+        std::fs::create_dir_all(cache_dir.join(systemd::NV_CACHE_DIR))
+            .with_context(|| format!("creating driver cache dir under {}", cache_dir.display()))?;
 
         let unit = format!(
             "super-tts-backend-{}-{}",
@@ -217,7 +228,7 @@ impl SubprocessBackend {
             model_id: model_name.to_string(),
             info,
             device: "unknown".to_string(),
-            context_headers,
+            context_headers: std::sync::RwLock::new(context_headers),
             stopped: false,
         };
 
@@ -285,6 +296,19 @@ impl SubprocessBackend {
         }
     }
 
+    /// The secret/option pairs to inject on this request.
+    ///
+    /// Cloned rather than borrowed so the guard is dropped before the socket
+    /// round-trip: these are a handful of short strings, and holding a read
+    /// guard across a synthesis would block a settings write for as long as the
+    /// synthesis runs.
+    fn context_headers(&self) -> Vec<(String, String)> {
+        self.context_headers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// One HTTP request over the backend's Unix socket, carrying `headers`
     /// plus the secret/option context every `/v1` request gets.
     async fn request(
@@ -307,7 +331,8 @@ impl SubprocessBackend {
             .method(method)
             .uri(path)
             .header("host", "backend.local");
-        for (k, v) in headers.iter().chain(&self.context_headers) {
+        let context = self.context_headers();
+        for (k, v) in headers.iter().chain(&context) {
             builder = builder.header(k.as_str(), v.as_str());
         }
         let req = builder.body(Full::new(Bytes::from(body)))?;
@@ -357,7 +382,7 @@ impl SubprocessBackend {
             .header("host", "backend.local")
             .header("content-type", "application/json")
             .header("x-tts-model", self.model_id.as_str());
-        for (k, v) in &self.context_headers {
+        for (k, v) in &self.context_headers() {
             builder = builder.header(k.as_str(), v.as_str());
         }
         let request = builder.body(Full::new(Bytes::from(body)))?;
@@ -464,6 +489,19 @@ impl ModelState for SubprocessBackend {
 
 #[async_trait]
 impl Synthesize for SubprocessBackend {
+    /// Swap the injected secret/option pairs. The next `/v1` request carries
+    /// them; one already in flight keeps the set it was built with.
+    ///
+    /// `user_allowed_hosts` is ignored, and there is nothing here to ignore it
+    /// with: the unit runs under `PrivateNetwork=yes`, so a subprocess backend
+    /// has no egress to authorize and `base_url` means nothing to it.
+    fn reconfigure(&self, context: crate::tts_models::synthesize::BackendContext) {
+        *self
+            .context_headers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = context.headers;
+    }
+
     /// Forward to the inherent streaming implementation.
     async fn synthesize(
         &self,

@@ -106,6 +106,22 @@ type = "string"
 default = "formal"
 choices = ["casual", "formal"]
 
+[[options]]
+name = "temperature"
+label = "Temperature"
+description = "How freely the model samples."
+type = "float"
+default = 0.9
+min = 0.6
+max = 1.2
+step = 0.1
+
+[[options]]
+name = "retries"
+label = "Retries"
+description = "How many times to try again."
+type = "integer"
+
 [[models]]
 name = "kokoro-1"
 primary_language = "en"
@@ -340,8 +356,11 @@ async fn base_url_is_stored_canonical() {
         assert_eq!(body["value"], want, "GET after {posted:?}: {body}");
     }
 
-    // A value yielding no host is kept as typed rather than dropped, so the
-    // model load can refuse it by name.
+    // A value yielding no host is refused on the write. It used to be stored as
+    // typed so the next model load could refuse it by name — but an option
+    // write no longer reloads anything, so there is no later load to catch it,
+    // and storing it would report success while the backend kept its old
+    // endpoint. What must not happen either way is dropping it silently.
     let (s, body) = post_req(
         &sock,
         &opt_path,
@@ -349,8 +368,14 @@ async fn base_url_is_stored_canonical() {
         serde_json::json!({ "value": "http://" }),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "POST unreadable: {body}");
-    assert_eq!(body["value"], "http://", "kept as typed: {body}");
+    assert_eq!(s, StatusCode::BAD_REQUEST, "POST unreadable: {body}");
+    assert_eq!(body["error_code"], "invalid_value", "{body}");
+
+    // And the previous value is still the one in effect — a refused write
+    // stores nothing.
+    let (s, body) = get(&sock, &opt_path, &token).await;
+    assert_eq!(s, StatusCode::OK, "GET after refusal: {body}");
+    assert_eq!(body["value"], "https://gw.example.com/v1", "{body}");
 }
 
 /// Listing all options for the backend.
@@ -363,7 +388,7 @@ async fn option_list_returns_declared_options() {
     assert_eq!(s, StatusCode::OK, "GET option/list: {body}");
     assert_eq!(body["status"], "success", "list status: {body}");
     let options = body["options"].as_array().expect("options array");
-    assert_eq!(options.len(), 3, "three declared options: {body}");
+    assert_eq!(options.len(), 5, "five declared options: {body}");
     let o0 = &options[0];
     assert_eq!(o0["name"], "base_url", "option name: {body}");
     assert!(
@@ -446,6 +471,141 @@ async fn a_value_the_option_does_not_offer_is_refused() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "an open-ended option is ungated: {body}");
+}
+
+/// A declared type is a promise about what the stored text parses back to, and
+/// the daemon is where it is kept. Before this, an `integer` option would store
+/// `banana` and inject it, leaving the backend to discover the problem at the
+/// one point where the only way to report it is to fail a synthesis.
+#[tokio::test]
+async fn a_value_of_the_wrong_type_is_refused() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+
+    let temperature = format!("/backend/{FIXTURE_SOURCE_ENC}/option/temperature");
+    let (s, body) = post_req(
+        &sock,
+        &temperature,
+        &token,
+        serde_json::json!({ "value": "0.85" }),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::OK,
+        "a float stores in a float option: {body}"
+    );
+    assert_eq!(body["value"], "0.85", "body: {body}");
+
+    let (s, body) = post_req(
+        &sock,
+        &temperature,
+        &token,
+        serde_json::json!({ "value": "warm" }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a word is not a float: {body}");
+    assert_eq!(body["error_code"], "invalid_value", "body: {body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("float"),
+        "the refusal names the type rather than a list of choices: {body}"
+    );
+
+    let retries = format!("/backend/{FIXTURE_SOURCE_ENC}/option/retries");
+    let (s, body) = post_req(&sock, &retries, &token, serde_json::json!({ "value": "3" })).await;
+    assert_eq!(s, StatusCode::OK, "an integer stores: {body}");
+    let (s, body) = post_req(
+        &sock,
+        &retries,
+        &token,
+        serde_json::json!({ "value": "2.5" }),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "a fraction is not an integer: {body}"
+    );
+}
+
+/// Declared bounds are a contract the daemon keeps, not a hint for the slider:
+/// a value outside them is refused however it was written.
+#[tokio::test]
+async fn a_value_outside_the_declared_range_is_refused() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let path = format!("/backend/{FIXTURE_SOURCE_ENC}/option/temperature");
+
+    for edge in ["0.6", "1.2"] {
+        let (s, body) = post_req(&sock, &path, &token, serde_json::json!({ "value": edge })).await;
+        assert_eq!(s, StatusCode::OK, "the bounds are inclusive: {body}");
+    }
+
+    // Between two notches of the step, but inside the range. The grid belongs
+    // to the control; refusing this would make the option narrower than its
+    // own bounds say.
+    let (s, body) = post_req(&sock, &path, &token, serde_json::json!({ "value": "0.85" })).await;
+    assert_eq!(s, StatusCode::OK, "`step` is not a bound: {body}");
+
+    for outside in ["0.5", "1.3", "-1"] {
+        let (s, body) = post_req(
+            &sock,
+            &path,
+            &token,
+            serde_json::json!({ "value": outside }),
+        )
+        .await;
+        assert_eq!(
+            s,
+            StatusCode::BAD_REQUEST,
+            "{outside} is outside the range: {body}"
+        );
+        assert_eq!(body["error_code"], "invalid_value", "body: {body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("between 0.6 and 1.2"),
+            "the refusal names the range: {body}"
+        );
+    }
+}
+
+/// A float option reports its type and its default through the list the
+/// settings UI renders a form from, so a client can offer a numeric field.
+#[tokio::test]
+async fn a_float_option_reports_its_type_and_default() {
+    let (_guard, sock, token) = start_daemon(&["settings"]).await;
+    let (s, body) = get(
+        &sock,
+        &format!("/backend/{FIXTURE_SOURCE_ENC}/option/list"),
+        &token,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "body: {body}");
+    let options = body["options"].as_array().expect("options array");
+    let temperature = options
+        .iter()
+        .find(|o| o["name"] == "temperature")
+        .expect("the float option is listed");
+    assert_eq!(temperature["type"], "float", "body: {temperature}");
+    // Both ends and a grid: what a client renders as a slider rather than a
+    // field, the way a non-empty `choices` is what it renders as a dropdown.
+    assert_eq!(temperature["min"], 0.6, "body: {temperature}");
+    assert_eq!(temperature["max"], 1.2, "body: {temperature}");
+    assert_eq!(temperature["step"], 0.1, "body: {temperature}");
+    let retries = options
+        .iter()
+        .find(|o| o["name"] == "retries")
+        .expect("the integer option is listed");
+    assert!(
+        retries["min"].is_null() && retries["step"].is_null(),
+        "an unbounded option declares no range: {retries}"
+    );
+    // The shortest round-tripping form, not the binary fraction nearest 0.9.
+    assert_eq!(temperature["default"], "0.9", "body: {temperature}");
+    assert_eq!(temperature["value"], "0.9", "body: {temperature}");
 }
 
 /// Clearing a `choices` option returns it to the manifest default rather than

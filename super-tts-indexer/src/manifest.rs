@@ -56,6 +56,52 @@ pub enum ManifestError {
     /// The same value appears twice in one option's `choices`.
     #[error("option `{0}` lists the choice {1:?} more than once")]
     DuplicateChoice(String, String),
+    /// A `default` or a `choices` entry is not of the type the option
+    /// declares. The daemon stores option values as text and checks them
+    /// against that type on the way in, so a manifest naming a value of
+    /// another type names one it would then refuse.
+    #[error(
+        "option `{0}` declares `type = \"{2}\"` but offers the value {1:?}, \
+         which is not one: the daemon would refuse the value its own manifest \
+         names"
+    )]
+    ValueNotTheType(String, String, String),
+    /// `min`, `max` or `step` on an option whose type has no ordering to
+    /// bound. A range over strings is not a thing the manifest can mean.
+    #[error(
+        "option `{0}` declares a numeric range but `type = \"{1}\"`: only \
+         `integer` and `float` options can be bounded"
+    )]
+    RangeOnNonNumeric(String, String),
+    /// The bounds do not describe a usable range.
+    #[error("option `{0}` declares an unusable range: {1}")]
+    InvalidRange(String, String),
+    /// An option named both a closed set and a range. A client renders one
+    /// control, and these ask for two different ones.
+    #[error(
+        "option `{0}` declares both `choices` and a numeric range: a closed \
+         set is already the values it accepts, and a client cannot render a \
+         dropdown and a slider at once"
+    )]
+    ChoicesWithRange(String),
+    /// The default the daemon injects when nobody sets one is outside the
+    /// range the option itself declares.
+    #[error(
+        "option `{0}` declares `default = {1}` but its own range does not \
+         reach it: the value a user never changes would be one the option \
+         rejects"
+    )]
+    DefaultOutOfRange(String, String),
+    /// A slider with nothing to rest on. Every other control can render
+    /// "nothing set" — an empty field, an unpicked dropdown — but a slider
+    /// always shows a position, and a position the backend did not choose is
+    /// a value the user never set being shown to them as though they had.
+    #[error(
+        "option `{0}` declares `step`, which makes it a slider, but no \
+         `default`: a slider always rests somewhere, so it has to rest on a \
+         value the backend named"
+    )]
+    SliderWithoutDefault(String),
 }
 
 pub fn validate(
@@ -133,6 +179,22 @@ pub fn validate(
     // can neither choose from nor return to. Caught at publication because the
     // daemon reads a manifest it cannot fix.
     for o in &m.options {
+        // A declared type is a promise about every value the entry itself
+        // names — the default the daemon injects when nobody sets one, and
+        // each rung of a dropdown. Checked before the closed-set rules below,
+        // and whether or not there is a closed set, because a `float` option
+        // whose default is `brisk` is broken with or without `choices`.
+        for value in o.default.iter().chain(o.choices.iter()) {
+            let value = value.to_string();
+            if !o.accepts_the_type(&value) {
+                return Err(ManifestError::ValueNotTheType(
+                    o.name.clone(),
+                    value,
+                    o.declared_type().to_string(),
+                ));
+            }
+        }
+        check_range(o)?;
         if o.choices.is_empty() {
             continue;
         }
@@ -148,7 +210,7 @@ pub fn validate(
             seen.push(choice);
         }
         if let Some(default) = &o.default
-            && !o.accepts(&default.to_string())
+            && !o.is_a_choice(&default.to_string())
         {
             return Err(ManifestError::DefaultNotAChoice(
                 o.name.clone(),
@@ -157,6 +219,71 @@ pub fn validate(
         }
     }
     crate::license::check(m.backend.license.as_deref())?;
+    Ok(())
+}
+
+/// The `min` / `max` / `step` rules for one option.
+///
+/// Checked at publication because the daemon reads a manifest it cannot fix:
+/// a range it cannot satisfy would either refuse every value or be ignored,
+/// and neither is something a user could diagnose from the settings sheet.
+fn check_range(o: &super_tts_registry_types::manifest::Opt) -> Result<(), ManifestError> {
+    let bounds = [o.min, o.max, o.step];
+    if bounds.iter().all(Option::is_none) {
+        return Ok(());
+    }
+    let numeric = matches!(o.declared_type(), OptionType::Integer | OptionType::Float);
+    if !numeric {
+        return Err(ManifestError::RangeOnNonNumeric(
+            o.name.clone(),
+            o.declared_type().to_string(),
+        ));
+    }
+    if !o.choices.is_empty() {
+        return Err(ManifestError::ChoicesWithRange(o.name.clone()));
+    }
+    let invalid = |why: &str| ManifestError::InvalidRange(o.name.clone(), why.to_string());
+    for value in bounds.into_iter().flatten() {
+        if !value.is_finite() {
+            return Err(invalid("a bound must be a finite number"));
+        }
+        // An `integer` option whose slider notches are fractions is one whose
+        // control cannot produce a value the option accepts.
+        if o.declared_type() == OptionType::Integer && value.fract() != 0.0 {
+            return Err(invalid(
+                "an `integer` option's bounds must be whole numbers",
+            ));
+        }
+    }
+    if let (Some(low), Some(high)) = (o.min, o.max)
+        && low > high
+    {
+        return Err(invalid("`min` is above `max`"));
+    }
+    if let Some(step) = o.step {
+        if step <= 0.0 {
+            return Err(invalid("`step` must be greater than zero"));
+        }
+        // `step` is what makes the option a slider, and a slider needs both
+        // ends to have anything to slide between.
+        let (Some(low), Some(high)) = (o.min, o.max) else {
+            return Err(invalid("`step` needs both `min` and `max`"));
+        };
+        if step > high - low {
+            return Err(invalid("`step` is larger than the range it divides"));
+        }
+        if o.default.is_none() {
+            return Err(ManifestError::SliderWithoutDefault(o.name.clone()));
+        }
+    }
+    if let Some(default) = &o.default
+        && !o.is_in_range(&default.to_string())
+    {
+        return Err(ManifestError::DefaultOutOfRange(
+            o.name.clone(),
+            default.to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -221,6 +348,240 @@ mod tests {
             matches!(err, ManifestError::DefaultNotAChoice(ref n, ref d) if n == "styling" && d == "brisk"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn a_float_option_takes_fractional_choices() {
+        validate_option(
+            r#"
+            name = "temperature"
+            description = "How freely the model samples."
+            type = "float"
+            choices = [0.7, 0.8, 0.9]
+            "#,
+        )
+        .expect("a float option may offer fractional values");
+    }
+
+    /// The manifest may not name a value the daemon would then refuse to
+    /// store. Caught at publication, where it can still be fixed.
+    #[test]
+    fn an_option_cannot_offer_a_value_of_another_type() {
+        let err = validate_option(
+            r#"
+            name = "temperature"
+            description = "How freely the model samples."
+            type = "float"
+            default = "brisk"
+            "#,
+        )
+        .expect_err("a float option cannot default to a word");
+        assert!(
+            matches!(err, ManifestError::ValueNotTheType(ref n, ref v, ref t)
+                if n == "temperature" && v == "brisk" && t == "float"),
+            "got: {err}"
+        );
+
+        let err = validate_option(
+            r#"
+            name = "retries"
+            description = "How many times to try again."
+            type = "integer"
+            choices = [1, 2, 2.5]
+            "#,
+        )
+        .expect_err("an integer option cannot offer a fraction");
+        assert!(
+            matches!(err, ManifestError::ValueNotTheType(ref n, ref v, ref t)
+                if n == "retries" && v == "2.5" && t == "integer"),
+            "got: {err}"
+        );
+    }
+
+    /// A whole number written into a float option is still a float. TOML
+    /// spells it as an integer and the untagged enum binds it as one, so this
+    /// is the check that the type rule reads the value and not the spelling.
+    #[test]
+    fn a_float_option_accepts_a_whole_number() {
+        validate_option(
+            r#"
+            name = "gain"
+            description = "Output gain."
+            type = "float"
+            default = 1
+            "#,
+        )
+        .expect("1 is a float");
+    }
+
+    #[test]
+    fn a_bounded_numeric_option_validates() {
+        validate_option(
+            r#"
+            name = "temperature"
+            description = "How freely the model samples."
+            type = "float"
+            default = 0.9
+            min = 0.6
+            max = 1.2
+            step = 0.1
+            "#,
+        )
+        .expect("a slider over a float range validates");
+
+        validate_option(
+            r#"
+            name = "retries"
+            description = "How many times to try again."
+            type = "integer"
+            default = 3
+            min = 0
+            max = 10
+            step = 1
+            "#,
+        )
+        .expect("and over an integer range");
+    }
+
+    /// A range over something with no ordering is not a thing the manifest can
+    /// mean, and a client has no control to render for it.
+    #[test]
+    fn only_a_numeric_option_can_be_bounded() {
+        let err = validate_option(
+            r#"
+            name = "styling"
+            description = "The register."
+            type = "string"
+            min = 0.0
+            max = 1.0
+            "#,
+        )
+        .expect_err("a string has no range");
+        assert!(
+            matches!(err, ManifestError::RangeOnNonNumeric(ref n, ref t)
+                if n == "styling" && t == "string"),
+            "got: {err}"
+        );
+    }
+
+    /// A client renders one control. A closed set and a range ask for two.
+    #[test]
+    fn an_option_cannot_be_both_a_dropdown_and_a_slider() {
+        let err = validate_option(
+            r#"
+            name = "temperature"
+            description = "How freely the model samples."
+            type = "float"
+            choices = [0.7, 0.9]
+            min = 0.6
+            max = 1.2
+            step = 0.1
+            "#,
+        )
+        .expect_err("a dropdown and a slider at once");
+        assert!(
+            matches!(err, ManifestError::ChoicesWithRange(ref n) if n == "temperature"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_range_has_to_be_one() {
+        for (body, why) in [
+            ("min = 1.2\nmax = 0.6\n", "reversed"),
+            ("min = 0.0\nmax = 1.0\nstep = 0.0\n", "a zero step"),
+            ("min = 0.0\nmax = 1.0\nstep = -0.1\n", "a negative step"),
+            (
+                "min = 0.0\nmax = 1.0\nstep = 2.0\n",
+                "a step past the range",
+            ),
+            ("step = 0.1\n", "a step with no ends"),
+            ("min = 0.0\nstep = 0.1\n", "a step with one end"),
+        ] {
+            let err = validate_option(&format!(
+                "name = \"t\"\ndescription = \"T.\"\ntype = \"float\"\n{body}"
+            ))
+            .expect_err(why);
+            assert!(
+                matches!(err, ManifestError::InvalidRange(ref n, _) if n == "t"),
+                "{why}: got {err}"
+            );
+        }
+    }
+
+    /// The bounds of an `integer` option have to be whole, or its slider
+    /// produces values the option itself refuses.
+    #[test]
+    fn an_integer_range_is_whole() {
+        let err = validate_option(
+            r#"
+            name = "retries"
+            description = "How many times to try again."
+            type = "integer"
+            min = 0
+            max = 10
+            step = 0.5
+            "#,
+        )
+        .expect_err("half a retry is not a retry");
+        assert!(
+            matches!(err, ManifestError::InvalidRange(ref n, _) if n == "retries"),
+            "got: {err}"
+        );
+    }
+
+    /// The value a user never changes must be one the option accepts.
+    #[test]
+    fn a_range_must_reach_its_own_default() {
+        let err = validate_option(
+            r#"
+            name = "temperature"
+            description = "How freely the model samples."
+            type = "float"
+            default = 2.0
+            min = 0.6
+            max = 1.2
+            "#,
+        )
+        .expect_err("a default outside its own range is refused");
+        assert!(
+            matches!(err, ManifestError::DefaultOutOfRange(ref n, ref d)
+                if n == "temperature" && d == "2.0"),
+            "got: {err}"
+        );
+    }
+
+    /// Every other control can render "nothing set". A slider cannot.
+    #[test]
+    fn a_slider_must_rest_on_a_declared_default() {
+        let err = validate_option(
+            r#"
+            name = "temperature"
+            description = "How freely the model samples."
+            type = "float"
+            min = 0.6
+            max = 1.2
+            step = 0.1
+            "#,
+        )
+        .expect_err("a slider with nothing to rest on");
+        assert!(
+            matches!(err, ManifestError::SliderWithoutDefault(ref n) if n == "temperature"),
+            "got: {err}"
+        );
+
+        // Bounds without a step are a validated field, not a slider, and a
+        // field can perfectly well start empty.
+        validate_option(
+            r#"
+            name = "retries"
+            description = "How many times to try again."
+            type = "integer"
+            min = 0
+            max = 10
+            "#,
+        )
+        .expect("a bounded field needs no default");
     }
 
     #[test]

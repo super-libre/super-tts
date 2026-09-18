@@ -5,8 +5,13 @@ configuration values (a base-URL override, a speaking-style preset, a timeout)
 a backend declares as `[[options]]` in its
 [`backend.toml`](../../../backend/config.md). The daemon stores option
 overrides as plaintext in its config and injects each as an
-`x-tts-option-<name>` request header at model-load time (see
+`x-tts-option-<name>` request header on every `/v1` request (see
 [contract.md](../../../backend/contract.md#request-headers)).
+
+A write takes effect on the backend's **next request**, not its next model
+load: the daemon hands the running instance the new value rather than reloading
+it. Setting `base_url` is no exception — the endpoint it authorizes is checked
+per outbound connection, so that too is swapped in place.
 
 `{backend_id}` is the backend's id — its `source` as
 [`GET /backend/list`](../backends.md) reports it (e.g.
@@ -147,11 +152,19 @@ Authorization: Bearer tts_…64hex…
 
 ## `POST /backend/{backend_id}/option/{name}`
 
-Set the option override. Every stage currently running a model from that
-backend is reloaded so the new value takes effect at once; anything not loaded
-picks it up on its next load. A reload that fails is reported in `message`, and
-the stage keeps running the old instance rather than being left with nothing
-loaded.
+Set the option override. A model currently running from that backend is handed
+the new value immediately and uses it from its next request; nothing is
+reloaded. A backend that is not loaded picks the value up when it loads.
+
+Writing the value already stored is a no-op, reported as such in `message`.
+
+If the new value cannot be delivered to the running model — its backend is no
+longer installed, or a required secret has gone missing — the write still
+succeeds, because the override is stored either way, and `message` says the
+running backend kept the old value. It is never left with nothing loaded.
+
+`base_url` is validated here rather than at the next load: a value no host can
+be read from is refused with `400 invalid_value`, and nothing is stored.
 
 **Request:**
 
