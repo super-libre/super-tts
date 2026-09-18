@@ -815,6 +815,24 @@
             "null"
           ]
         },
+        "max": {
+          "default": null,
+          "description": "Highest value a numeric option accepts, inclusive. See [`Opt::min`].",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min": {
+          "default": null,
+          "description": "Lowest value a numeric option accepts, inclusive.\n\nA bound the daemon keeps, not a hint: a write outside it is refused.\nOnly for `integer` and `float` — a range over strings is not a thing\nthe manifest can mean, and the indexer refuses one.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "name": {
           "description": "`snake_case` identifier the backend reads the value by. Unique within\nthe table.",
           "type": "string"
@@ -823,6 +841,15 @@
           "default": false,
           "description": "Whether a value must be set before the backend can load. Default\n`false`.",
           "type": "boolean"
+        },
+        "step": {
+          "default": null,
+          "description": "The increment a numeric option moves in.\n\nDeclaring it alongside `min` and `max` is what turns the option into a\nslider, the way declaring `choices` turns one into a dropdown: a\ncontrol that can only be dragged needs both ends and a grid to land on,\nand an option that has all three has nothing a text box would add.\n\nThe grid is the control's, not the contract's. The daemon enforces the\nbounds and leaves the step to the client, because a value between two\nnotches is still a value the backend asked to be able to receive —\nrefusing it would make the option narrower than its own range says, and\nwould turn every float that is not exactly representable into a bug\nreport.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "type": {
           "anyOf": [
@@ -853,6 +880,10 @@
           "type": "integer"
         },
         {
+          "format": "double",
+          "type": "number"
+        },
+        {
           "type": "boolean"
         }
       ],
@@ -863,6 +894,7 @@
       "enum": [
         "string",
         "integer",
+        "float",
         "bool"
       ],
       "type": "string"
