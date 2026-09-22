@@ -326,3 +326,158 @@ async fn rendering_a_zero_length_buffer_is_harmless() {
     let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples();
     assert_eq!(p.buffered(), 9600 - fade, "nothing was consumed");
 }
+
+/// The point of [`Playback::wait_for_playout`]: `finish` means queued, and the
+/// listener has heard nothing yet. Waiting must not return until a device has
+/// actually consumed the ring.
+#[tokio::test]
+async fn waiting_for_playout_outlasts_the_queued_audio() {
+    let p = Arc::new(Playback::detached(DEVICE));
+    // A second of audio — well under the ring, so `finish` returns with all of
+    // it still unheard, exactly as a faster-than-realtime backend leaves it.
+    p.push(&vec![0.5_f32; 48000], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish().await;
+    assert_eq!(p.state(), State::Draining);
+
+    let waiting = tokio::spawn({
+        let p = Arc::clone(&p);
+        async move { p.wait_for_playout(Duration::from_secs(30)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !waiting.is_finished(),
+        "a full ring is not a finished utterance"
+    );
+
+    // Now be the device.
+    let mut buf = vec![0.0_f32; 480];
+    while p.buffered() > 0 {
+        p.render(&mut buf);
+    }
+    p.render(&mut buf);
+    assert_eq!(p.state(), State::Idle);
+
+    let drained = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the wait must end once the audio has been played")
+        .expect("the waiter did not panic");
+    assert!(
+        drained,
+        "a ring that played out is a clean finish, not a stall"
+    );
+}
+
+/// A sink that stops consuming must not hold the utterance open for good: the
+/// slot it gates is what lets the daemon load a different model.
+#[tokio::test]
+async fn a_stalled_device_gives_up_rather_than_waiting_forever() {
+    let p = Playback::detached(DEVICE);
+    p.push(&vec![0.5_f32; 48000], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish().await;
+
+    // Nothing renders, so nothing is ever consumed.
+    let drained = tokio::time::timeout(
+        Duration::from_secs(5),
+        p.wait_for_playout(Duration::from_millis(150)),
+    )
+    .await
+    .expect("the wait must time out rather than hang");
+    assert!(
+        !drained,
+        "a device that never consumed must be reported as stalled"
+    );
+    assert!(p.buffered() > 0, "and the audio is still sitting there");
+}
+
+/// Progress on a slow sink is not a stall. The timeout must measure *silence
+/// from the device*, not total time, or a long utterance on a slow sink would
+/// be cut short — which is the failure this whole path is fixing.
+#[tokio::test]
+async fn a_slow_but_moving_device_is_not_treated_as_stalled() {
+    let p = Arc::new(Playback::detached(DEVICE));
+    p.push(&vec![0.5_f32; 48000], params(48000, 1))
+        .await
+        .unwrap();
+    p.finish().await;
+
+    let feeding = tokio::spawn({
+        let p = Arc::clone(&p);
+        async move {
+            let mut buf = vec![0.0_f32; 480];
+            // 10 ms of audio every 20 ms: half of realtime, and far longer
+            // overall than the stall timeout below.
+            while p.buffered() > 0 {
+                p.render(&mut buf);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            p.render(&mut buf);
+        }
+    });
+
+    let drained = tokio::time::timeout(
+        Duration::from_secs(20),
+        p.wait_for_playout(Duration::from_millis(300)),
+    )
+    .await
+    .expect("the wait must end");
+    feeding.await.expect("the feeder did not panic");
+    assert!(
+        drained,
+        "a device making progress is not stalled, however slowly"
+    );
+}
+
+/// An xrun with nothing playing is not a dropout: the daemon holds the device
+/// open between utterances and feeds it silence, so the device going hungry
+/// there costs the listener nothing. Reported as such, and counted — bursts of
+/// these used to read as a speech fault minutes after anyone last spoke.
+#[test]
+fn a_stream_error_is_told_apart_by_what_was_playing() {
+    let p = Playback::detached(DEVICE);
+    assert_eq!(p.state(), State::Idle);
+    // Both branches must run without panicking or blocking the stream thread;
+    // the counter is what proves each one was taken.
+    stream_error(
+        &p.shared,
+        &p.stream_errors,
+        &cpal::StreamError::DeviceNotAvailable,
+    );
+    assert_eq!(
+        p.stream_errors.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+
+    p.shared.lock().state = State::Playing;
+    stream_error(
+        &p.shared,
+        &p.stream_errors,
+        &cpal::StreamError::DeviceNotAvailable,
+    );
+    assert_eq!(
+        p.stream_errors.load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+}
+
+/// The classifier must never wait on the producer's lock: it runs on the same
+/// thread cpal uses to meet the device deadline.
+#[test]
+fn a_stream_error_reported_while_the_lock_is_held_does_not_block() {
+    let p = Playback::detached(DEVICE);
+    let held = p.shared.lock();
+    stream_error(
+        &p.shared,
+        &p.stream_errors,
+        &cpal::StreamError::DeviceNotAvailable,
+    );
+    drop(held);
+    assert_eq!(
+        p.stream_errors.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "the report still lands even when the state cannot be read"
+    );
+}

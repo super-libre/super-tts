@@ -9,6 +9,8 @@ mod openapi;
 #[cfg(test)]
 mod openapi_contract;
 mod server;
+#[cfg(test)]
+mod speak_resolution_contract;
 mod state;
 #[cfg(test)]
 mod url_surface_contract;

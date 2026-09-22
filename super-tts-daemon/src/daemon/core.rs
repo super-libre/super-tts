@@ -12,16 +12,7 @@ impl SuperTTSDaemon {
         };
 
         match command {
-            Command::Speak {
-                text,
-                voice,
-                language,
-                speed,
-                instructions,
-            } => {
-                self.handle_speak(text, voice, language, speed, instructions)
-                    .await
-            }
+            Command::Speak { text } => self.handle_speak(text).await,
             Command::StopSpeaking => self.handle_stop_speaking().await,
             Command::Ping { client_id } => self.handle_ping(client_id),
             Command::Status => self.handle_status().await,

@@ -87,6 +87,20 @@ audio exists for it, and with a remote backend that gap can be seconds long. A
 widget that wants to distinguish "synthesizing" from "speaking" uses exactly
 that transition.
 
+**When the stop fires.** `speaking_state{is_speaking:false}` marks the end of
+the *audio*, not the end of synthesis. The two are far apart: a local backend
+runs several times faster than realtime, so the last sample is produced —
+and [`POST /speak`](./speak.md) has long since answered `202` — while most of
+the utterance is still buffered ahead of the speakers. The daemon holds the
+utterance open until that buffer has played out, and keeps publishing
+`speech_progress` for the whole of it, so `spoken_ms` climbs to the length of
+the utterance before the stop arrives. A client that needs to know when the
+voice actually stopped can wait for this event and nothing else.
+
+The one exception is a sink that stops consuming — unplugged, suspended,
+disconnected. The daemon waits a few seconds for it, then publishes the stop
+anyway rather than leaving the utterance open for good.
+
 **Whose utterance.** The daemon speaks for whoever asked, so these events
 describe the *device*, not your requests — an utterance another app started
 raises them too. Match `utterance_id` against what

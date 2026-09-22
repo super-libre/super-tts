@@ -17,6 +17,7 @@ use crate::state::scripts;
 use crate::state::voices::{PendingSample, SampleOrigin, ScriptChoice};
 use crate::ui::messages::{Message, VoicesMessage};
 use cosmic::prelude::*;
+use super_tts_shared::models::protocol::SYNTHESIS_STAGE;
 
 /// The sentence a preview speaks. Fixed rather than user-supplied: the point
 /// is to hear the voice, and a field to fill in first is friction between the
@@ -380,10 +381,17 @@ impl AppModel {
             log::debug!("voices: a preview of {current} is already in flight");
             return Task::none();
         }
+        // Addressed to the model the card is showing, like every other write
+        // here: hearing a voice means selecting it for that model, because a
+        // speak request has no voice of its own to carry.
+        let Some((_, model)) = self.voice.target.clone() else {
+            log::debug!("voices: no model to preview {voice_id} with");
+            return Task::none();
+        };
         self.clear_action_error(ErrorScope::Voices);
         self.voices.previewing = Some(voice_id.clone());
         Task::perform(
-            speak_in_voice(PREVIEW_TEXT.to_string(), voice_id),
+            speak_in_voice(SYNTHESIS_STAGE, model, voice_id, PREVIEW_TEXT.to_string()),
             |result| {
                 cosmic::Action::App(Message::Voices(match result {
                     Ok(()) => VoicesMessage::Previewed,

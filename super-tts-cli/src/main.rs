@@ -19,7 +19,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Arg, Command, value_parser};
 use std::io::Read;
 use std::path::PathBuf;
-use super_tts_shared::daemon::http_client::{self, SpeakOptions};
+use super_tts_shared::daemon::http_client;
 use super_tts_shared::daemon::session::{self, AppId};
 use super_tts_shared::validation::get_http_socket_path;
 
@@ -58,28 +58,10 @@ async fn main() -> Result<()> {
                         .help("The text to speak; omit to read it from stdin")
                         .num_args(0..)
                         .trailing_var_arg(true),
-                )
-                .arg(
-                    Arg::new("voice")
-                        .long("voice")
-                        .help("A voice id the active model declares"),
-                )
-                .arg(
-                    Arg::new("language")
-                        .long("language")
-                        .help("BCP-47 language override"),
-                )
-                .arg(
-                    Arg::new("speed")
-                        .long("speed")
-                        .help("Rate multiplier; backends that cannot vary rate ignore it")
-                        .value_parser(value_parser!(f32)),
-                )
-                .arg(
-                    Arg::new("instructions")
-                        .long("instructions")
-                        .help("Free-text delivery guidance, for models that accept it"),
-                ),
+                ), // No --voice/--language/--speed/--instructions: how the
+                   // machine speaks is the user's configuration, not a flag on the
+                   // thing that makes it talk. Set a voice with the settings app
+                   // or `POST /pipeline/{stage}/model/{model}/voice`.
         )
         .subcommand(Command::new("stop").about("Stop the utterance now playing"))
         .subcommand(
@@ -106,14 +88,8 @@ async fn main() -> Result<()> {
         }
         Some(("speak", sub)) => {
             let text = read_text(sub)?;
-            let opts = SpeakOptions {
-                voice: sub.get_one::<String>("voice").cloned(),
-                language: sub.get_one::<String>("language").cloned(),
-                speed: sub.get_one::<f32>("speed").copied(),
-                instructions: sub.get_one::<String>("instructions").cloned(),
-            };
             run_with_token(socket_path.clone(), |t| {
-                cmd_speak(socket_path.clone(), t, text.clone(), opts.clone())
+                cmd_speak(socket_path.clone(), t, text.clone())
             })
             .await
             .context("speak failed")
@@ -213,11 +189,10 @@ async fn cmd_speak(
     socket_path: PathBuf,
     token: String,
     text: String,
-    opts: SpeakOptions,
 ) -> super_tts_shared::daemon::http_client::HttpResult<()> {
     // Not a toggle: a second `speak` deliberately preempts the first, which is
     // what "say this instead" means. Use `stop` to fall silent.
-    let resp = http_client::speak(socket_path, &token, &text, opts).await?;
+    let resp = http_client::speak(socket_path, &token, &text).await?;
     if resp.status != "success" {
         return Err(http_client::HttpError::Other(
             resp.message.unwrap_or_else(|| "speak failed".to_string()),

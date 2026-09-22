@@ -8,10 +8,12 @@ reference recording, list what is stored, play a clip back, rename one, and
 delete one. That is the whole surface: the library holds recordings and the
 metadata describing them, and nothing else.
 
-Speaking *in* a cloned voice needs [`speak`](./speak.md), not this scope — a
-client passes the `voice:<uuid>` id on [`POST /speak`](../endpoints/v1/speak.md)
-and never touches the
-audio. The two are separate deliberately: an app that reads text aloud in a
+Speaking *in* a cloned voice needs only [`speak`](./speak.md), not this scope —
+and nothing at all if the user has already selected it. The `voice:<uuid>` id is
+set once with
+[`POST /pipeline/{stage}/model/{model}/voice`](../endpoints/v1/pipeline/voice.md)
+under [`settings`](./settings.md); from then on every utterance uses it, and a
+speaking client never names it or touches the audio. The two are separate deliberately: an app that reads text aloud in a
 voice the user already cloned has no reason to hold the recordings.
 
 ## Why it is not part of `settings`
