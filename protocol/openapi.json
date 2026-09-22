@@ -5245,10 +5245,10 @@
           "speak"
         ],
         "summary": "Speak a piece of text (scope: speak)",
-        "description": "Synthesizes `text` with the loaded model and plays it on the daemon's output device.\n\n`202`, not `200`: the call returns once the audio is *queued*, and the device is still playing it out when you read the response. To follow the utterance to its end, subscribe to `speaking_state` and `speech_progress` on `GET /events` with the `playback_events` scope — those outlive any one request, which is what a status widget actually needs.\n\n**One utterance at a time, newest wins.** Speaking while something is already playing interrupts it: that is what \"speak this instead\" means, and it is why this endpoint is not refused while the daemon is busy. Only swapping the model out from under live synthesis is refused, by `POST /pipeline/{stage}/model`.\n\nThe daemon normalizes `text` first — markup that would otherwise be read out literally is stripped, and long text is split on sentence boundaries so playback starts before the whole thing is synthesized. Numbers, dates and currency are passed through untouched, because a wrong number-to-words is worse than none.\n\nFor text that is still being generated, use `GET /speak/stream` instead.",
+        "description": "Synthesizes `text` with the loaded model and plays it on the daemon's output device.\n\n`202`, not `200`: the call returns once the audio is *queued*, and the device is still playing it out when you read the response. To follow the utterance to its end, subscribe to `speaking_state` and `speech_progress` on `GET /events` with the `playback_events` scope — those outlive any one request, which is what a status widget actually needs.\n\n**One utterance at a time, newest wins.** Speaking while something is already playing interrupts it: that is what \"speak this instead\" means, and it is why this endpoint is not refused while the daemon is busy. Only swapping the model out from under live synthesis is refused, by `POST /pipeline/{stage}/model`.\n\nThe daemon normalizes `text` first — markup that would otherwise be read out literally is stripped, and long text is split on sentence boundaries so playback starts before the whole thing is synthesized. Numbers, dates and currency are passed through untouched, because a wrong number-to-words is worse than none.\n\n**`text` is the whole request.** How an utterance is spoken — which voice, which language, how fast, in what manner — is the user's configuration, read per utterance by the daemon. Set a voice with `POST /pipeline/{stage}/model/{model}/voice` and a language with `POST /settings/language`, both under the `settings` scope. An app that can make the machine talk does not thereby get a say in which voice it talks in.\n\n`voice`, `language`, `speed` and `instructions` used to be accepted here. A request still carrying one is refused with `400 invalid_value` naming it, rather than ignored — a client given a different voice than it asked for has no way to find out.\n\nFor text that is still being generated, use `GET /speak/stream` instead.",
         "operationId": "speak",
         "requestBody": {
-          "description": "`text` is required; everything else falls back to the daemon's configured defaults.",
+          "description": "`text`, and nothing else. Voice, language, speed and instructions are settings, not request fields.",
           "content": {
             "application/json": {
               "schema": {
@@ -5270,7 +5270,7 @@
             }
           },
           "400": {
-            "description": "`text` missing, empty, or over the cap; a `voice` the model does not declare or whose shape it did not opt into; or a malformed field.",
+            "description": "`text` missing, empty, or over the cap; a request still carrying the removed `voice`/`language`/`speed`/`instructions` fields; or a malformed body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5404,7 +5404,7 @@
           "speak"
         ],
         "summary": "Speak text as it is produced (WebSocket) (scope: speak)",
-        "description": "An HTTP/1.1 upgrade to a WebSocket. The client sends text deltas as they arrive; the daemon synthesizes each sentence as it completes, so speech starts long before generation finishes. This is the LLM case — with `POST /speak` you must hold the whole reply before the first word is heard.\n\nThe first frame must be `start`, carrying the same options `POST /speak` takes; every later frame needs them, and guessing would produce a wrong voice rather than an error. Then `text` frames carry deltas, `end` plays out what remains, and `cancel` stops immediately and drops the queue. The daemon answers with `utterance`, `mark`, `progress`, and a terminal `done` or `error`.\n\nDeltas are appended to a streaming normalizer, so a delta may split a markup construct in half without the markers being spoken.\n\nBeing a WebSocket, the frame protocol is not describable in OpenAPI — the message shapes are in `docs/protocol/endpoints/v1/speak/stream.md`. Four concurrent sessions are allowed; beyond that the upgrade is refused rather than queued, and a session that sends no frame for two minutes is treated as dead and torn down.",
+        "description": "An HTTP/1.1 upgrade to a WebSocket. The client sends text deltas as they arrive; the daemon synthesizes each sentence as it completes, so speech starts long before generation finishes. This is the LLM case — with `POST /speak` you must hold the whole reply before the first word is heard.\n\nThe first frame must be `start`. It carries nothing — how an utterance is spoken is the user's configuration, read per utterance, the same as on `POST /speak` — and a `start` still naming `voice`, `language`, `speed` or `instructions` is refused by name rather than having it dropped in silence. Then `text` frames carry deltas, `end` plays out what remains, and `cancel` stops immediately and drops the queue. The daemon answers with `utterance`, `mark`, `progress`, and a terminal `done` or `error`.\n\nDeltas are appended to a streaming normalizer, so a delta may split a markup construct in half without the markers being spoken.\n\nBeing a WebSocket, the frame protocol is not describable in OpenAPI — the message shapes are in `docs/protocol/endpoints/v1/speak/stream.md`. Four concurrent sessions are allowed; beyond that the upgrade is refused rather than queued, and a session that sends no frame for two minutes is treated as dead and torn down.",
         "operationId": "speak_stream_handler",
         "responses": {
           "101": {
@@ -8146,43 +8146,10 @@
           "text"
         ],
         "properties": {
-          "instructions": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Free-text delivery guidance, for models that accept it. Ignored\notherwise.",
-            "example": "Read this calmly."
-          },
-          "language": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "BCP-47 tag overriding `/settings/language` for this utterance only.",
-            "example": "en"
-          },
-          "speed": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "float",
-            "description": "Rate multiplier, roughly 0.5–2.0. Backends that cannot vary rate ignore\nit rather than failing.",
-            "example": 1.0
-          },
           "text": {
             "type": "string",
-            "description": "What to speak. Empty or whitespace-only is `400 invalid_value`, and the\ndaemon caps it at 50 000 characters — a model may declare a lower cap of\nits own in its manifest.",
+            "description": "What to speak, and the whole of the request. Empty or whitespace-only is\n`400 invalid_value`, and the daemon caps it at 50 000 characters — a\nmodel may declare a lower cap of its own in its manifest.\n\nThere is deliberately nothing else here. Which voice, which language and\nhow fast are settings the user owns; see `REMOVED_FIELDS`.",
             "example": "The kettle is boiling."
-          },
-          "voice": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A voice the loaded model declares. Omitted means the model's\n`default_voice`. A cloned voice is named `voice:<uuid>` — see\n`GET /voice/list`.",
-            "example": "af_bella"
           }
         }
       },
