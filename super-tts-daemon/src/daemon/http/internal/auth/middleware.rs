@@ -10,6 +10,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use http_body_util::BodyExt;
 use std::sync::{Arc, Mutex};
 
 /// In-memory record of `(exe_path, scopes)` pairs the user has clicked
@@ -55,6 +56,41 @@ const CORS_ALLOW_HEADERS: &str = "authorization, content-type";
 /// enough that removing an origin from the allowlist takes effect while the
 /// user is still watching.
 const CORS_MAX_AGE: &str = "600";
+
+/// How much of a refused request's body the daemon reads before it gives up and
+/// lets the connection close.
+///
+/// Enough for the bodies real clients actually send — a settings patch, a short
+/// voice clip — but deliberately not the full `voices::MAX_UPLOAD_BYTES`: the
+/// caller has already been refused, so there is no reason to let it spend the
+/// daemon's time streaming an upload that gets discarded either way.
+const REFUSED_BODY_DRAIN_LIMIT: usize = 2 * 1024 * 1024;
+
+/// Answer a request refused on its headers alone, discarding the body it is
+/// still sending so that answer can actually be read.
+///
+/// A rejection decided before the handler runs leaves the body unread, and
+/// hyper will not reuse a connection whose request it never finished reading —
+/// so it closes. A client partway through an upload sees that close as a write
+/// error (`BrokenPipe`) and never reads the `403` saying why it was refused; in
+/// a browser that surfaces as a bare "failed to fetch" rather than
+/// `scope_denied`. Reading the body out first is what lets the response land.
+///
+/// Bounded by [`REFUSED_BODY_DRAIN_LIMIT`]; past that the connection closes as
+/// it did before. A caller we have already refused is not owed an endless read.
+async fn refuse(request: Request<Body>, response: Response) -> Response {
+    let mut body = request.into_body();
+    let mut drained: usize = 0;
+    while let Some(Ok(frame)) = body.frame().await {
+        if let Some(data) = frame.data_ref() {
+            drained = drained.saturating_add(data.len());
+            if drained >= REFUSED_BODY_DRAIN_LIMIT {
+                break;
+            }
+        }
+    }
+    response
+}
 
 /// Gate every TCP request on the user's origin allowlist, and answer browser
 /// preflights.
@@ -112,11 +148,15 @@ pub(crate) async fn require_allowed_origin(
         // that reports a CORS error, which is the accurate description of what
         // happened. Attaching them would let the page read the body and find
         // out whether an origin is on the list.
-        return auth_err(
-            StatusCode::FORBIDDEN,
-            "auth_denied",
-            reason::ORIGIN_NOT_ALLOWED,
-        );
+        return refuse(
+            request,
+            auth_err(
+                StatusCode::FORBIDDEN,
+                "auth_denied",
+                reason::ORIGIN_NOT_ALLOWED,
+            ),
+        )
+        .await;
     };
 
     // A preflight is answered here and never reaches a handler: it carries no
@@ -183,11 +223,15 @@ pub(crate) async fn require_allowed_origin(
         .await
     {
         log::warn!("connection rejected for {client_id}: {e}");
-        return error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "connection_rejected",
-            "too_many_clients",
-        );
+        return refuse(
+            request,
+            error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "connection_rejected",
+                "too_many_clients",
+            ),
+        )
+        .await;
     }
     request.extensions_mut().insert(peer);
 
@@ -289,7 +333,7 @@ async fn require_scope(
     next: Next,
 ) -> Response {
     let Some(token) = extract_bearer_token(&headers) else {
-        return invalid_session(reason::UNKNOWN);
+        return refuse(request, invalid_session(reason::UNKNOWN)).await;
     };
     match state.tokens.validate(&token) {
         Ok(meta) => {
@@ -299,16 +343,16 @@ async fn require_scope(
                 &meta,
                 &token,
             ) {
-                return invalid_session(reason);
+                return refuse(request, invalid_session(reason)).await;
             }
             if meta.scopes.iter().any(|s| s == required) {
                 request.extensions_mut().insert(AuthContext { meta, token });
                 next.run(request).await
             } else {
-                scope_denied()
+                refuse(request, scope_denied()).await
             }
         }
-        Err(reason) => invalid_session(reason),
+        Err(reason) => refuse(request, invalid_session(reason)).await,
     }
 }
 
@@ -370,7 +414,7 @@ pub(crate) async fn require_any_authenticated(
     next: Next,
 ) -> Response {
     let Some(token) = extract_bearer_token(&headers) else {
-        return invalid_session(reason::UNKNOWN);
+        return refuse(request, invalid_session(reason::UNKNOWN)).await;
     };
     match state.tokens.validate(&token) {
         Ok(meta) => {
@@ -380,12 +424,12 @@ pub(crate) async fn require_any_authenticated(
                 &meta,
                 &token,
             ) {
-                return invalid_session(reason);
+                return refuse(request, invalid_session(reason)).await;
             }
             request.extensions_mut().insert(AuthContext { meta, token });
             next.run(request).await
         }
-        Err(reason) => invalid_session(reason),
+        Err(reason) => refuse(request, invalid_session(reason)).await,
     }
 }
 
@@ -408,7 +452,7 @@ pub(crate) async fn require_rate_limit(
         Ok(()) => next.run(request).await,
         Err(e) => {
             log::warn!("rate-limit hit for {client_id}: {e}");
-            rate_limited()
+            refuse(request, rate_limited()).await
         }
     }
 }
