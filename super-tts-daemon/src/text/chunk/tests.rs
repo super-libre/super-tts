@@ -474,3 +474,34 @@ fn the_pipeline_chunks_the_same_however_the_deltas_fall() {
         }
     }
 }
+
+/// The report that prompted the line-break rule: a list under a colon, spoken
+/// as one sentence. Every item is an utterance of its own, dashes, slashes and
+/// parentheses notwithstanding.
+#[test]
+fn a_bulleted_list_is_one_utterance_per_item() {
+    use super::super::normalize::normalize;
+    let text = "Practical picks that almost everyone gets value from:\n\
+        - Phone stands / tablet holders — takes minutes, used daily\n\
+        - Cable clips and organizers — cheap, endlessly useful\n\
+        - Broken appliance parts — knobs, brackets, clips, the exact thing you can't buy \
+        separately (this is 3D printing's killer app)\n\
+        - Batteries / screwdriver organizers — drawers finally make sense\n\
+        - Headphone hooks, key holders — mount under a desk or shelf\n\
+        - Caliper or tool holders — wall-mounted, satisfying to organize with";
+    let chunks = chunk_all(ChunkPolicy::default(), &normalize(text));
+    assert_eq!(chunks.len(), 7, "{chunks:?}");
+    assert_eq!(
+        chunks[0],
+        "Practical picks that almost everyone gets value from:"
+    );
+    assert_eq!(
+        chunks[1],
+        "Phone stands / tablet holders — takes minutes, used daily"
+    );
+    assert_eq!(
+        chunks[6],
+        "Caliper or tool holders — wall-mounted, satisfying to organize with"
+    );
+    assert!(chunks.iter().all(|c| !c.starts_with('-')), "{chunks:?}");
+}
