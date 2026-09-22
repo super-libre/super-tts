@@ -24,7 +24,21 @@
 //!
 //! Finding those boundaries is most of the work, and getting it wrong is
 //! audible: "Dr. Smith arrived" split after `Dr.` produces two utterances with
-//! a pause and a dropped intonation. See [`is_boundary`].
+//! a pause and a dropped intonation. See `boundary_end`.
+//!
+//! # Streaming and one-shot must agree
+//!
+//! The daemon's one-shot path is the streaming one with the whole string
+//! pushed at once, so the same text must chunk the same way however it is cut
+//! into deltas — otherwise `POST /speak` and `GET /speak/stream` read the same
+//! sentence with different phrasing, and which one you get depends on the
+//! producer's token sizes.
+//!
+//! That does not come for free. A terminator is judged by what *follows* it,
+//! so a delta ending just after one leaves the question open, and answering it
+//! early — in either direction — breaks the invariant. Hence the chunker's
+//! boundary verdict has three states rather than two: "not a boundary" means
+//! look further back, "cannot tell yet" means wait for the next delta.
 
 /// Sentence-ending punctuation.
 const TERMINATORS: [char; 6] = ['.', '!', '?', '。', '！', '？'];
@@ -107,16 +121,12 @@ impl Chunker {
     /// Feed normalized text; returns every chunk that is now complete.
     pub fn push(&mut self, text: &str) -> Vec<String> {
         self.buf.push_str(text);
-        let mut out = Vec::new();
-        while let Some(chunk) = self.take_ready() {
-            out.push(chunk);
-        }
-        out
+        self.drain(false)
     }
 
     /// Flush whatever remains as a final chunk.
     pub fn finish(&mut self) -> Vec<String> {
-        let mut out = self.push("");
+        let mut out = self.drain(true);
         let rest = self.buf.trim().to_string();
         self.buf.clear();
         self.emitted = 0;
@@ -126,8 +136,22 @@ impl Chunker {
         out
     }
 
+    /// Pull every chunk the buffer already holds.
+    ///
+    /// `final_pass` means no more input is coming, so a candidate boundary
+    /// that is only waiting on the text after it is settled here rather than
+    /// held — the same split [`Normalizer`](super::normalize::Normalizer)
+    /// makes for the same reason.
+    fn drain(&mut self, final_pass: bool) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Some(chunk) = self.take_ready(final_pass) {
+            out.push(chunk);
+        }
+        out
+    }
+
     /// Pull one chunk if the buffer holds a complete one.
-    fn take_ready(&mut self) -> Option<String> {
+    fn take_ready(&mut self, final_pass: bool) -> Option<String> {
         let target = self.policy.target(self.emitted);
         let len = self.buf.chars().count();
 
@@ -135,24 +159,35 @@ impl Chunker {
         // target. Splitting at every boundary the moment one appears would
         // turn "Hello there. How are you?" into two requests for no reason —
         // and each extra split costs a round trip and resets the model's
-        // prosodic context. It is also what makes streaming and one-shot agree:
-        // both fire on the same content-based condition rather than on when
-        // the text happened to arrive.
+        // prosodic context. It is also half of what makes streaming and
+        // one-shot agree: both *fire* on the same content-based condition
+        // rather than on when the text happened to arrive. The other half is
+        // the `NeedMore` arm below, which keeps them picking the same split.
         if len <= target {
             return None;
         }
 
         // Prefer the last sentence boundary at or before the target: it packs
         // the chunk as full as the policy allows without overshooting.
-        let split = last_boundary_within(&self.buf, target).or_else(|| {
+        let split = match last_boundary_within(&self.buf, target, final_pass) {
+            Boundary::At(split) => split,
+            // A terminator sits in the window, but what would settle it — the
+            // space and the capital that tell a sentence end from `etc.` — has
+            // not arrived. Settling for an earlier boundary is what used to
+            // make this path disagree with a one-shot caller: that caller has
+            // the whole string, judges this same candidate, and packs a fuller
+            // chunk, so identical text split into different deltas produced
+            // different chunks. Waiting costs one delta. `final_pass` is
+            // already folded into the verdict, so this cannot hold at `finish`.
+            Boundary::NeedMore => return None,
             // No boundary fits. Only force a split when the text has actually
             // outgrown the hard limit — otherwise wait for more input rather
             // than cutting mid-sentence.
-            match self.policy.max_chars {
-                Some(max) if len > max => Some(word_break_before(&self.buf, max)),
-                _ => None,
-            }
-        })?;
+            Boundary::No => match self.policy.max_chars {
+                Some(max) if len > max => word_break_before(&self.buf, max),
+                _ => return None,
+            },
+        };
 
         let head: String = self.buf.chars().take(split).collect();
         let rest: String = self.buf.chars().skip(split).collect();
@@ -166,15 +201,52 @@ impl Chunker {
     }
 }
 
-/// Character index just past the last sentence boundary at or before `limit`,
-/// or `None` if there is none.
-fn last_boundary_within(s: &str, limit: usize) -> Option<usize> {
+/// What can be concluded about a sentence boundary — about one candidate
+/// terminator in [`boundary_end`], and about a whole window in
+/// [`last_boundary_within`].
+///
+/// [`NeedMore`](Boundary::NeedMore) is the variant that earns the enum. A
+/// terminator is judged by what follows it, so at the end of the buffer there
+/// is nothing to judge with, and "not a boundary" and "cannot tell yet" are
+/// different answers: the first means look further back, the second means wait.
+/// Collapsing them into `None` made the chunker fall back to an earlier
+/// boundary — or, past a model's limit, to a mid-sentence word break — for text
+/// a one-shot caller split correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boundary {
+    /// A sentence ends here; the split lands at this character index.
+    At(usize),
+    /// Not a sentence end: a decimal point, an abbreviation, `example.com`.
+    No,
+    /// Undecidable from the text so far. Only reachable mid-stream — a final
+    /// pass has, by definition, all the text there will ever be.
+    NeedMore,
+}
+
+/// The last sentence boundary at or before `limit`.
+///
+/// `final_pass` means no more text is coming, which settles every candidate:
+/// one that merely lacks following text does not end a sentence *here*, and
+/// [`Chunker::finish`] flushes the remainder wholesale instead.
+fn last_boundary_within(s: &str, limit: usize, final_pass: bool) -> Boundary {
     let chars: Vec<char> = s.chars().collect();
     let end = limit.min(chars.len());
-    // The split lands past any closing quote, not straight after the
-    // terminator — otherwise `He said "go now."` is cut before its own closing
-    // quote, which then opens the next chunk.
-    (0..end).rev().find_map(|i| boundary_end(&chars, i))
+    // Scanned in reverse so the first decisive answer is also the latest
+    // boundary, which packs the chunk as full as the policy allows. The split
+    // lands past any closing quote, not straight after the terminator —
+    // otherwise `He said "go now."` is cut before its own closing quote, which
+    // then opens the next chunk.
+    for i in (0..end).rev() {
+        match boundary_end(&chars, i) {
+            Boundary::At(split) => return Boundary::At(split),
+            // Undecidable, and this candidate sits later than anything still
+            // to be scanned — so whatever it turns out to be beats an earlier
+            // boundary. Wait instead of settling.
+            Boundary::NeedMore if !final_pass => return Boundary::NeedMore,
+            Boundary::NeedMore | Boundary::No => {}
+        }
+    }
+    Boundary::No
 }
 
 /// Whether `chars[i]` ends a sentence.
@@ -190,10 +262,10 @@ fn last_boundary_within(s: &str, limit: usize) -> Option<usize> {
 /// - **What follows.** A real boundary is followed by whitespace and then
 ///   something that can start a sentence. `example.com` fails this because `c`
 ///   is neither.
-fn boundary_end(chars: &[char], i: usize) -> Option<usize> {
+fn boundary_end(chars: &[char], i: usize) -> Boundary {
     let c = chars[i];
     if !TERMINATORS.contains(&c) {
-        return None;
+        return Boundary::No;
     }
 
     // Trailing quotes and brackets belong to the sentence that is ending, so
@@ -211,7 +283,7 @@ fn boundary_end(chars: &[char], i: usize) -> Option<usize> {
     // CJK terminators are unambiguous: never decimal points, never in
     // abbreviations, never in domain names.
     if matches!(c, '。' | '！' | '？') {
-        return Some(j);
+        return Boundary::At(j);
     }
 
     if c == '.' {
@@ -220,37 +292,44 @@ fn boundary_end(chars: &[char], i: usize) -> Option<usize> {
 
         // A decimal point, or a dot inside a version number.
         if prev.is_some_and(|p| p.is_ascii_digit()) && after.is_some_and(|n| n.is_ascii_digit()) {
-            return None;
+            return Boundary::No;
         }
         // Mid-ellipsis: only the final dot of a run is even a candidate.
         if after == Some('.') {
-            return None;
+            return Boundary::No;
         }
         // A dot glued to what follows: `example.com`, `a.b`.
         if after.is_some_and(|n| !n.is_whitespace()) {
-            return None;
+            return Boundary::No;
         }
         // A single capital before the dot is an initial: `J. R. R. Tolkien`.
         let word = word_before(chars, i);
         if word.chars().count() == 1 && word.chars().next().is_some_and(char::is_uppercase) {
-            return None;
+            return Boundary::No;
         }
         if ABBREVIATIONS.contains(&word.to_lowercase().as_str()) {
-            return None;
+            return Boundary::No;
         }
     }
 
     match chars.get(j) {
-        // End of input is a boundary only once no more text is coming, which
-        // `finish` handles by flushing the remainder wholesale.
-        None => None,
-        Some(n) if !n.is_whitespace() => None,
+        // The buffer ends here, so there is nothing to judge the terminator
+        // by. Whether it ends a sentence depends on text that has not arrived;
+        // `finish` resolves it by flushing the remainder wholesale.
+        None => Boundary::NeedMore,
+        Some(n) if !n.is_whitespace() => Boundary::No,
         // What follows has to look like the start of a sentence. This is the
         // general form of the abbreviation list: no enumeration can cover
         // `e.g.`, `p.m.`, or a name nobody thought of, but a lowercase word
         // after a period almost never starts one. It also settles the ellipsis
         // case, where "Well... it depends" continues rather than restarts.
-        _ => starts_a_sentence(chars, j).then_some(j),
+        _ => match starts_a_sentence(chars, j) {
+            Some(true) => Boundary::At(j),
+            Some(false) => Boundary::No,
+            // Trailing whitespace and nothing else yet: the same as running
+            // out at `j`, one delta later.
+            None => Boundary::NeedMore,
+        },
     }
 }
 
@@ -259,21 +338,27 @@ fn boundary_end(chars: &[char], i: usize) -> Option<usize> {
 /// Uppercase, a digit, an opening quote or bracket — or any character from a
 /// script without letter case, where the test does not apply and a terminator
 /// is already unambiguous.
-fn starts_a_sentence(chars: &[char], j: usize) -> bool {
-    let Some(&c) = chars[j..].iter().find(|c| !c.is_whitespace()) else {
-        return false;
-    };
+///
+/// `None` when there is no such character *yet*: everything from `j` on is
+/// whitespace, so the question cannot be answered until more text arrives.
+/// Answering `false` there is what cut `…Six. Seven. | Eight…` one sentence
+/// short whenever a delta happened to end on that space.
+fn starts_a_sentence(chars: &[char], j: usize) -> Option<bool> {
+    let &c = chars[j..].iter().find(|c| !c.is_whitespace())?;
     if c.is_lowercase() {
-        return false;
+        return Some(false);
     }
-    c.is_uppercase()
-        || c.is_ascii_digit()
-        || matches!(c, '"' | '\'' | '“' | '‘' | '(' | '[')
-        // Caseless scripts (CJK, Arabic, Hebrew, …): `is_lowercase` and
-        // `is_uppercase` are both false, and treating that as "not a sentence"
-        // would merge every sentence in those languages into one chunk.
-        || !c.is_alphabetic()
-        || (!c.is_lowercase() && !c.is_uppercase())
+    Some(
+        c.is_uppercase()
+            || c.is_ascii_digit()
+            || matches!(c, '"' | '\'' | '“' | '‘' | '(' | '[')
+            // Caseless scripts (CJK, Arabic, Hebrew, …): `is_lowercase` and
+            // `is_uppercase` are both false, and treating that as "not a
+            // sentence" would merge every sentence in those languages into
+            // one chunk.
+            || !c.is_alphabetic()
+            || (!c.is_lowercase() && !c.is_uppercase()),
+    )
 }
 
 /// The word immediately before `chars[i]`, without its punctuation.

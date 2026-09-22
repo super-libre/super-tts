@@ -220,6 +220,138 @@ fn streaming_a_delta_at_a_time_matches_the_whole_string() {
     }
 }
 
+/// Deterministic xorshift: a failing split has to be reproducible from the
+/// seed alone, or the fuzz below is untriageable.
+fn xorshift(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// `text` cut into deltas of one to nine characters.
+fn random_deltas(text: &str, state: &mut u64) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let end = (i + (xorshift(state) % 9) as usize + 1).min(chars.len());
+        out.push(chars[i..end].iter().collect());
+        i = end;
+    }
+    out
+}
+
+/// The same contract as above, fuzzed: a delta at a time is only one arrival
+/// pattern, and the one that broke this was a delta ending *on* the space
+/// after a terminator sitting on the chunk target.
+#[test]
+fn streaming_at_random_delta_sizes_matches_the_whole_string() {
+    let policies = [
+        ChunkPolicy {
+            max_chars: Some(60),
+            first_chunk_chars: 25,
+        },
+        ChunkPolicy {
+            max_chars: Some(40),
+            first_chunk_chars: 0,
+        },
+        // What every model with no declared `max_input_chars` gets.
+        ChunkPolicy::default(),
+    ];
+    let cases = [
+        "Dr. Smith arrived. He was late, as usual, and everyone noticed it.",
+        "Pi is 3.14. Visit example.com for more. Then stop. Then keep going.",
+        "One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten. Eleven.",
+        "He said \"go now.\" Then he left. J. R. R. Tolkien wrote it, vol. 2.",
+        "今日は晴れです。明日は雨でしょうか。それはわかりません。もう一度言います。",
+        "The kettle is boiling and the cat woke up. Then she left the room \
+         without saying anything. A third sentence follows to make it long.",
+    ];
+    let mut state = 0x243F_6A88_85A3_08D3;
+    for policy in policies {
+        for case in cases {
+            let whole = chunk_all(policy, case);
+            for _ in 0..500 {
+                let deltas = random_deltas(case, &mut state);
+                let mut c = Chunker::new(policy);
+                let mut streamed = Vec::new();
+                for delta in &deltas {
+                    streamed.extend(c.push(delta));
+                }
+                streamed.extend(c.finish());
+                assert_eq!(
+                    streamed, whole,
+                    "{policy:?} diverged on {case:?}\n  deltas: {deltas:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The regression the fuzz found, pinned as its own case.
+///
+/// The terminator lands exactly on the target, so when a delta ends on the
+/// space after it there is nothing yet to tell a sentence end from `etc.`.
+/// Judging that as "not a boundary" made the chunker settle for the previous
+/// one, and the opener came up a whole sentence short of what the same text
+/// pushed whole produces.
+#[test]
+fn a_boundary_on_the_target_is_not_traded_for_an_earlier_one() {
+    let policy = ChunkPolicy {
+        max_chars: Some(40),
+        first_chunk_chars: 0,
+    };
+    let case = "One. Two. Three. Four. Five. Six. Seven. Eight. Nine.";
+    assert_eq!(case.chars().take(40).collect::<String>().len(), 40);
+
+    let mut c = Chunker::new(policy);
+    let mut streamed = Vec::new();
+    // "…Six. Seven." ends at char 40; this delta stops on the space after it.
+    for delta in ["One. Two. Three. Four. Five. Six. Seven. ", "Eight. Nine."] {
+        streamed.extend(c.push(delta));
+    }
+    streamed.extend(c.finish());
+    assert_eq!(
+        streamed,
+        vec!["One. Two. Three. Four. Five. Six. Seven.", "Eight. Nine."],
+    );
+    assert_eq!(streamed, chunk_all(policy, case));
+}
+
+/// The same edge one step worse: with a model limit in play, the fallback past
+/// an unjudgeable boundary is a *word* break, so the chunk used to end
+/// mid-sentence — "…ffff gggg" / "hhhh. Next…" — where the one-shot path
+/// splits cleanly. A seam fade through the middle of a word is audible.
+#[test]
+fn a_boundary_on_the_limit_is_not_traded_for_a_word_break() {
+    let policy = ChunkPolicy {
+        max_chars: Some(40),
+        first_chunk_chars: 0,
+    };
+    // The first sentence is exactly 40 characters, and nothing ends before it.
+    let case = "Aaaa bbbb cccc dddd eeee ffff gggg hhhh. Next sentence here.";
+    assert_eq!(case.chars().position(|c| c == '.'), Some(39));
+
+    let mut c = Chunker::new(policy);
+    let mut streamed = Vec::new();
+    for delta in [
+        "Aaaa bbbb cccc dddd eeee ffff gggg hhhh. ",
+        "Next sentence here.",
+    ] {
+        streamed.extend(c.push(delta));
+    }
+    streamed.extend(c.finish());
+    assert_eq!(
+        streamed,
+        vec![
+            "Aaaa bbbb cccc dddd eeee ffff gggg hhhh.",
+            "Next sentence here."
+        ],
+    );
+    assert_eq!(streamed, chunk_all(policy, case));
+}
+
 /// Whatever the split, the words must come out complete and in order — the
 /// property that actually matters to a listener.
 #[test]
