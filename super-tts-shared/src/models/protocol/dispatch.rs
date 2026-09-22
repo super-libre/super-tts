@@ -77,39 +77,14 @@ impl TryFrom<DaemonRequest> for Command {
 /// Build a `speak` command. `text` is required; everything else refines how it
 /// is spoken and is optional, so a bare `{"text": "..."}` is a valid request.
 fn cmd_speak(request: &DaemonRequest) -> Result<Command, String> {
-    let data = request.data.as_ref();
-    let text = data
+    let text = request
+        .data
+        .as_ref()
         .and_then(|d| d.get("text"))
         .and_then(serde_json::Value::as_str)
         .ok_or("Missing text for speak command")?
         .to_string();
-    let field = |name: &str| {
-        data.and_then(|d| d.get(name))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-    };
-    let speed = data
-        .and_then(|d| d.get("speed"))
-        .and_then(serde_json::Value::as_f64)
-        .map(speed_to_f32);
-    Ok(Command::Speak {
-        text,
-        voice: field("voice"),
-        // `language` is accepted at the top level as well as inside `data`, so
-        // a client that already sets it the way every other endpoint does
-        // need not learn a second spelling.
-        language: request.language.clone().or_else(|| field("language")),
-        speed,
-        instructions: field("instructions"),
-    })
-}
-
-/// `speed` is a small rate multiplier (roughly 0.5–2.0), so the narrowing is
-/// inconsequential; the cast is isolated here rather than allowed at the call
-/// site so the justification sits next to it.
-#[allow(clippy::cast_possible_truncation)]
-fn speed_to_f32(v: f64) -> f32 {
-    v as f32
+    Ok(Command::Speak { text })
 }
 
 fn cmd_set_audio_theme(request: &DaemonRequest) -> Result<Command, String> {

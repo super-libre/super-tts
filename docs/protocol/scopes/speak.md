@@ -9,6 +9,15 @@ configuration reads or writes (see [`settings`](./settings.md)), and no
 visibility into playback state over the event stream (see
 [`playback_events`](./playback_events.md)).
 
+**`text` is all there is to send.** A speak request carries the words and
+nothing else — not a voice, not a language, not a rate. Those are the user's
+settings, changed through [`settings`](./settings.md)-scoped endpoints and read
+per utterance by the daemon, so an app holding this scope speaks in whatever
+voice the user chose and cannot quietly pick another. This scope buys the
+speakers; it does not buy a say in what comes out of them. An app that genuinely
+needs to choose asks for `settings` too, and the user sees that named in the
+prompt as the configuration grant it is.
+
 What a user gives up by granting this is **control of their speakers**. The part
 that surprises people is the interruption: one utterance plays at a time and the
 newest wins, so an app with this scope can cut off whatever else is being read
@@ -26,11 +35,11 @@ for the wire-level details (HTTP framing, SSE mechanics, example client code).
 
 ## Endpoint reference
 
-| Endpoint                                                | Methods  | Notes                                            |
-|---------------------------------------------------------|----------|--------------------------------------------------|
-| [`/speak`](../endpoints/v1/speak.md)                    | POST     | Speak complete text; returns once queued         |
-| [`/speak/stop`](../endpoints/v1/speak/stop.md)          | POST     | Stop the current utterance; idempotent           |
-| [`/speak/stream`](../endpoints/v1/speak/stream.md)      | GET (WS) | Stream text in as it is generated                |
+| Endpoint                                                | Methods  | Notes                                                        |
+|---------------------------------------------------------|----------|--------------------------------------------------------------|
+| [`/speak`](../endpoints/v1/speak.md)                    | POST     | Speak complete text; returns once queued. `text` is the whole request |
+| [`/speak/stop`](../endpoints/v1/speak/stop.md)          | POST     | Stop the current utterance; idempotent                       |
+| [`/speak/stream`](../endpoints/v1/speak/stream.md)      | GET (WS) | Stream text in as it is generated; `start` carries nothing |
 
 [`/auth/request`](../endpoints/v1/auth/request.md),
 [`/auth/status`](../endpoints/v1/auth/status.md), and

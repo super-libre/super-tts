@@ -11,13 +11,21 @@ use log::{info, warn};
 
 use crate::tts_models::backends::manifest::Device;
 
-/// Stop any leftover `super-tts-backend-*` `--user` transient units. Called
-/// at daemon startup as defense against a previous daemon run that exited
-/// without running `Synthesize::shutdown()` (SIGKILL / panic /
-/// `std::process::exit` skipping `Drop`). Each unit's name embeds the
-/// spawning daemon's PID, so the current daemon can't reach old ones via
-/// its normal unload path — sweeping by glob is the only deterministic
-/// recovery. No-op when there are no matching units.
+/// Stop leftover `super-tts-backend-*` `--user` transient units whose daemon is
+/// gone. Called at daemon startup as defense against a previous run that exited
+/// without `Synthesize::shutdown()` (SIGKILL / panic / `std::process::exit`
+/// skipping `Drop`). Those units keep a model resident — gigabytes of VRAM — and
+/// the current daemon cannot reach them through its normal unload path, so a
+/// sweep is the only deterministic recovery.
+///
+/// **Only the dead ones.** The sweep used to stop every matching unit, which is
+/// correct exactly when no other daemon is running and destructive whenever one
+/// is: a second daemon starting — a test that spawns its own, a restart racing
+/// the old process, two checkouts — pulled the backend out from under a daemon
+/// that was happily serving, leaving it reporting a model loaded with nothing
+/// behind the socket, and the reloaded backend fighting the first for the GPU.
+/// The unit name ends in the PID of the daemon that spawned it precisely so the
+/// two can be told apart; [`is_orphaned_unit`] reads it.
 pub async fn cleanup_orphan_units() {
     // `systemctl --user list-units` is the safest enumerator: it includes
     // both active and failed transient units (so we can stop them all in
@@ -54,6 +62,7 @@ pub async fn cleanup_orphan_units() {
         .lines()
         .filter_map(|line| line.split_whitespace().next().map(str::to_string))
         .filter(|u| u.starts_with("super-tts-backend-"))
+        .filter(|u| is_orphaned_unit(u, daemon_is_alive))
         .collect();
     if units.is_empty() {
         return;
@@ -73,6 +82,42 @@ pub async fn cleanup_orphan_units() {
             Err(e) => warn!("failed to stop orphan {unit}: {e}"),
         }
     }
+}
+
+/// Whether `unit` was left behind by a daemon that is no longer running.
+///
+/// The name is `super-tts-backend-<model>-<pid>[.service]`, and the model part
+/// may itself contain dashes, so the PID is the segment after the *last* one.
+/// `alive` answers whether that PID is a running daemon.
+///
+/// Unparseable names and live owners are both left alone. That asymmetry is
+/// deliberate: a unit wrongly swept takes a working daemon's backend with it,
+/// while a unit wrongly kept costs memory until the next restart — one is a
+/// broken machine, the other is untidy.
+fn is_orphaned_unit(unit: &str, alive: impl Fn(u32) -> bool) -> bool {
+    let name = unit.strip_suffix(".service").unwrap_or(unit);
+    let Some((_, pid)) = name.rsplit_once('-') else {
+        return false;
+    };
+    let Ok(pid) = pid.parse::<u32>() else {
+        return false;
+    };
+    // Our own units are not orphans either: this runs before any of them
+    // exists, but a retry later in the process's life must not sweep them.
+    pid != std::process::id() && !alive(pid)
+}
+
+/// Whether `pid` is a live super-tts daemon.
+///
+/// Checks the name as well as existence, so a recycled PID now belonging to
+/// something unrelated does not make a genuine orphan look owned.
+fn daemon_is_alive(pid: u32) -> bool {
+    let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) else {
+        return false;
+    };
+    // `comm` is truncated to 15 bytes by the kernel, so the binary's name
+    // arrives clipped — match the prefix rather than the whole thing.
+    comm.trim_end().starts_with("super-tts-daem")
 }
 
 /// Stop a unit of this name, if one is still around, and wait for systemd to
@@ -349,6 +394,71 @@ fn hardening_params(
     }
     params.push("SystemCallFilter=@system-service".to_string());
     params
+}
+
+#[cfg(test)]
+mod orphan_tests {
+    use super::is_orphaned_unit;
+
+    const DEAD: fn(u32) -> bool = |_| false;
+    const LIVE: fn(u32) -> bool = |_| true;
+
+    /// The sweep exists for units a dead daemon left holding a model.
+    #[test]
+    fn a_unit_whose_daemon_is_gone_is_swept() {
+        assert!(is_orphaned_unit(
+            "super-tts-backend-qwen3-tts-1-7b-base-4242.service",
+            DEAD
+        ));
+        // Also without the suffix, which is how `list-units` prints some rows.
+        assert!(is_orphaned_unit("super-tts-backend-kokoro-82m-4242", DEAD));
+    }
+
+    /// The regression this guards: a second daemon starting must not pull the
+    /// backend out from under one that is serving. Every failure it caused
+    /// looked like something else — a daemon reporting a model loaded with
+    /// nothing behind the socket, or two backends fighting for the GPU.
+    #[test]
+    fn a_unit_belonging_to_a_live_daemon_is_left_alone() {
+        assert!(!is_orphaned_unit(
+            "super-tts-backend-qwen3-tts-1-7b-base-4242.service",
+            LIVE
+        ));
+    }
+
+    /// Our own units are never orphans, however this is called.
+    #[test]
+    fn this_daemons_own_units_are_never_swept() {
+        let mine = format!("super-tts-backend-kokoro-82m-{}", std::process::id());
+        assert!(!is_orphaned_unit(&mine, DEAD));
+    }
+
+    /// A name that carries no PID is left alone rather than guessed at: the
+    /// cost of keeping a unit is memory, the cost of sweeping a live one is a
+    /// broken daemon.
+    #[test]
+    fn an_unparseable_name_is_left_alone() {
+        assert!(!is_orphaned_unit("super-tts-backend-.service", DEAD));
+        assert!(!is_orphaned_unit(
+            "super-tts-backend-kokoro-82m-notapid.service",
+            DEAD
+        ));
+    }
+
+    /// The model name contains dashes of its own, so the PID is the segment
+    /// after the last one — not the second.
+    #[test]
+    fn the_pid_is_read_from_the_end_of_a_dashed_model_name() {
+        let seen = std::cell::Cell::new(0);
+        assert!(is_orphaned_unit(
+            "super-tts-backend-qwen3-tts-1-7b-base-991.service",
+            |pid| {
+                seen.set(pid);
+                false
+            }
+        ));
+        assert_eq!(seen.get(), 991, "the model's own dashes are not the split");
+    }
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::daemon::http::state::AppState;
 use crate::daemon::http::wire::{ErrorEnvelope, ReasonEnvelope};
-use crate::daemon::speech::{SpeakError, SpeakOptions, SpeakSession, SpeechEvent};
+use crate::daemon::speech::{SpeakError, SpeakSession, SpeechEvent};
 use crate::daemon::types::SuperTTSDaemon;
 
 /// Abort a session that has sent no frame for this long.
@@ -51,17 +51,9 @@ static SESSIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(MAX_
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientFrame {
-    /// First frame: how the utterance should be spoken.
-    Start {
-        #[serde(default)]
-        voice: Option<String>,
-        #[serde(default)]
-        language: Option<String>,
-        #[serde(default)]
-        speed: Option<f32>,
-        #[serde(default)]
-        instructions: Option<String>,
-    },
+    /// First frame: opens the utterance. Carries nothing — how it is spoken is
+    /// the user's configuration, which the daemon reads per utterance.
+    Start,
     /// More text. Repeatable.
     Text { delta: String },
     /// No more text is coming; play out what remains.
@@ -69,6 +61,12 @@ enum ClientFrame {
     /// Stop now and drop queued audio.
     Cancel,
 }
+
+/// Fields the `start` frame used to take, and no longer does.
+///
+/// Same rule as `POST /speak`: a voice, a language, a rate and delivery
+/// guidance are the user's settings, not something a speaking client chooses.
+const REMOVED_START_FIELDS: &[&str] = &["voice", "language", "speed", "instructions"];
 
 /// A frame to the client.
 #[derive(Debug, Serialize)]
@@ -83,7 +81,11 @@ enum ServerFrame {
     },
     /// How far playback has got, in milliseconds.
     Progress { spoken_ms: u64, queued_ms: u64 },
-    /// The utterance is complete. The stream closes after it.
+    /// Every sample is queued and the stream closes after this — not that the
+    /// audio has been heard. The socket is a text channel, and holding one of
+    /// four session slots through a playout the client cannot influence buys
+    /// nothing; a client that needs the true end follows `speaking_state` on
+    /// `GET /events`, which outlives the socket.
     Done { id: String, chunks: usize },
     /// Fatal; the stream closes after it.
     Error { message: String },
@@ -100,10 +102,11 @@ the daemon synthesizes each sentence as it completes, so speech starts long befo
 generation finishes. This is the LLM case — with `POST /speak` you must hold the \
 whole reply before the first word is heard.
 
-The first frame must be `start`, carrying the same options `POST /speak` takes; \
-every later frame needs them, and guessing would produce a wrong voice rather than \
-an error. Then `text` frames carry deltas, `end` plays out what remains, and \
-`cancel` stops immediately and drops the queue. The daemon answers with `utterance`, \
+The first frame must be `start`. It carries nothing — how an utterance is spoken is \
+the user's configuration, read per utterance, the same as on `POST /speak` — and a \
+`start` still naming `voice`, `language`, `speed` or `instructions` is refused by name \
+rather than having it dropped in silence. Then `text` frames carry deltas, `end` plays \
+out what remains, and `cancel` stops immediately and drops the queue. The daemon answers with `utterance`, \
 `mark`, `progress`, and a terminal `done` or `error`.
 
 Deltas are appended to a streaming normalizer, so a delta may split a markup \
@@ -113,6 +116,10 @@ Being a WebSocket, the frame protocol is not describable in OpenAPI — the mess
 shapes are in `docs/protocol/endpoints/v1/speak/stream.md`. Four concurrent sessions \
 are allowed; beyond that the upgrade is refused rather than queued, and a session \
 that sends no frame for two minutes is treated as dead and torn down.",
+    // `speak` is what the router enforces; `settings` is required only for a
+    // request that names an override field, which is a body-dependent check the
+    // handler makes. Declaring it here would tell every client it needs a scope
+    // it usually does not — see the description and the 403 below.
     security(("session_token" = ["speak"])),
     responses(
         (status = 101, description = "Upgraded; the streaming session is open."),
@@ -261,7 +268,7 @@ async fn pump(
         };
 
         match frame {
-            ClientFrame::Start { .. } => {
+            ClientFrame::Start => {
                 return Outcome::Failed("start_already_sent".into());
             }
             ClientFrame::Text { delta } => {
@@ -312,32 +319,39 @@ async fn wait_for_start(
     let Some(Ok(Message::Text(text))) = next else {
         return Err("expected_start_frame".into());
     };
-    let frame: ClientFrame =
+    // Parsed as raw JSON first so a frame still carrying the removed fields can
+    // be named in the refusal. Serde would simply ignore them, and a client
+    // whose chosen voice was dropped in silence has no way to find out.
+    let raw: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("invalid_frame: {e}"))?;
-    let ClientFrame::Start {
-        voice,
-        language,
-        speed,
-        instructions,
-    } = frame
-    else {
+    let named: Vec<&str> = REMOVED_START_FIELDS
+        .iter()
+        .copied()
+        .filter(|field| raw.get(*field).is_some_and(|v| !v.is_null()))
+        .collect();
+    if !named.is_empty() {
+        return Err(format!(
+            "invalid_frame: {} no longer accepted on start; how an utterance is spoken is \
+             configuration — set a voice with POST /pipeline/{{stage}}/model/{{model}}/voice \
+             and a language with POST /settings/language",
+            named.join(", ")
+        ));
+    }
+    let frame: ClientFrame =
+        serde_json::from_value(raw).map_err(|e| format!("invalid_frame: {e}"))?;
+    if !matches!(frame, ClientFrame::Start) {
         return Err("expected_start_frame".into());
-    };
+    }
 
-    let options = SpeakOptions {
-        voice: voice.as_deref(),
-        language: language.as_deref(),
-        speed,
-        instructions: instructions.as_deref(),
-    };
-    daemon
-        .speech
-        .begin(&daemon.model, options)
-        .await
-        .map_err(|e| match e {
-            SpeakError::NotLoaded => "model_not_loaded".to_string(),
-            other => other.to_string(),
-        })
+    // Through the daemon rather than straight to the engine: what the frame
+    // does not name comes from the user's configuration, the same as on
+    // `POST /speak`. Calling `SpeechEngine::begin` here instead is what left a
+    // clone-only model refusing every stream for want of a voice the user had
+    // already chosen.
+    daemon.begin_speech().await.map_err(|e| match e {
+        SpeakError::NotLoaded => "model_not_loaded".to_string(),
+        other => other.to_string(),
+    })
 }
 
 /// Send one frame, reporting whether the socket is still usable.
@@ -364,28 +378,17 @@ mod tests {
     /// Rust would silently change it. These pin the exact JSON.
     #[test]
     fn client_frames_parse_from_their_documented_shape() {
-        let start: ClientFrame = serde_json::from_str(
-            r#"{"type":"start","voice":"af_bella","language":"en","speed":1.25}"#,
-        )
-        .expect("start parses");
-        let ClientFrame::Start {
-            voice,
-            language,
-            speed,
-            instructions,
-        } = start
-        else {
-            panic!("expected start");
-        };
-        assert_eq!(voice.as_deref(), Some("af_bella"));
-        assert_eq!(language.as_deref(), Some("en"));
-        assert_eq!(speed, Some(1.25));
-        assert_eq!(instructions, None);
-
-        // Every option is optional: a bare start is valid.
+        // `start` carries nothing: how the utterance is spoken is configuration.
         assert!(matches!(
             serde_json::from_str::<ClientFrame>(r#"{"type":"start"}"#),
-            Ok(ClientFrame::Start { .. })
+            Ok(ClientFrame::Start)
+        ));
+        // A frame still naming a removed field parses — serde ignores unknown
+        // keys — which is exactly why `wait_for_start` checks the raw JSON
+        // before this, rather than letting the voice be dropped in silence.
+        assert!(matches!(
+            serde_json::from_str::<ClientFrame>(r#"{"type":"start","voice":"af_bella"}"#),
+            Ok(ClientFrame::Start)
         ));
 
         let text: ClientFrame =

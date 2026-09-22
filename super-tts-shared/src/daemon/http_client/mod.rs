@@ -21,7 +21,7 @@ pub use v1::auth::request::{AuthOk, auth_request};
 pub use v1::auth::status::{AuthStatusInfo, auth_status};
 pub use v1::events::{WidgetEvent, events_stream};
 pub use v1::health::{ping, status};
-pub use v1::speak::{SpeakOptions, speak, speak_stop};
+pub use v1::speak::{speak, speak_stop};
 
 /// Public transport surface for downstream clients that compose their own
 /// per-scope endpoint wrappers (e.g. the settings app). Returns

@@ -53,6 +53,15 @@ const RING_SECONDS: u32 = 2;
 /// 120 ms is roughly a syllable.
 const PREBUFFER_MS: u32 = 120;
 
+/// How often the producer looks in on a draining ring.
+///
+/// Only a floor: [`Playback::wait_for_playout`] sleeps for however much audio
+/// is still buffered, so a two-second tail costs a couple of wakeups rather
+/// than two hundred. Short enough that the residual past the last sample is a
+/// fraction of a device block, long enough that the audio callback's `try_lock`
+/// never meaningfully contends with it.
+const DRAIN_POLL_MS: u64 = 10;
+
 /// Default fade applied to each end of every chunk. Applied per end, so a seam
 /// dips over roughly twice this. Long enough to hide the discontinuity between
 /// two independently synthesized sentences, short enough to be inaudible in
@@ -86,6 +95,17 @@ pub struct Stats {
     /// while idle, so it is a position within the utterance rather than
     /// wall-clock time.
     pub rendered_samples: u64,
+    /// Interleaved samples written *into* the ring since the last
+    /// [`Playback::cancel`]. Always at or ahead of `rendered_samples`, by
+    /// however much is buffered.
+    ///
+    /// The pair is what lets a producer say when a chunk it is queueing now
+    /// will be heard: the chunk starts at the current `written_samples`, and it
+    /// is sounding once `rendered_samples` passes that. The visualizer is fed
+    /// this way — see `daemon::speech` — because analysis has to run on the
+    /// producer side while the frames must reach subscribers on the listener's
+    /// clock, up to a full ring later.
+    pub written_samples: u64,
 }
 
 /// State shared between the producer task and the audio callback.
@@ -95,6 +115,14 @@ struct Shared {
     state: State,
     prebuffer_samples: usize,
     stats: Stats,
+    /// Largest block the device has asked for, in interleaved samples.
+    ///
+    /// Learned from the callback rather than from the stream config, because
+    /// `BufferSize::Default` means the host picks and only the callback is told
+    /// what it picked. The producer reads it to account for audio that has been
+    /// handed over but not yet sounded — see
+    /// [`Playback::wait_for_playout`].
+    block: usize,
 }
 
 impl Shared {
@@ -104,6 +132,10 @@ impl Shared {
     /// so it allocates nothing and cannot panic: `Ring::read` is a bounded
     /// memcpy and the remainder is a slice fill.
     fn render(&mut self, out: &mut [f32]) {
+        // A compare and a store on state this thread already holds: the
+        // cheapest thing in the callback, and the only way to learn the
+        // device's real block size.
+        self.block = self.block.max(out.len());
         match self.state {
             State::Idle | State::Prebuffering => {
                 out.fill(0.0);
@@ -154,6 +186,12 @@ impl Shared {
 /// which would stall the audio callback's `try_lock`.
 pub struct Playback {
     shared: Arc<Mutex<Shared>>,
+    /// Stream errors reported since the device was opened.
+    ///
+    /// Outside the mutex on purpose: the error callback runs on cpal's stream
+    /// thread, which is the same thread that must meet the device deadline, so
+    /// it cannot afford to wait on the lock the producer holds.
+    stream_errors: Arc<std::sync::atomic::AtomicU64>,
     device: DeviceFormat,
     fade: SeamFade,
     /// Producer-side fade bookkeeping. Separate from `Shared` so the audio
@@ -172,6 +210,34 @@ struct Producer {
     /// fade possible at all — the samples must still be in reach when the
     /// utterance turns out to be over.
     tail: Vec<f32>,
+}
+
+/// Report a cpal stream error, told apart by whether anything was playing.
+///
+/// An xrun while the ring is idle means the device went hungry with nothing to
+/// feed it — the daemon was writing silence, so no speech was lost and there is
+/// nothing for the user to act on. It happens because the stream is held open
+/// between utterances (see [`Playback::open`]), and on a loaded machine it
+/// happens in bursts, which as a `warn!` each buried the log in what looked
+/// like a speech fault minutes after anyone last spoke. An xrun *during*
+/// playback is the opposite: the listener heard the gap.
+///
+/// Runs on cpal's stream thread, so it takes the lock with `try_lock` and
+/// treats a miss as "cannot tell" — reporting loudly is the safe way to be
+/// wrong.
+fn stream_error(
+    shared: &Mutex<Shared>,
+    seen: &std::sync::atomic::AtomicU64,
+    error: &cpal::StreamError,
+) {
+    use std::sync::atomic::Ordering;
+    let count = seen.fetch_add(1, Ordering::Relaxed) + 1;
+    let idle = shared.try_lock().map(|guard| guard.state == State::Idle);
+    if idle == Some(true) {
+        debug!("playback stream error #{count} with nothing playing: {error}");
+    } else {
+        warn!("playback stream error #{count} mid-utterance, audio may have dropped: {error}");
+    }
 }
 
 /// A live output stream, kept alive by being held.
@@ -200,7 +266,9 @@ impl Playback {
                 state: State::Idle,
                 prebuffer_samples,
                 stats: Stats::default(),
+                block: 0,
             })),
+            stream_errors: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             device,
             fade: SeamFade::new(DEFAULT_FADE_MS, device),
             producer: Mutex::new(Producer::default()),
@@ -213,6 +281,14 @@ impl Playback {
     /// once and leaving it running is deliberate: the first sound after a
     /// device wakes costs 1–2 s on a Bluetooth sink, and paying that on every
     /// utterance is exactly the lag the prebuffer is trying to avoid.
+    ///
+    /// The cost of that choice is that the daemon holds the output device for
+    /// as long as it runs, so an xrun on a loaded machine is reported even
+    /// though nothing was being spoken. cpal recovers from one itself — its
+    /// ALSA loop calls `snd_pcm_prepare` and carries on, reporting a second
+    /// error only if *that* fails — so the report is a health signal, not a
+    /// broken stream. [`stream_error`] classifies it by what was playing at the
+    /// time, because an xrun with an idle ring cannot have dropped a word.
     ///
     /// # Errors
     /// Returns an error if the device's format is unsupported or the stream
@@ -228,7 +304,11 @@ impl Playback {
         let playback = Self::detached(format);
         let shared = Arc::clone(&playback.shared);
 
-        let err_fn = |e| warn!("playback stream error: {e}");
+        let err_fn = {
+            let shared = Arc::clone(&playback.shared);
+            let seen = Arc::clone(&playback.stream_errors);
+            move |e| stream_error(&shared, &seen, &e)
+        };
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_output_stream(
                 &config.config(),
@@ -370,6 +450,11 @@ impl Playback {
     /// Signal end of utterance: close the final chunk, then let the ring drain
     /// and idle. The stream stays open, so the next utterance does not pay
     /// device wake-up latency again.
+    ///
+    /// Returns as soon as the last sample is *queued*. The ring holds seconds
+    /// of audio the listener has not heard yet, so anything
+    /// that reports an utterance over must wait on
+    /// [`wait_for_playout`](Self::wait_for_playout) rather than on this.
     pub async fn finish(&self) {
         self.end_chunk().await;
         let mut guard = self.shared.lock();
@@ -377,6 +462,76 @@ impl Playback {
             // Promote out of prebuffering even if the utterance was shorter
             // than the threshold, or a one-word reply would never be heard.
             guard.state = State::Draining;
+        }
+    }
+
+    /// Wait until what is queued has actually been played out.
+    ///
+    /// The gap this closes is the whole reason it exists: a backend faster than
+    /// realtime — which is every local GPU backend — finishes synthesizing an
+    /// utterance while most of it is still sitting in the ring. Taking
+    /// [`finish`](Self::finish) as "done speaking" therefore announces the end
+    /// up to a full ring early, and for an utterance shorter than that,
+    /// before a single word has been heard.
+    ///
+    /// Polls rather than being woken by the callback: notifying a waiter from
+    /// the audio thread means touching a wait list under a lock, and the whole
+    /// design of this module is that the callback does no such thing. Sleeping
+    /// for however much audio remains keeps the cost to a couple of wakeups per
+    /// utterance.
+    ///
+    /// Returns `false` if the device stopped consuming for `stall_timeout` with
+    /// audio still queued — a disconnected sink, a suspended host. The caller
+    /// gets to decide what to do about it, but it does not wait forever: the
+    /// utterance slot is what gates loading a different model, and a stalled
+    /// device must not lock the daemon out of it for good.
+    pub async fn wait_for_playout(&self, stall_timeout: Duration) -> bool {
+        let format = self.device;
+        let per_ms = u64::from(format.sample_rate) * u64::from(format.channels.max(1)) / 1000;
+        if per_ms == 0 {
+            // Under a kilohertz of interleaved samples is not a device anyone
+            // is listening to. Nothing to wait for, and no rate to wait at.
+            return true;
+        }
+        let mut last_rendered = u64::MAX;
+        let mut stalled = Duration::ZERO;
+        loop {
+            let (state, buffered, rendered, block) = {
+                let guard = self.shared.lock();
+                (
+                    guard.state,
+                    guard.ring.available(),
+                    guard.stats.rendered_samples,
+                    guard.block,
+                )
+            };
+            if state == State::Idle {
+                // The ring is empty, but the block the callback last took is
+                // still on its way through the device. One block is an
+                // approximation of that — hosts buffer more than one period —
+                // and it is the part of the delay this side can actually see.
+                if block > 0 {
+                    let residual = (block as u64 / per_ms).max(1);
+                    tokio::time::sleep(Duration::from_millis(residual)).await;
+                }
+                return true;
+            }
+
+            if rendered == last_rendered {
+                if stalled >= stall_timeout {
+                    return false;
+                }
+            } else {
+                last_rendered = rendered;
+                stalled = Duration::ZERO;
+            }
+
+            // Sleep for what is left to play. Overshooting costs nothing —
+            // the next look finds the ring idle — and undershooting just
+            // means another cheap poll.
+            let nap = Duration::from_millis((buffered as u64 / per_ms).max(DRAIN_POLL_MS));
+            stalled += nap;
+            tokio::time::sleep(nap).await;
         }
     }
 
@@ -388,9 +543,10 @@ impl Playback {
     pub fn cancel(&self) {
         *self.producer.lock() = Producer::default();
         let mut guard = self.shared.lock();
-        // The position counter is per-utterance, so a cancel resets it along
-        // with the audio it was counting.
+        // The position counters are per-utterance, so a cancel resets them
+        // along with the audio they were counting.
         guard.stats.rendered_samples = 0;
+        guard.stats.written_samples = 0;
         guard.ring.clear();
         guard.state = State::Idle;
     }
@@ -409,6 +565,7 @@ impl Playback {
             {
                 let mut guard = self.shared.lock();
                 let n = guard.ring.write(samples);
+                guard.stats.written_samples += n as u64;
                 samples = &samples[n..];
                 if guard.state == State::Idle {
                     guard.state = State::Prebuffering;

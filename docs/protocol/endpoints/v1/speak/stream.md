@@ -22,13 +22,20 @@ pre-empted. Here it is a frame.
 - `Authorization: Bearer <session_token>` on the upgrade request.
 - Tokens without the `speak` scope get `403 scope_denied` before the upgrade.
 
+`start` carries no options, the same as [`POST /speak`](../speak.md) carries no
+fields but `text`: how an utterance is spoken is the user's configuration. A
+`start` still naming `voice`, `language`, `speed` or `instructions` is refused
+by name rather than having it dropped in silence. Because `start` arrives
+*after* the handshake, that refusal cannot be an HTTP status — the daemon sends
+a terminal `error` frame and closes.
+
 ## Session shape
 
 ```
 client                                daemon
   │  GET /speak/stream  (upgrade)       │
   │ ──────────────────────────────────► │
-  │  {"type":"start", …}                │
+  │  {"type":"start"}                   │
   │ ──────────────────────────────────► │
   │            {"type":"utterance","id":"utt_…"}
   │ ◄────────────────────────────────── │
@@ -44,8 +51,8 @@ client                                daemon
   │ ◄────────────────────────────────── │
 ```
 
-The first frame **must** be `start`: every other frame needs the options it
-carries, and guessing them would produce a wrong voice rather than an error.
+The first frame **must** be `start`: it is what opens the utterance, and a
+`text` frame with no session to feed is an error rather than a guess.
 
 ## Client frames
 
@@ -53,14 +60,17 @@ All frames are JSON text, discriminated on `type`.
 
 | `type`   | Fields                                              | Meaning                                              |
 |----------|-----------------------------------------------------|------------------------------------------------------|
-| `start`  | `voice?`, `language?`, `speed?`, `instructions?`    | Open the utterance. Same fields as `POST /speak`.    |
+| `start`  | *(none)*                                            | Open the utterance. Carries nothing: voice, language and rate are settings, read per utterance by the daemon. |
 | `text`   | `delta` (string)                                    | More text. Repeatable, any size, including partial words. |
 | `end`    | —                                                   | No more text is coming; play out what remains.       |
 | `cancel` | —                                                   | Stop now and drop queued audio.                      |
 
 Deltas are appended to a streaming normalizer, so a delta may split a markup
 construct in half — `**bo` then `ld**` — without the asterisks being spoken. The
-daemon holds an ambiguous tail until it can resolve it.
+daemon holds an ambiguous tail until it can resolve it. A line break is judged
+the same way: a heading or a list item ends where its line does and is spoken
+on its own, and the daemon holds the break until it sees how the next line
+starts, since one that merely wraps a sentence is a space.
 
 ## Server frames
 
@@ -69,7 +79,7 @@ daemon holds an ambiguous tail until it can resolve it.
 | `utterance` | `id`                                         | Sent once, right after `start`. The utterance this session produces. |
 | `mark`      | `start_ms?`, `end_ms?`, `start_char?`, `end_char?` | The backend aligned a span of audio to a span of the text. Only from backends that emit marks. |
 | `progress`  | `spoken_ms`, `queued_ms`                     | How far playback has got. Positions within the utterance, derived from the device format — not wall-clock, so they stay correct while the stream is idle. |
-| `done`      | `id`, `chunks`                               | The utterance is complete. **The stream closes after this.**   |
+| `done`      | `id`, `chunks`                               | Every sample is queued, and **the stream closes after this** — the device is still playing the utterance out. To wait for the audio itself, follow `speaking_state` on [`/events`](../events.md); it outlives the socket. |
 | `error`     | `message`                                    | Fatal. **The stream closes after this.**                       |
 
 ## Limits
@@ -95,4 +105,4 @@ not be able to open them without limit.
 | `401 invalid_session`       | Token unknown / expired / `exe_changed` — re-auth and retry.  |
 | `403 scope_denied`          | Token lacks the `speak` scope.                                |
 | `503 speak_sessions_busy`   | Four sessions are already open.                               |
-| `{"type":"error", …}`       | Anything that goes wrong after the upgrade: no model loaded, a `voice` the model does not declare or whose shape it did not opt into, the backend failed, the audio device could not be opened. |
+| `{"type":"error", …}`       | Anything that goes wrong after the upgrade: a `start` still naming a removed field, no model loaded, a configured voice the model does not declare, the backend failed, the audio device could not be opened. |

@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use super_tts_shared::daemon::http_client::{self, SpeakOptions};
+use super_tts_shared::daemon::http_client;
 use tokio::time::sleep;
 
 const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
@@ -189,13 +189,7 @@ async fn http_endpoints_respond() {
     // an utterance it cannot produce (docs/protocol/endpoints/v1/speak.md).
     // Tolerate either that typed error or (should a backend somehow be
     // present) a normal `202` carrying an utterance id.
-    let result = http_client::speak(
-        http_socket.clone(),
-        &token,
-        "hello from the smoke test",
-        SpeakOptions::default(),
-    )
-    .await;
+    let result = http_client::speak(http_socket.clone(), &token, "hello from the smoke test").await;
     match result {
         Ok(resp) => assert!(
             resp.status == "success" || resp.status == "error",
@@ -312,4 +306,74 @@ async fn speak_without_text_is_a_coded_bad_request() {
         msg.contains("400"),
         "a malformed request is a 400, got: {msg}"
     );
+}
+
+/// A speak request is `text` and nothing else. The fields that used to choose
+/// how an utterance sounded are settings now, and one still named is refused
+/// rather than ignored — a client given a different voice than it asked for has
+/// no way to find out.
+#[tokio::test]
+async fn the_removed_option_fields_are_refused_rather_than_ignored() {
+    let (_guard, http_socket) = start_daemon().await;
+    let auth = http_client::auth_request(http_socket.clone(), APP_NAME, SCOPES)
+        .await
+        .expect("auth_request should succeed");
+    let token = auth.session_token;
+
+    for field in ["voice", "language", "speed", "instructions"] {
+        let value = if field == "speed" {
+            serde_json::json!(1.5)
+        } else {
+            serde_json::json!("whatever")
+        };
+        let err = http_client::transport::post_json::<
+            super_tts_shared::models::protocol::DaemonResponse,
+        >(
+            http_socket.clone(),
+            &token,
+            "/speak",
+            &serde_json::json!({ "text": "Hello.", field: value }),
+        )
+        .await
+        .expect_err("the removed fields are not accepted");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(field),
+            "the refusal must name `{field}` so a client knows what to drop, got: {msg}"
+        );
+        assert!(
+            msg.contains("400"),
+            "a field that no longer exists is a malformed request, got: {msg}"
+        );
+    }
+}
+
+/// The same token speaks fine with `text` alone — the rule is about the removed
+/// fields, not the endpoint. A `null` is not naming one either: that is how a
+/// client spells "use what is configured", which is what every request means
+/// now.
+#[tokio::test]
+async fn text_alone_is_a_complete_speak_request() {
+    let (_guard, http_socket) = start_daemon().await;
+    let auth = http_client::auth_request(http_socket.clone(), APP_NAME, SCOPES)
+        .await
+        .expect("auth_request should succeed");
+    let token = auth.session_token;
+
+    for body in [
+        serde_json::json!({ "text": "Hello." }),
+        serde_json::json!({ "text": "Hello.", "voice": null, "speed": null }),
+    ] {
+        let err = http_client::transport::post_json::<
+            super_tts_shared::models::protocol::DaemonResponse,
+        >(http_socket.clone(), &token, "/speak", &body)
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(
+            !err.contains("no longer accepted"),
+            "nothing was named, so nothing is refused; got: {err}"
+        );
+    }
 }

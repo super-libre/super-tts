@@ -27,6 +27,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use super_tts_shared::models::protocol::DaemonStatusEvent;
 
 use anyhow::{Result, anyhow, bail};
@@ -51,6 +52,30 @@ pub const MAX_TEXT_CHARS: usize = 50_000;
 /// so the applet renders speech the same way it rendered a microphone.
 const ANALYSIS_WINDOW: usize = 1024;
 
+/// How long the playout watcher tolerates a device that has stopped consuming
+/// before it declares the utterance over anyway.
+///
+/// Generous, because the honest reason for a pause is a slow sink rather than a
+/// dead one, and cutting `speaking_state` short is the bug this whole path
+/// exists to fix. Bounded, because the utterance slot gates loading a different
+/// model: a sink that went away must not hold the daemon busy forever.
+const PLAYOUT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often the visualizer publisher looks at the playback position.
+///
+/// Sets the jitter on a band frame's arrival, so it wants to be well under a
+/// video frame; it costs one uncontended lock per tick.
+const BAND_TICK: Duration = Duration::from_millis(10);
+
+/// How often the watcher republishes `speech_progress` while audio plays out.
+///
+/// `docs/protocol/endpoints/v1/events.md` promises progress "repeatedly, as
+/// audio is rendered", and synthesis-time publishing alone cannot deliver that:
+/// a backend faster than realtime is done producing before the first word is
+/// heard. Four a second is smooth enough for a progress bar and far below what
+/// the SSE stream or the ring's lock would notice.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+
 /// A running or finished utterance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Utterance {
@@ -73,10 +98,6 @@ pub struct SpeakOptions<'a> {
     pub voice: Option<&'a str>,
     /// Resolved BCP-47 tag.
     pub language: Option<&'a str>,
-    /// Rate multiplier.
-    pub speed: Option<f32>,
-    /// Free-text delivery guidance.
-    pub instructions: Option<&'a str>,
 }
 
 impl SpeakOptions<'_> {
@@ -86,8 +107,6 @@ impl SpeakOptions<'_> {
         OwnedSpeakOptions {
             voice: self.voice.map(str::to_owned),
             language: self.language.map(str::to_owned),
-            speed: self.speed,
-            instructions: self.instructions.map(str::to_owned),
         }
     }
 }
@@ -97,8 +116,6 @@ impl SpeakOptions<'_> {
 struct OwnedSpeakOptions {
     voice: Option<String>,
     language: Option<String>,
-    speed: Option<f32>,
-    instructions: Option<String>,
 }
 
 impl OwnedSpeakOptions {
@@ -106,8 +123,6 @@ impl OwnedSpeakOptions {
         SpeakOptions {
             voice: self.voice.as_deref(),
             language: self.language.as_deref(),
-            speed: self.speed,
-            instructions: self.instructions.as_deref(),
         }
     }
 }
@@ -238,6 +253,15 @@ impl SynthesisSink for PlaybackSink {
 /// when it ends, and so a cancel arriving from anywhere reaches the flag the
 /// session is checking.
 type CurrentSlot = Arc<Mutex<Option<(String, Arc<AtomicBool>)>>>;
+
+/// Whether taking the utterance slot should tell subscribers speech stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Announce {
+    /// A user or client stopped the speech: the device really did fall silent.
+    Stopped,
+    /// Another utterance is taking over, and will announce itself.
+    Nothing,
+}
 
 /// Owns the output device and the current utterance.
 pub struct SpeechEngine {
@@ -378,13 +402,32 @@ impl SpeechEngine {
 
     /// Stop speaking: flush queued audio and abort any synthesis still running.
     ///
-    /// Returns the id of the utterance that was still *synthesizing*, if any.
-    /// The ring is flushed either way, and that distinction matters: `speak`
-    /// returns once the last sample is queued, so by the time a user hits stop
-    /// the utterance is usually finished producing but still coming out of the
-    /// speakers. Gating the flush on an in-flight synthesis would make cancel a
-    /// no-op for exactly the case people actually use it in.
+    /// Returns the id of the utterance that was still going, if any — whether
+    /// it was synthesizing or only playing out. Those are one case here on
+    /// purpose: `speak` returns once the last sample is queued, so by the time
+    /// a user hits stop the utterance is usually finished producing but still
+    /// coming out of the speakers, and that is exactly the case people press
+    /// stop in. The slot is held for the whole of it, so cancelling then both
+    /// flushes the ring and reports what it silenced.
     pub async fn cancel(&self) -> Option<String> {
+        self.stop_current(Announce::Stopped).await
+    }
+
+    /// Clear the way for a new utterance: same cancellation, no stop event.
+    ///
+    /// The device does not fall silent when one utterance replaces another, so
+    /// `speaking_state` must not say it did. Publishing a stop for the old id
+    /// here would put a `false` immediately before the new utterance's `true`,
+    /// which a subscriber has no way to read as anything but a gap — the
+    /// applet would drop a live visualizer back to idle for a frame on every
+    /// back-to-back utterance. See `docs/protocol/endpoints/v1/events.md`.
+    async fn supersede(&self) -> Option<String> {
+        self.stop_current(Announce::Nothing).await
+    }
+
+    /// Take the current utterance out of the slot, flag it cancelled, and flush
+    /// the ring. Returns the id it took, if any.
+    async fn stop_current(&self, announce: Announce) -> Option<String> {
         let taken = self.current.lock().take();
         if let Some((_, flag)) = taken.as_ref() {
             flag.store(true, Ordering::Relaxed);
@@ -395,7 +438,9 @@ impl SpeechEngine {
         let id = taken.map(|(id, _)| id);
         if let Some(id) = &id {
             debug!("cancelled in-flight utterance {id}");
-            if let Some(bus) = &self.events {
+            if announce == Announce::Stopped
+                && let Some(bus) = &self.events
+            {
                 bus.publish_speaking_state(false, Some(id.clone()));
             }
         }
@@ -563,7 +608,7 @@ impl SpeechEngine {
         // A new utterance supersedes the old. Cancelling before claiming the
         // slot means the ring is already flushed when the first chunk of the
         // new utterance lands, so the two never overlap.
-        self.cancel().await;
+        self.supersede().await;
 
         let id = format!("utt_{}", uuid::Uuid::new_v4());
         let flag = Arc::new(AtomicBool::new(false));
@@ -572,22 +617,37 @@ impl SpeechEngine {
         let playback = self.playback().await?;
         let (tx, mut rx) = mpsc::unbounded_channel::<PcmMsg>();
 
+        // Analysis happens on the producer side and delivery on the listener's,
+        // so the two are separated by a queue. See [`publish_bands`].
+        let (bands_tx, bands_rx) = mpsc::unbounded_channel::<BandFrame>();
+        if let Some(bus) = &self.events {
+            tokio::spawn(publish_bands(
+                Arc::clone(&playback),
+                bus.clone(),
+                bands_rx,
+                Arc::clone(&flag),
+            ));
+        }
+
         // The pump owns the awaiting: it is where ring backpressure is felt,
         // and it runs concurrently with the backend read so audio starts before
         // synthesis finishes.
         let pump = tokio::spawn({
             let playback = Arc::clone(&playback);
-            let bus = self.events.clone();
+            let analyze = self.events.is_some();
             async move {
-                // The visualizer is fed from here rather than from the audio
+                // The visualizer is analyzed here rather than on the audio
                 // callback: the pump sees every sample on its way to the ring,
-                // and analysis on the callback thread would risk the device
-                // deadline for a cosmetic feature.
+                // and an FFT on the callback thread would risk the device
+                // deadline for a cosmetic feature. What the pump cannot do is
+                // *publish*, because it runs up to a full ring ahead of the
+                // speakers — so each frame is stamped with the position it
+                // belongs to and handed to `publish_bands`.
                 let mut analyzer = None;
                 while let Some(msg) = rx.recv().await {
                     match msg {
                         PcmMsg::Samples(samples, params) => {
-                            if let Some(bus) = &bus {
+                            if analyze {
                                 let analyzer = analyzer.get_or_insert_with(|| {
                                     super_tts_shared::audio::AudioAnalyzer::new(
                                         params.sample_rate,
@@ -595,11 +655,15 @@ impl SpeechEngine {
                                     )
                                 });
                                 let data = analyzer.analyze(&samples);
-                                bus.publish_frequency_bands(
-                                    &data.bands,
-                                    crate::num_cast::u32_to_f32(params.sample_rate),
-                                    data.total_energy,
-                                );
+                                // Read before the push: this is where the
+                                // chunk about to be queued starts.
+                                let due = playback.stats().written_samples;
+                                let _ = bands_tx.send(BandFrame {
+                                    due,
+                                    bands: data.bands,
+                                    sample_rate: crate::num_cast::u32_to_f32(params.sample_rate),
+                                    energy: data.total_energy,
+                                });
                             }
                             if let Err(e) = playback.push(&samples, params).await {
                                 warn!("playback push failed: {e}");
@@ -661,8 +725,6 @@ impl SpeechEngine {
         text: &str,
         voice: Option<&str>,
         language: Option<&str>,
-        speed: Option<f32>,
-        instructions: Option<&str>,
     ) -> Result<Utterance, SpeakError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -682,12 +744,7 @@ impl SpeechEngine {
             return Err(SpeakError::EmptyText);
         }
 
-        let options = SpeakOptions {
-            voice,
-            language,
-            speed,
-            instructions,
-        };
+        let options = SpeakOptions { voice, language };
         let mut session = self.begin(model, options).await?;
         session.push(text).await?;
         session.end().await
@@ -824,17 +881,13 @@ impl SpeakSession {
         }
     }
 
-    /// Announce that this utterance is no longer speaking — but only if it is
-    /// still the current one. A superseded session must not clear the state
-    /// belonging to the utterance that replaced it, or an applet shows "not
-    /// speaking" while speech is playing.
-    fn publish_stopped(&self) {
-        if !self.is_current() {
-            return;
-        }
-        if let Some(bus) = &self.bus {
-            bus.publish_speaking_state(false, Some(self.id.clone()));
-        }
+    /// Announce that this utterance is over and release the engine's slot.
+    ///
+    /// See [`finish_utterance`]: it is a no-op unless the slot still holds this
+    /// utterance, because a superseded session must not clear the state
+    /// belonging to the utterance that replaced it.
+    fn finish_now(&self) {
+        finish_utterance(&self.slot, self.bus.as_ref(), &self.id);
     }
 
     /// Complete the utterance: flush the tail through both stages, synthesize
@@ -860,21 +913,60 @@ impl SpeakSession {
             let _ = pump.await;
         }
 
-        if !self.is_cancelled() {
+        if self.is_cancelled() {
+            self.publish_progress();
+            self.finish_now();
+        } else {
             self.playback.finish().await;
             info!(
                 "utterance {}: {} chars in {} chunk(s), {} marks",
                 self.id, self.chars, self.chunks, self.marks
             );
+            self.publish_progress();
+            // Queued is not spoken. Everything above finishes when the last
+            // sample reaches the ring, which for any backend faster than
+            // realtime is seconds before the listener hears it — so the slot
+            // and `speaking_state` are handed to a task that waits for the
+            // audio instead. `end` still returns now: `POST /speak` answers
+            // `202 Accepted` precisely because the device is still playing.
+            self.spawn_playout_watcher();
         }
-        self.publish_progress();
-        self.publish_stopped();
-        self.release_slot();
         Ok(Utterance {
             id: self.id.clone(),
             marks: self.marks,
             chunks: self.chunks,
         })
+    }
+
+    /// Follow the audio out of the ring, then close the utterance.
+    ///
+    /// Detached from the session on purpose: the caller that ended the
+    /// utterance — an HTTP handler about to answer, a WebSocket about to send
+    /// `done` — drops the session immediately afterwards, and the audio outlives
+    /// it. Everything the watcher touches is owned or shared, so nothing here
+    /// borrows the session.
+    fn spawn_playout_watcher(&self) {
+        let playback = Arc::clone(&self.playback);
+        let slot = Arc::clone(&self.slot);
+        let bus = self.bus.clone();
+        let id = self.id.clone();
+        tokio::spawn(async move {
+            let progress = tokio::spawn({
+                let playback = Arc::clone(&playback);
+                let slot = Arc::clone(&slot);
+                let bus = bus.clone();
+                let id = id.clone();
+                async move { report_progress(&playback, &slot, bus.as_ref(), &id).await }
+            });
+            if !playback.wait_for_playout(PLAYOUT_STALL_TIMEOUT).await {
+                warn!(
+                    "utterance {id}: output device stopped consuming with audio queued; \
+                     reporting it finished"
+                );
+            }
+            progress.abort();
+            finish_utterance(&slot, bus.as_ref(), &id);
+        });
     }
 
     /// Abandon the utterance: stop the pump and drop queued audio.
@@ -886,17 +978,7 @@ impl SpeakSession {
             let _ = pump.await;
         }
         self.playback.cancel();
-        self.publish_stopped();
-        self.release_slot();
-    }
-
-    /// Release the engine's slot, but only if it still holds this utterance —
-    /// a later one may already have claimed it.
-    fn release_slot(&self) {
-        let mut guard = self.slot.lock();
-        if guard.as_ref().is_some_and(|(cur, _)| *cur == self.id) {
-            *guard = None;
-        }
+        self.finish_now();
     }
 
     /// Synthesize one chunk and queue its audio.
@@ -918,8 +1000,14 @@ impl SpeakSession {
             text: chunk,
             voice: opts.voice,
             language: opts.language,
-            speed: opts.speed,
-            instructions: opts.instructions,
+            // The backend contract still carries these — see
+            // `docs/protocol/backend/contract.md` — but the daemon has no
+            // source for them: rate and delivery are not things a speaking
+            // client chooses, and no setting stores them yet. Sent as absent
+            // rather than removed from the wire, so a backend that reads them
+            // keeps parsing and can be fed again the day a setting exists.
+            speed: None,
+            instructions: None,
         };
         let result = {
             let guard = self.model.read().await;
@@ -962,8 +1050,127 @@ impl Drop for SpeakSession {
             pump.abort();
         }
         self.playback.cancel();
-        self.publish_stopped();
-        self.release_slot();
+        self.finish_now();
+    }
+}
+
+/// Release the engine's utterance slot and announce that `id` stopped speaking.
+///
+/// Both together, under one lock acquisition, or neither: whoever clears the
+/// slot is the one that gets to publish the stop, so a session superseded
+/// mid-playout and the utterance that replaced it cannot both report an end —
+/// and an applet never sees "not speaking" while speech is playing.
+///
+/// A no-op when the slot holds someone else, or nobody. Strictly equal, never
+/// "the slot is empty": an empty slot means another finisher already ran.
+fn finish_utterance(
+    slot: &CurrentSlot,
+    bus: Option<&Arc<crate::daemon::events::EventBus>>,
+    id: &str,
+) {
+    {
+        let mut guard = slot.lock();
+        if guard.as_ref().is_none_or(|(cur, _)| cur != id) {
+            return;
+        }
+        *guard = None;
+    }
+    if let Some(bus) = bus {
+        bus.publish_speaking_state(false, Some(id.to_string()));
+    }
+}
+
+/// One analyzed window of audio, waiting for its turn to be heard.
+struct BandFrame {
+    /// Interleaved device samples written to the ring before this chunk, so
+    /// the chunk is sounding once `rendered_samples` passes it.
+    due: u64,
+    bands: Vec<f32>,
+    sample_rate: f32,
+    energy: f32,
+}
+
+/// Publish `frequency_bands` in step with the speakers.
+///
+/// The analysis has to run on the producer side — an FFT on the audio callback
+/// would risk the device deadline — but the producer runs a full ring ahead of
+/// what is audible, and a backend faster than realtime keeps it there.
+/// Publishing where
+/// the analysis happens therefore drove a visualizer that went flat two seconds
+/// before the voice stopped, which reads as speech having ended. So each frame
+/// carries the ring position it belongs to, and this task holds it until the
+/// device has played that far.
+///
+/// Ends when the pump's channel closes and the backlog is drained, or at once
+/// if the utterance is cancelled — a cancel flushes the ring and resets the
+/// position counters, so a held frame would otherwise wait for a point the
+/// device will never reach again.
+async fn publish_bands(
+    playback: Arc<Playback>,
+    bus: Arc<crate::daemon::events::EventBus>,
+    mut rx: mpsc::UnboundedReceiver<BandFrame>,
+    cancelled: Arc<AtomicBool>,
+) {
+    let mut pending: std::collections::VecDeque<BandFrame> = std::collections::VecDeque::new();
+    let mut closed = false;
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return;
+        }
+        loop {
+            match rx.try_recv() {
+                Ok(frame) => pending.push_back(frame),
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+        let played = playback.stats().rendered_samples;
+        // Strictly past, not at: the first chunk is due at 0, and 0 samples
+        // rendered means the prebuffer has not even started.
+        while pending.front().is_some_and(|f| played > f.due) {
+            let Some(frame) = pending.pop_front() else {
+                break;
+            };
+            bus.publish_frequency_bands(&frame.bands, frame.sample_rate, frame.energy);
+        }
+        if closed && pending.is_empty() {
+            return;
+        }
+        tokio::time::sleep(BAND_TICK).await;
+    }
+}
+
+/// Publish `speech_progress` for `id` until the task is dropped.
+///
+/// Runs for the length of the playout, which is the only stretch of an
+/// utterance where the position moves on its own: synthesis-time publishing
+/// reports how much has been *queued*, and a backend faster than realtime
+/// queues the whole thing before a word is heard.
+async fn report_progress(
+    playback: &Playback,
+    slot: &CurrentSlot,
+    bus: Option<&Arc<crate::daemon::events::EventBus>>,
+    id: &str,
+) {
+    let Some(bus) = bus else {
+        return;
+    };
+    let format = playback.format();
+    let per_ms = u64::from(format.sample_rate) * u64::from(format.channels.max(1)) / 1000;
+    if per_ms == 0 {
+        return;
+    }
+    loop {
+        tokio::time::sleep(PROGRESS_INTERVAL).await;
+        if slot.lock().as_ref().is_none_or(|(cur, _)| cur != id) {
+            return;
+        }
+        let spoken_ms = playback.stats().rendered_samples / per_ms;
+        let queued_ms = playback.buffered() as u64 / per_ms;
+        bus.publish_speech_progress(id.to_string(), spoken_ms, queued_ms);
     }
 }
 
@@ -1068,26 +1275,21 @@ impl crate::daemon::types::SuperTTSDaemon {
     pub async fn handle_speak(
         &self,
         text: String,
-        voice: Option<String>,
-        language: Option<String>,
-        speed: Option<f32>,
-        instructions: Option<String>,
     ) -> super_tts_shared::models::protocol::DaemonResponse {
         use crate::output::notice::{Failure, Origin};
         use super_tts_shared::models::protocol::{DaemonResponse, ErrorCode};
 
-        let (voice, language) = self.stored_defaults(voice, language).await;
+        // The request is `text`; how it is spoken comes from the user's
+        // settings, the same way the streaming path gets it — see
+        // [`stored_defaults`](Self::stored_defaults), which both go through.
+        let (voice, language) = self.stored_defaults().await;
 
+        // `speak` rather than the session API on purpose: it refuses empty,
+        // oversized, and unloaded *before* claiming the utterance slot, so a
+        // request that cannot be served never interrupts what is playing.
         let result = self
             .speech
-            .speak(
-                &self.model,
-                &text,
-                voice.as_deref(),
-                language.as_deref(),
-                speed,
-                instructions.as_deref(),
-            )
+            .speak(&self.model, &text, voice.as_deref(), language.as_deref())
             .await;
 
         let err = match result {
@@ -1124,29 +1326,43 @@ impl crate::daemon::types::SuperTTSDaemon {
         }
     }
 
-    /// Fill in what an utterance did not name from the loaded model's stored
-    /// settings.
+    /// Open a streaming session with the configured defaults already resolved.
     ///
-    /// Most callers name nothing: a keyboard shortcut has no UI to choose with,
-    /// and the settings app speaks with whatever the model is configured to
-    /// use. So the per-model voice and language are applied here, one layer
-    /// above the synthesis path, rather than by each client — a setting only
-    /// the app knew to send would leave every shortcut and every applet
-    /// speaking in a different voice from the one the user picked, which is
-    /// exactly what happened while nothing resolved them at all.
+    /// The single door for the HTTP layer. `POST /speak` and
+    /// `GET /speak/stream` have to resolve a voice and a language the same way,
+    /// and for a while they did not: the one-shot path went through
+    /// [`handle_speak`](Self::handle_speak), which calls
+    /// [`stored_defaults`](Self::stored_defaults), while the streaming path
+    /// called [`SpeechEngine::begin`] directly with whatever the `start` frame
+    /// carried. A `start` naming no voice therefore reached the backend with
+    /// none, and a model whose voices are all cloned answered every utterance
+    /// with *"this model speaks in a cloned voice, so a request has to name
+    /// one"* — with the user's chosen voice sitting in the config the whole
+    /// time. Both paths come through here now so that cannot drift again.
     ///
-    /// A field the request *did* name is left alone. A stored value is a
-    /// default, not a policy: `speak --voice` and the Voices page's preview
-    /// both name one deliberately, and overriding either would play the wrong
-    /// voice back at someone auditioning a clone.
-    async fn stored_defaults(
-        &self,
-        voice: Option<String>,
-        language: Option<String>,
-    ) -> (Option<String>, Option<String>) {
-        if voice.is_some() && language.is_some() {
-            return (voice, language);
-        }
+    /// # Errors
+    /// See [`SpeakError`].
+    pub(crate) async fn begin_speech(&self) -> Result<SpeakSession, SpeakError> {
+        let (voice, language) = self.stored_defaults().await;
+        let options = SpeakOptions {
+            voice: voice.as_deref(),
+            language: language.as_deref(),
+        };
+        self.speech.begin(&self.model, options).await
+    }
+
+    /// How the loaded model is configured to speak: its voice and its language.
+    ///
+    /// The whole of it. A request carries `text` and nothing else, so this is
+    /// not a fallback for what a client left out — it is the only source there
+    /// is. Which voice the machine speaks in is the user's setting, changed
+    /// through `/pipeline/{stage}/model/{model}/voice` and
+    /// `/settings/language`, and an app that can make the machine talk does not
+    /// get a say in it by virtue of being able to talk.
+    ///
+    /// Resolved per utterance rather than cached, so a voice changed while
+    /// something is queued takes effect on the next thing said.
+    pub(crate) async fn stored_defaults(&self) -> (Option<String>, Option<String>) {
         // The definition is copied out and the model guard dropped before the
         // config is read, so the two locks are never held at once and no
         // ordering between them can block a writer.
@@ -1155,32 +1371,30 @@ impl crate::daemon::types::SuperTTSDaemon {
             guard.as_ref().map(|loaded| loaded.definition.clone())
         };
         let Some(def) = definition else {
-            return (voice, language);
+            return (None, None);
         };
 
         let config = self.config.read().await;
-        let language = language.or_else(|| {
-            crate::daemon::language::resolve_language(
-                def.is_multilingual,
-                config.model_language(&def.source, &def.name),
-                config.primary_language(),
-                &def.supported_languages,
-            )
-            .wire
-        });
-        let voice = voice.or_else(|| {
-            let stored = config.model_voice(&def.source, &def.name)?;
-            // A stored voice the model no longer declares is dropped rather
-            // than sent: it was a default the user is not naming today, and
-            // refusing the utterance over a backend that dropped a voice in an
-            // update would take speech away entirely. Naming one explicitly
-            // still fails loudly, which is what a caller who named it wants.
-            if let Err(e) = check_voice(&def, stored) {
-                warn!("ignoring the stored voice for {}: {e}", def.name);
-                return None;
-            }
-            Some(stored.to_owned())
-        });
+        let language = crate::daemon::language::resolve_language(
+            def.is_multilingual,
+            config.model_language(&def.source, &def.name),
+            config.primary_language(),
+            &def.supported_languages,
+        )
+        .wire;
+        let voice = config
+            .model_voice(&def.source, &def.name)
+            .and_then(|stored| {
+                // A stored voice the model no longer declares is dropped rather
+                // than sent: refusing the utterance over a backend that dropped a
+                // voice in an update would take speech away entirely, and the
+                // backend's own default is a better answer than silence.
+                if let Err(e) = check_voice(&def, stored) {
+                    warn!("ignoring the stored voice for {}: {e}", def.name);
+                    return None;
+                }
+                Some(stored.to_owned())
+            });
         (voice, language)
     }
 

@@ -26,6 +26,55 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+/// Fields `POST /speak` used to take, and no longer does.
+///
+/// Each one chose how an utterance was spoken — which voice, which language,
+/// how fast, in what manner. Those are the user's settings: a voice and a
+/// language are set through `/pipeline/{stage}/model/{model}/voice` and
+/// `/settings/language`, and the daemon reads them per utterance. An app that
+/// can make the machine talk does not thereby get a say in which voice it talks
+/// in, so there is nowhere in a speak request to say it.
+const REMOVED_FIELDS: &[&str] = &["voice", "language", "speed", "instructions"];
+
+/// The removed fields `body` still names.
+///
+/// A field present but `null` does not count: that is how a client spells "use
+/// what is configured", which is what the request means now anyway.
+fn removed_fields_named(body: &Value) -> Vec<&'static str> {
+    REMOVED_FIELDS
+        .iter()
+        .copied()
+        .filter(|field| body.get(*field).is_some_and(|v| !v.is_null()))
+        .collect()
+}
+
+/// Refuse a request that still carries one of [`REMOVED_FIELDS`].
+///
+/// Refused rather than ignored, and this is the whole point of the function: a
+/// client that asks for a voice and is silently given a different one has no
+/// way to find out. A `400` naming the field and where the setting now lives
+/// turns a wrong-voice mystery into a one-line fix.
+fn refuse_removed_fields(body: &Value) -> Option<Response> {
+    let named = removed_fields_named(body);
+    if named.is_empty() {
+        return None;
+    }
+    let message = format!(
+        "{} {} no longer accepted on /speak; how an utterance is spoken is \
+         configuration — set a voice with POST /pipeline/{{stage}}/model/{{model}}/voice \
+         and a language with POST /settings/language",
+        named.join(", "),
+        if named.len() == 1 { "is" } else { "are" },
+    );
+    Some(
+        json_response(&DaemonResponse::error_with_code(
+            ErrorCode::InvalidValue,
+            &message,
+        ))
+        .into_response(),
+    )
+}
+
 /// The body of `POST /speak`.
 ///
 /// The handler parses a bare [`Value`] rather than this type, because the
@@ -36,31 +85,14 @@ use utoipa_axum::routes;
 #[derive(Deserialize, ToSchema)]
 #[allow(dead_code)]
 pub(crate) struct SpeakBody {
-    /// What to speak. Empty or whitespace-only is `400 invalid_value`, and the
-    /// daemon caps it at 50 000 characters — a model may declare a lower cap of
-    /// its own in its manifest.
+    /// What to speak, and the whole of the request. Empty or whitespace-only is
+    /// `400 invalid_value`, and the daemon caps it at 50 000 characters — a
+    /// model may declare a lower cap of its own in its manifest.
+    ///
+    /// There is deliberately nothing else here. Which voice, which language and
+    /// how fast are settings the user owns; see `REMOVED_FIELDS`.
     #[schema(example = "The kettle is boiling.")]
     pub(crate) text: String,
-    /// A voice the loaded model declares. Omitted means the model's
-    /// `default_voice`. A cloned voice is named `voice:<uuid>` — see
-    /// `GET /voice/list`.
-    #[serde(default)]
-    #[schema(example = "af_bella")]
-    pub(crate) voice: Option<String>,
-    /// BCP-47 tag overriding `/settings/language` for this utterance only.
-    #[serde(default)]
-    #[schema(example = "en")]
-    pub(crate) language: Option<String>,
-    /// Rate multiplier, roughly 0.5–2.0. Backends that cannot vary rate ignore
-    /// it rather than failing.
-    #[serde(default)]
-    #[schema(example = 1.0)]
-    pub(crate) speed: Option<f32>,
-    /// Free-text delivery guidance, for models that accept it. Ignored
-    /// otherwise.
-    #[serde(default)]
-    #[schema(example = "Read this calmly.")]
-    pub(crate) instructions: Option<String>,
 }
 
 /// `POST /speak` — the utterance was accepted and is being played out.
@@ -113,12 +145,27 @@ literally is stripped, and long text is split on sentence boundaries so playback
 starts before the whole thing is synthesized. Numbers, dates and currency are \
 passed through untouched, because a wrong number-to-words is worse than none.
 
+**`text` is the whole request.** How an utterance is spoken — which voice, which \
+language, how fast, in what manner — is the user's configuration, read per \
+utterance by the daemon. Set a voice with \
+`POST /pipeline/{stage}/model/{model}/voice` and a language with \
+`POST /settings/language`, both under the `settings` scope. An app that can make \
+the machine talk does not thereby get a say in which voice it talks in.
+
+`voice`, `language`, `speed` and `instructions` used to be accepted here. A request \
+still carrying one is refused with `400 invalid_value` naming it, rather than \
+ignored — a client given a different voice than it asked for has no way to find out.
+
 For text that is still being generated, use `GET /speak/stream` instead.",
-    request_body(content = SpeakBody, description = "`text` is required; everything else falls back to the daemon's configured defaults."),
+    request_body(content = SpeakBody, description = "`text`, and nothing else. Voice, language, speed and instructions are settings, not request fields."),
+    // `speak` is what the router enforces; `settings` is required only for a
+    // request that names an override field, which is a body-dependent check the
+    // handler makes. Declaring it here would tell every client it needs a scope
+    // it usually does not — see the description and the 403 below.
     security(("session_token" = ["speak"])),
     responses(
         (status = 202, description = "Queued, and playing out. `utterance_id` names it.", body = UtteranceAccepted),
-        (status = 400, description = "`text` missing, empty, or over the cap; a `voice` the model does not declare or whose shape it did not opt into; or a malformed field.", body = ErrorEnvelope),
+        (status = 400, description = "`text` missing, empty, or over the cap; a request still carrying the removed `voice`/`language`/`speed`/`instructions` fields; or a malformed body.", body = ErrorEnvelope),
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `speak` scope.", body = ErrorEnvelope),
         (status = 409, description = "No model is loaded (`model_not_loaded`). Load one with `POST /pipeline/1/model` and retry.", body = ErrorEnvelope),
@@ -146,12 +193,18 @@ pub(crate) async fn speak(
     };
     // `text` is checked here as well as in the dispatcher so a missing field is
     // a coded 400 rather than the dispatcher's bare parse message.
+    //
+    // Before the removed-field check on purpose: "is this a valid utterance at
+    // all" precedes "you are spelling it the old way".
     if body.get("text").and_then(Value::as_str).is_none() {
         return json_response(&DaemonResponse::error_with_code(
             ErrorCode::InvalidValue,
             "missing text",
         ))
         .into_response();
+    }
+    if let Some(refusal) = refuse_removed_fields(&body) {
+        return refusal;
     }
 
     let request = build_request("speak", Some(body));

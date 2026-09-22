@@ -35,17 +35,27 @@ device and the language are.
 
 ## Relationship to `POST /speak`
 
-`voice` remains a per-utterance field on [`POST /speak`](../speak.md), and one
-named there **wins** — that is what the Voices page's preview uses to audition a
-clip, and what the CLI's `--voice` sets. This endpoint stores the default that
-field falls back to.
+**This is the only place a voice is chosen.** [`POST /speak`](../speak.md) takes
+`text` and nothing else, so what is stored here is what every caller gets: a
+keyboard shortcut, the panel applet, the settings app's Speak button, a browser
+client. Speaking and configuring are separate grants, and an app that can make
+the machine talk does not thereby get a say in which voice it talks in.
 
-That default is what every caller with no UI for choosing actually gets: a
-keyboard shortcut, the panel applet, the settings app's Speak button. Before it
-existed those callers sent no voice at all, so a model with a `default_voice`
-always spoke in it whatever the user had picked elsewhere, and a model whose
-voices are all cloned answered every utterance with *"this model speaks in a
-cloned voice, so a request has to name one"* — with nowhere to name one.
+`voice` used to be a per-utterance field on `/speak`, and one named there won.
+Two consequences of removing it are worth knowing. Auditioning a clip is now a
+selection — the Voices page sets the voice and then speaks, so the preview a user
+hears is the voice they will get everywhere afterwards. And a model with no
+stored voice whose voices are all cloned has no way to be given one per request,
+so it answers *"this model speaks in a cloned voice, so a request has to name
+one"* until a voice is stored here.
+
+**Both speak paths fall back to it.** `POST /speak` and the `start` frame of
+[`GET /speak/stream`](../speak/stream.md) resolve it the same way. They did not
+always: the streaming path handed its frame straight to the speech engine, so a
+`start` naming no voice reached the backend with none and a clone-only model
+refused every streamed utterance with the message above — while the stored voice
+sat unread. A daemon-side contract test now fails if an HTTP path opens an
+utterance without going through the resolver.
 
 ## `GET /pipeline/{stage}/model/{model}/voice`
 

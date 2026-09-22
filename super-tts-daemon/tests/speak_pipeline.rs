@@ -93,6 +93,38 @@ async fn drain(engine: &SpeechEngine, n: usize) -> Vec<f32> {
     out
 }
 
+/// Play the engine's ring out the way a device would, then give the daemon's
+/// playout watcher a moment to notice.
+///
+/// The null sink only moves when a test renders it, so any assertion about what
+/// happens *after* the audio is heard has to render it first. That the ring must
+/// be emptied for the utterance to close is the contract under test, not an
+/// artifact of the fake device: a real one is doing exactly this, in realtime,
+/// for as long as the audio lasts.
+async fn play_out(engine: &SpeechEngine) {
+    let playback = engine
+        .playback_handle()
+        .await
+        .expect("the engine opened a pipeline");
+    let mut buf = vec![0.0_f32; 256];
+    for _ in 0..2000 {
+        playback.render(&mut buf);
+        if playback.buffered() == 0 {
+            break;
+        }
+    }
+    assert_eq!(playback.buffered(), 0, "the ring should have played out");
+    // One more block so the watcher sees `Idle`, then let it run: it polls, so
+    // the close trails the last sample by a poll interval and a residual block.
+    playback.render(&mut buf);
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        if engine.current().is_none() {
+            return;
+        }
+    }
+}
+
 #[tokio::test]
 async fn speak_synthesizes_and_queues_audio_for_playback() {
     let Some(model) = loaded_model() else {
@@ -102,7 +134,7 @@ async fn speak_synthesizes_and_queues_audio_for_playback() {
     let engine = SpeechEngine::detached(DEVICE);
 
     let utterance = engine
-        .speak(&model, "hello there", None, None, None, None)
+        .speak(&model, "hello there", None, None)
         .await
         .expect("speak should succeed");
 
@@ -113,9 +145,9 @@ async fn speak_synthesizes_and_queues_audio_for_playback() {
     );
     assert_eq!(utterance.marks, 1, "the mock emits one alignment mark");
     assert_eq!(
-        engine.current(),
-        None,
-        "the slot is released once the utterance is fully queued"
+        engine.current().as_deref(),
+        Some(utterance.id.as_str()),
+        "queued is not spoken: the slot stays claimed until the ring plays out"
     );
 
     // 960 samples at 24 kHz resampled to 48 kHz is ~1920, and the ring should
@@ -136,6 +168,14 @@ async fn speak_synthesizes_and_queues_audio_for_playback() {
         out.iter().all(|s| s.is_finite() && s.abs() <= 1.0),
         "every sample stays finite and in range"
     );
+
+    // And once the device has actually played it, the utterance closes.
+    play_out(&engine).await;
+    assert_eq!(
+        engine.current(),
+        None,
+        "the slot is released once the audio has been heard"
+    );
 }
 
 /// The mock's ramp is monotonically rising, so the queued audio must rise too.
@@ -155,7 +195,7 @@ async fn the_queued_audio_preserves_the_backends_ramp() {
     });
 
     engine
-        .speak(&model, "ramp", None, None, None, None)
+        .speak(&model, "ramp", None, None)
         .await
         .expect("speak");
 
@@ -184,7 +224,7 @@ async fn the_queued_audio_preserves_the_backends_ramp() {
 async fn speaking_without_a_model_is_a_coded_refusal() {
     let engine = SpeechEngine::detached(DEVICE);
     let err = engine
-        .speak(&empty_model(), "hello", None, None, None, None)
+        .speak(&empty_model(), "hello", None, None)
         .await
         .expect_err("no model is loaded");
     assert!(matches!(err, SpeakError::NotLoaded));
@@ -205,7 +245,7 @@ async fn empty_and_oversized_text_are_refused_before_the_backend_is_touched() {
 
     for blank in ["", "   ", "\n\t "] {
         let err = engine
-            .speak(&model, blank, None, None, None, None)
+            .speak(&model, blank, None, None)
             .await
             .expect_err("blank text is refused");
         assert!(matches!(err, SpeakError::EmptyText), "for {blank:?}");
@@ -213,7 +253,7 @@ async fn empty_and_oversized_text_are_refused_before_the_backend_is_touched() {
 
     let huge = "a".repeat(super_tts_daemon::daemon::speech::MAX_TEXT_CHARS + 1);
     let err = engine
-        .speak(&model, &huge, None, None, None, None)
+        .speak(&model, &huge, None, None)
         .await
         .expect_err("oversized text is refused");
     assert!(matches!(err, SpeakError::TextTooLong));
@@ -232,7 +272,7 @@ async fn cancel_clears_the_queued_audio() {
     };
     let engine = SpeechEngine::detached(DEVICE);
     engine
-        .speak(&model, "hello", None, None, None, None)
+        .speak(&model, "hello", None, None)
         .await
         .expect("speak");
     let playback = engine.playback_handle().await.expect("pipeline opened");
@@ -275,11 +315,11 @@ async fn a_second_utterance_supersedes_the_first() {
     });
 
     let first = engine
-        .speak(&model, "one", None, None, None, None)
+        .speak(&model, "one", None, None)
         .await
         .expect("first speak");
     let second = engine
-        .speak(&model, "two", None, None, None, None)
+        .speak(&model, "two", None, None)
         .await
         .expect("second speak");
 
@@ -320,10 +360,7 @@ async fn long_text_is_split_into_several_synthesis_chunks() {
 
     let text = "First sentence here. Second sentence follows. Third one arrives now. \
                 And a fourth to finish.";
-    let utterance = engine
-        .speak(&model, text, None, None, None, None)
-        .await
-        .expect("speak");
+    let utterance = engine.speak(&model, text, None, None).await.expect("speak");
 
     assert!(
         utterance.chunks > 1,
@@ -352,7 +389,7 @@ async fn short_text_stays_a_single_synthesis_chunk() {
     };
     let engine = SpeechEngine::detached(DEVICE);
     let utterance = engine
-        .speak(&model, "Hello there. How are you?", None, None, None, None)
+        .speak(&model, "Hello there. How are you?", None, None)
         .await
         .expect("speak");
     assert_eq!(utterance.chunks, 1);
@@ -373,12 +410,11 @@ async fn markup_is_normalized_away_before_synthesis() {
             "# Title\nThis is **bold** with `code` and a [link](https://x.com/y).",
             None,
             None,
-            None,
-            None,
         )
         .await
         .expect("speak");
-    assert_eq!(utterance.chunks, 1);
+    // The heading ends with its line, so it is an utterance of its own.
+    assert_eq!(utterance.chunks, 2);
     assert!(engine.playback_handle().await.is_some());
 }
 
@@ -393,14 +429,14 @@ async fn text_that_is_entirely_markup_is_refused_as_empty() {
     };
     let engine = SpeechEngine::detached(DEVICE);
     let err = engine
-        .speak(&model, "```\nfn main() {}\n```", None, None, None, None)
+        .speak(&model, "```\nfn main() {}\n```", None, None)
         .await;
     // A code fence normalizes to the spoken notice, so this one *does* speak.
     assert!(err.is_ok(), "a code block is announced, not dropped");
 
     let engine2 = SpeechEngine::detached(DEVICE);
     let err = engine2
-        .speak(&model, "**** ___ ~~~", None, None, None, None)
+        .speak(&model, "**** ___ ~~~", None, None)
         .await
         .expect_err("pure punctuation has nothing to say");
     assert!(matches!(err, SpeakError::EmptyText));
@@ -444,7 +480,7 @@ async fn streaming_deltas_produce_the_same_audio_as_one_shot() {
 
     let one_shot = SpeechEngine::detached(DEVICE);
     let whole = one_shot
-        .speak(&model, text, None, None, None, None)
+        .speak(&model, text, None, None)
         .await
         .expect("one-shot speak");
     let whole_buffered = one_shot
@@ -606,7 +642,7 @@ async fn a_new_utterance_supersedes_a_live_stream() {
     assert!(!session.is_cancelled());
 
     engine
-        .speak(&model, "Interrupting.", None, None, None, None)
+        .speak(&model, "Interrupting.", None, None)
         .await
         .expect("the interrupting utterance");
     assert!(
@@ -715,7 +751,7 @@ async fn speaking_state_is_published_around_an_utterance() {
     let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
 
     let utterance = engine
-        .speak(&model, "Hello there.", None, None, None, None)
+        .speak(&model, "Hello there.", None, None)
         .await
         .expect("speak");
 
@@ -724,6 +760,15 @@ async fn speaking_state_is_published_around_an_utterance() {
     assert_eq!(start["is_speaking"], true);
     assert_eq!(start["utterance_id"], utterance.id.as_str());
 
+    // Synthesis is over, but nothing has been heard: a backend faster than
+    // realtime queues the whole utterance before the first word sounds, and
+    // announcing the end here is exactly the bug this guards.
+    assert!(
+        next_event(&mut rx).await.is_none(),
+        "no stop may be published while the audio is still queued"
+    );
+
+    play_out(&engine).await;
     let (_, stop) = next_event(&mut rx).await.expect("a stop event");
     assert_eq!(stop["is_speaking"], false);
     assert_eq!(stop["utterance_id"], utterance.id.as_str());
@@ -746,11 +791,13 @@ async fn a_superseded_utterance_does_not_clear_the_new_ones_state() {
         .await
         .expect("begin");
     let second = engine
-        .speak(&model, "Interrupting.", None, None, None, None)
+        .speak(&model, "Interrupting.", None, None)
         .await
         .expect("second");
     // The first session is now superseded; ending it must not publish a stop.
     first.end().await.expect("end the superseded session");
+    // The second is still playing out, so its own stop is still to come.
+    play_out(&engine).await;
 
     let events = drain_events(&mut rx).await;
     let last_stop = events
@@ -762,6 +809,46 @@ async fn a_superseded_utterance_does_not_clear_the_new_ones_state() {
         last_stop["utterance_id"],
         second.id.as_str(),
         "the final stop must belong to the utterance that actually finished"
+    );
+}
+
+/// Interrupting an utterance that is still playing out must not put a `false`
+/// in front of the new one's `true`. The device never went quiet, and a
+/// subscriber has no way to read that pair as anything but a gap — the applet
+/// drops a live visualizer to idle on it.
+#[tokio::test]
+async fn superseding_a_playing_utterance_does_not_report_a_stop() {
+    let Some(model) = loaded_model() else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let bus = Arc::new(EventBus::new());
+    let mut rx = bus.subscribe(Topic::SpeakingState);
+    let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
+
+    // The first utterance is queued and never rendered, so it is still playing
+    // out — the case a user barges in on.
+    let first = engine
+        .speak(&model, "The first thing.", None, None)
+        .await
+        .expect("first");
+    let second = engine
+        .speak(&model, "No, this instead.", None, None)
+        .await
+        .expect("second");
+
+    let events = drain_events(&mut rx).await;
+    let states: Vec<_> = events
+        .iter()
+        .map(|e| (e["is_speaking"].as_bool(), e["utterance_id"].as_str()))
+        .collect();
+    assert_eq!(
+        states,
+        vec![
+            (Some(true), Some(first.id.as_str())),
+            (Some(true), Some(second.id.as_str())),
+        ],
+        "one utterance replacing another is a handover, not a stop and a start"
     );
 }
 
@@ -778,10 +865,19 @@ async fn frequency_bands_are_published_from_playback() {
     let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
 
     engine
-        .speak(&model, "Hello there.", None, None, None, None)
+        .speak(&model, "Hello there.", None, None)
         .await
         .expect("speak");
 
+    // Analysis is done and every sample is queued, but nothing has reached a
+    // device. Publishing here is what made a visualizer go flat a full ring
+    // before the voice stopped — which reads as speech having ended.
+    assert!(
+        next_event(&mut rx).await.is_none(),
+        "no bands may be published for audio nobody has heard yet"
+    );
+
+    play_out(&engine).await;
     let (topic, bands) = next_event(&mut rx).await.expect("bands were published");
     assert_eq!(topic, "frequency_bands");
     assert_eq!(
@@ -802,7 +898,7 @@ async fn speech_progress_is_published_for_the_utterance() {
     let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
 
     let utterance = engine
-        .speak(&model, "Hello there.", None, None, None, None)
+        .speak(&model, "Hello there.", None, None)
         .await
         .expect("speak");
 

@@ -10,7 +10,7 @@
 use crate::daemon::client::internal::response::require_unit;
 use crate::daemon::client::internal::session::with_settings_token;
 use super_tts_shared::daemon::http_client;
-use super_tts_shared::daemon::http_client::{HttpResult, SpeakOptions};
+use super_tts_shared::daemon::http_client::HttpResult;
 
 /// `POST /speak` — speak `text` with the active model and its default voice.
 ///
@@ -20,7 +20,7 @@ pub async fn speak_command(text: String) -> HttpResult<Option<String>> {
     with_settings_token(|socket, token| {
         let text = text.clone();
         async move {
-            let resp = http_client::speak(socket, &token, &text, SpeakOptions::default()).await?;
+            let resp = http_client::speak(socket, &token, &text).await?;
             let utterance_id = resp.utterance_id.clone();
             require_unit(resp, "speak_command")?;
             Ok(utterance_id)
@@ -29,28 +29,29 @@ pub async fn speak_command(text: String) -> HttpResult<Option<String>> {
     .await
 }
 
-/// `POST /speak` — speak `text` in one specific voice.
+/// Select `voice` for the model on `stage`, then speak `text` in it.
 ///
 /// The Voices page's preview: a cloned voice is only judgeable by ear, and the
 /// daemon already owns the output device, so hearing one is a normal utterance
-/// with `voice` set rather than anything the app plays itself.
+/// rather than anything the app plays itself.
+///
+/// Two calls, because a speak request has no voice field: which voice the
+/// machine speaks in is a setting, so auditioning one *is* selecting it. That
+/// is the honest shape — the preview a user listens to is the voice they will
+/// get from every other client afterwards, rather than a sound only this page
+/// can produce. The selection is left in place, which is what the button means.
 ///
 /// The utterance id is discarded — a preview is not something the page later
 /// correlates or cancels, and the speaking badge is driven by events either
 /// way.
-pub async fn speak_in_voice(text: String, voice: String) -> HttpResult<()> {
-    with_settings_token(move |socket, token| {
-        let (text, voice) = (text.clone(), voice.clone());
-        async move {
-            let options = SpeakOptions {
-                voice: Some(voice),
-                ..SpeakOptions::default()
-            };
-            let resp = http_client::speak(socket, &token, &text, options).await?;
-            require_unit(resp, "speak_in_voice")
-        }
-    })
-    .await
+pub async fn speak_in_voice(
+    stage: u32,
+    model: String,
+    voice: String,
+    text: String,
+) -> HttpResult<()> {
+    super::pipeline::voice::set_model_voice(stage, model, voice).await?;
+    speak_command(text).await.map(|_| ())
 }
 
 /// `POST /speak/stop` — stop the current utterance and drop queued audio.

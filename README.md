@@ -60,18 +60,15 @@ systemctl --user start super-tts      # or: enable / status / restart
 journalctl --user -u super-tts -f     # follow logs
 ```
 
-### Per-utterance options
+### Choosing how it sounds
 
-```bash
-tts speak --voice af_heart --speed 1.1 "Read this a little faster."
-```
+Speaking and configuring are separate. `tts speak` takes the words and nothing
+else; which voice and which language the machine uses are settings, chosen once
+in the app (or over the protocol under the `settings` scope) and used by every
+utterance afterwards — a keyboard shortcut, the applet, your own client.
 
-| Option           | Effect                                                                   |
-|------------------|--------------------------------------------------------------------------|
-| `--voice`        | A voice the loaded model declares. Defaults to the model's own default.  |
-| `--language`     | BCP-47 override, for multilingual models.                               |
-| `--speed`        | Rate multiplier. Models that can't vary rate ignore it.                 |
-| `--instructions` | Free-text delivery guidance, for models that accept it.                 |
+That is a deliberate split: an app you allow to make the machine talk does not
+thereby get to pick the voice it talks in.
 
 ### Long text and streaming
 
@@ -83,9 +80,9 @@ An app generating text can stream it in as it arrives over a WebSocket, and the 
 
 Models that support it can speak in a voice you supply. Open the app's **Voices** page, record a sample or import a WAV, name it, and it joins your library:
 
-```bash
-tts speak --voice voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4 "Read this in my voice."
-```
+Select it on that page and everything the daemon says afterwards is in your
+voice — `tts speak "Read this in my voice."`, the applet, and any app you have
+allowed to speak.
 
 The page offers a script to read while it records, in whichever language the daemon is set to speak, so there is nothing to improvise and nothing to type: the words you read become the clip's transcript. Each language's default is sized to fit inside the loaded model's reference budget, so the clip and its transcript describe the same audio; longer scripts are offered too, and say so when the model cannot hear all of one. One of them covers every sound in English. Pick "No script" to record in your own words instead.
 

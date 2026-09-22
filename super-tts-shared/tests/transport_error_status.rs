@@ -150,15 +150,10 @@ async fn rejections_share_the_same_mapping_across_response_shapes() {
         "409 Conflict",
         r#"{"status":"error","message":"model_not_loaded"}"#,
     );
-    let err = super_tts_shared::daemon::http_client::speak(
-        socket.clone(),
-        "token",
-        "hello",
-        super_tts_shared::daemon::http_client::SpeakOptions::default(),
-    )
-    .await
-    .err()
-    .expect("a 409 is not an utterance");
+    let err = super_tts_shared::daemon::http_client::speak(socket.clone(), "token", "hello")
+        .await
+        .err()
+        .expect("a 409 is not an utterance");
     assert_eq!(err.to_string(), "model_not_loaded (HTTP 409)");
     let _ = std::fs::remove_file(&socket);
 }
