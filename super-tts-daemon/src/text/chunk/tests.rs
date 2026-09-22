@@ -267,6 +267,9 @@ fn streaming_at_random_delta_sizes_matches_the_whole_string() {
         "今日は晴れです。明日は雨でしょうか。それはわかりません。もう一度言います。",
         "The kettle is boiling and the cat woke up. Then she left the room \
          without saying anything. A third sentence follows to make it long.",
+        "Summary\nEverything passed\nNext steps\nA fourth line, long enough to \
+         need a cut somewhere before its end arrives.",
+        "Title\nOne. Two. Three.\nitem\nitem two, with a tail. Done.",
     ];
     let mut state = 0x243F_6A88_85A3_08D3;
     for policy in policies {
@@ -391,4 +394,83 @@ fn finish_resets_state_for_the_next_utterance() {
         v
     };
     assert_eq!(first, second, "the second utterance must chunk identically");
+}
+
+/// A line break is cut where it stands, target or no target: a heading, a
+/// list item and a paragraph are separate utterances however short, because a
+/// backend never sees the break and would read them as one sentence.
+#[test]
+fn a_line_break_is_cut_without_waiting_for_the_target() {
+    let lines = "Summary\nEverything passed\nNext steps";
+    let expected = vec!["Summary", "Everything passed", "Next steps"];
+    assert_eq!(chunk_all(plain(), lines), expected);
+    assert_eq!(chunk_all(ChunkPolicy::default(), lines), expected);
+    // Sentences within a line still pack together, as they always did.
+    assert_eq!(
+        chunk_all(ChunkPolicy::default(), "Title\nOne. Two. Three."),
+        vec!["Title", "One. Two. Three."]
+    );
+    // A break at the head of the buffer is not an empty chunk.
+    let mut c = Chunker::new(plain());
+    let mut out = c.push("Title");
+    out.extend(c.push("\nBody"));
+    out.extend(c.finish());
+    assert_eq!(out, vec!["Title", "Body"]);
+}
+
+/// A line longer than the model's limit is cut at the limit like any other
+/// oversized text, and the break after it is still honored.
+#[test]
+fn a_line_longer_than_the_limit_is_cut_at_the_limit_then_at_the_break() {
+    let policy = ChunkPolicy {
+        max_chars: Some(20),
+        first_chunk_chars: 0,
+    };
+    let text = "aaaa bbbb cccc dddd eeee ffff\nnext line";
+    let chunks = chunk_all(policy, text);
+    assert!(chunks.iter().all(|c| c.chars().count() <= 20), "{chunks:?}");
+    assert!(chunks.iter().all(|c| !c.contains('\n')), "{chunks:?}");
+    assert_eq!(chunks.last().map(String::as_str), Some("next line"));
+    let words: Vec<&str> = chunks.iter().flat_map(|c| c.split_whitespace()).collect();
+    assert_eq!(words, text.split_whitespace().collect::<Vec<_>>());
+}
+
+/// The whole pipeline, fuzzed: markdown through the normalizer and the chunker
+/// a few characters at a time must chunk exactly as the whole string does. The
+/// normalizer's line-break verdict needs the start of the next line, so a
+/// verdict made one delta early would show here as a different split.
+#[test]
+fn the_pipeline_chunks_the_same_however_the_deltas_fall() {
+    use super::super::normalize::{Normalizer, normalize};
+    let policy = ChunkPolicy::default();
+    let cases = [
+        "## Summary\nEverything passed\n\n- alpha\n- beta\n1. one\n2) two\nThe quick \
+         brown fox jumps over\nthe lazy dog. Then, apples,\nAnd plums. *emphasis* \
+         opens\n*this* line.",
+        "Here:\n```rust\nfn main() {}\n```\nDone\n> quoted\n状態\n正常\nSee \
+         [docs](https://x.com/y) now.\r\nWindows line.",
+    ];
+    let mut state = 0x9E37_79B9_7F4A_7C15;
+    for case in cases {
+        let whole = chunk_all(policy, &normalize(case));
+        assert!(
+            whole.len() >= 5,
+            "the case should have several lines: {whole:?}"
+        );
+        for _ in 0..300 {
+            let deltas = random_deltas(case, &mut state);
+            let mut n = Normalizer::new();
+            let mut c = Chunker::new(policy);
+            let mut streamed = Vec::new();
+            for delta in &deltas {
+                streamed.extend(c.push(&n.push(delta)));
+            }
+            streamed.extend(c.push(&n.finish()));
+            streamed.extend(c.finish());
+            assert_eq!(
+                streamed, whole,
+                "diverged on {case:?}\n  deltas: {deltas:?}"
+            );
+        }
+    }
 }

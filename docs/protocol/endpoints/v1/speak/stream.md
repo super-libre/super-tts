@@ -60,7 +60,10 @@ All frames are JSON text, discriminated on `type`.
 
 Deltas are appended to a streaming normalizer, so a delta may split a markup
 construct in half — `**bo` then `ld**` — without the asterisks being spoken. The
-daemon holds an ambiguous tail until it can resolve it.
+daemon holds an ambiguous tail until it can resolve it. A line break is judged
+the same way: a heading or a list item ends where its line does and is spoken
+on its own, and the daemon holds the break until it sees how the next line
+starts, since one that merely wraps a sentence is a space.
 
 ## Server frames
 

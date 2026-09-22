@@ -5,7 +5,9 @@
 //!
 //! It strips **markup that would otherwise be read out literally** — asterisks,
 //! backticks, link syntax, heading hashes, code fences — and collapses
-//! whitespace. It deliberately does **not** convert numbers, dates, currency,
+//! whitespace, keeping one thing the whitespace said: a line break that ends a
+//! line by the look of the page (see [Line breaks](#line-breaks)). It
+//! deliberately does **not** convert numbers, dates, currency,
 //! or units into words. Every TTS model in scope already reads `1,234.56` and
 //! `2026-08-29` correctly, and number-to-words is language-specific enough that
 //! a wrong implementation is worse than none. What matters here is not
@@ -24,6 +26,28 @@
 //! change, and holds the ambiguous tail until the next delta resolves it or
 //! [`Normalizer::finish`] declares there is no more. Callers that have the whole
 //! string up front use [`normalize`], which is just push-then-finish.
+//!
+//! # Line breaks
+//!
+//! A heading, a list item, a paragraph: on the page each ends where its line
+//! does, whether or not the author put a period there, and read aloud they end
+//! there too. Collapsing every newline to a space handed the model `Summary
+//! Everything passed Next steps` as one sentence, and it read it as one. So a
+//! line break that ends something is kept as a single `\n`, which the
+//! [chunker](super::chunk) treats as a boundary; a line break that merely
+//! wraps a sentence — the other thing a newline means, in hard-wrapped prose —
+//! collapses to a space as before.
+//!
+//! Telling the two apart is a judgement from what surrounds the break, and the
+//! rule is kept small. The break is a real one when the page says so: a blank
+//! line, a heading on either side, a list item, a quote or a fence on the next
+//! line. Otherwise it is one when the next line starts the way a sentence does —
+//! anything but a lowercase letter, after any opening markup or quote — unless
+//! the line before it ends in a comma or semicolon, which no sentence does. A
+//! wrapped line that happens to begin with a name is the case this gets wrong,
+//! and it is accepted: text from an LLM, which is what streams through here, is
+//! never hard-wrapped, and a screen selection that is loses one pause where a
+//! run-on list lost every one.
 
 /// Spoken in place of a fenced code block.
 ///
@@ -49,11 +73,29 @@ pub struct Normalizer {
     held: String,
     /// Inside a fenced block: everything is dropped until the fence closes.
     in_fence: bool,
-    /// Whether the last emitted character was a space, so runs collapse across
-    /// delta boundaries as well as within one.
-    pending_space: bool,
+    /// Whitespace collapsed but not yet written, so runs collapse across delta
+    /// boundaries as well as within one: a space, or a line break that ends a
+    /// line (see [Line breaks](self#line-breaks)).
+    pending: Pending,
     /// Whether anything has been emitted yet (suppresses a leading space).
     emitted: bool,
+    /// Whether the line being emitted opened with heading marks, which makes
+    /// the break that ends it a real one whatever follows.
+    line_is_heading: bool,
+    /// The last character emitted, for the break rule: a line ending in a
+    /// comma or semicolon continues on the next.
+    last_char: Option<char>,
+}
+
+/// Collapsed whitespace waiting for the text that follows it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    #[default]
+    None,
+    /// Written as one space.
+    Space,
+    /// Written as one `\n`: the line before it ended.
+    Break,
 }
 
 impl Normalizer {
@@ -77,7 +119,9 @@ impl Normalizer {
         let out = self.drain(true);
         self.in_fence = false;
         self.emitted = false;
-        self.pending_space = false;
+        self.pending = Pending::None;
+        self.line_is_heading = false;
+        self.last_char = None;
         out
     }
 
@@ -121,7 +165,18 @@ impl Normalizer {
                     self.held.drain(..consumed);
                 }
                 Step::Space(consumed) => {
-                    self.pending_space = true;
+                    if self.pending != Pending::Break {
+                        self.pending = Pending::Space;
+                    }
+                    self.held.drain(..consumed);
+                }
+                Step::Break(consumed) => {
+                    self.pending = Pending::Break;
+                    self.line_is_heading = false;
+                    self.held.drain(..consumed);
+                }
+                Step::Heading(consumed) => {
+                    self.line_is_heading = true;
                     self.held.drain(..consumed);
                 }
                 Step::OpenFence(consumed) => {
@@ -144,7 +199,8 @@ impl Normalizer {
 
         // Whitespace: collapse a run. Held unless something follows, so a
         // trailing space does not commit before the next delta arrives (which
-        // may continue a word).
+        // may continue a word) — and so a line break is judged by the line
+        // after it.
         if first.is_whitespace() {
             let end = s
                 .char_indices()
@@ -153,7 +209,15 @@ impl Normalizer {
             if end == s.len() && !forced {
                 return Some(Step::Hold);
             }
-            return Some(Step::Space(end));
+            let newlines = s[..end].chars().filter(|c| *c == '\n').count();
+            if newlines == 0 {
+                return Some(Step::Space(end));
+            }
+            return Some(match self.line_ends(newlines, &s[end..], forced) {
+                Some(true) => Step::Break(end),
+                Some(false) => Step::Space(end),
+                None => Step::Hold,
+            });
         }
 
         // Fences. ``` needs three backticks to be sure; fewer is inline code.
@@ -200,7 +264,7 @@ impl Normalizer {
             if first == '#' {
                 let hashes = s.chars().take_while(|c| *c == '#').count();
                 if hashes < s.len() || forced {
-                    return Some(Step::Skip(hashes));
+                    return Some(Step::Heading(hashes));
                 }
                 return Some(Step::Hold);
             }
@@ -250,31 +314,97 @@ impl Normalizer {
         Some(Step::Emit(s[..end].to_string(), end))
     }
 
-    /// Whether the next emitted character begins a line — true at the very
-    /// start, and after a newline (which has already collapsed to a pending
-    /// space).
-    fn at_line_start(&self) -> bool {
-        !self.emitted || self.pending_space
+    /// Whether the line break ending a run of `newlines` newlines ends the
+    /// line, given `after`, the text that follows the run — see
+    /// [Line breaks](self#line-breaks). `None` when `after` is too short to
+    /// say and more may come.
+    fn line_ends(&self, newlines: usize, after: &str, forced: bool) -> Option<bool> {
+        // A blank line ends a paragraph; a heading ends with its line.
+        if newlines >= 2 || self.line_is_heading {
+            return Some(true);
+        }
+        let mut chars = after.chars();
+        let first = chars.next()?;
+        match first {
+            // A heading or a quote starts the next line.
+            '#' | '>' => Some(true),
+            // A fence does; a shorter run of backticks is inline code, judged
+            // like any other start of a line.
+            '`' if after.starts_with("```") => Some(true),
+            '`' if after.len() < 3 && !forced => None,
+            // A bullet does; a bare `-` or `*` at the start of a line is
+            // ordinary text — `-3`, `*italic*` — and judged as such.
+            '-' | '+' | '*' => match chars.next() {
+                Some(c) if c.is_whitespace() => Some(true),
+                None if !forced => None,
+                _ => self.starts_a_sentence(after, forced),
+            },
+            // `1.` or `1)` and a space: a numbered item.
+            d if d.is_ascii_digit() => {
+                let digits = after.chars().take_while(char::is_ascii_digit).count();
+                let rest = &after[digits..];
+                match rest.chars().next() {
+                    None if !forced => None,
+                    Some('.' | ')') => match rest[1..].chars().next() {
+                        None if !forced => None,
+                        Some(c) if c.is_whitespace() => Some(true),
+                        _ => self.starts_a_sentence(after, forced),
+                    },
+                    _ => self.starts_a_sentence(after, forced),
+                }
+            }
+            _ => self.starts_a_sentence(after, forced),
+        }
     }
 
-    /// Append `text`, honoring a pending collapsed space.
+    /// Whether `after` reads like the start of a sentence: its first character
+    /// past any opening markup or quote is not a lowercase letter, and the
+    /// line before did not end mid-clause. `None` when that character has not
+    /// arrived.
+    fn starts_a_sentence(&self, after: &str, forced: bool) -> Option<bool> {
+        if matches!(self.last_char, Some(',' | ';')) {
+            return Some(false);
+        }
+        let opening = |c: char| is_markup(c) || matches!(c, '"' | '\'' | '“' | '‘' | '(');
+        match after.chars().find(|c| !opening(*c)) {
+            Some(c) => Some(!c.is_lowercase()),
+            None if forced => Some(true),
+            None => None,
+        }
+    }
+
+    /// Whether the next emitted character begins a line — true at the very
+    /// start, and after a line break that ended a line. A break that merely
+    /// wrapped a sentence is a space, and what follows a space is not a
+    /// heading or a bullet.
+    fn at_line_start(&self) -> bool {
+        !self.emitted || self.pending == Pending::Break
+    }
+
+    /// Append `text`, honoring pending collapsed whitespace.
     fn push_text(&mut self, out: &mut String, text: &str) {
         if text.is_empty() {
             return;
         }
-        if self.pending_space && self.emitted {
-            out.push(' ');
+        if self.emitted {
+            match self.pending {
+                Pending::Break => out.push('\n'),
+                Pending::Space => out.push(' '),
+                Pending::None => {}
+            }
         }
-        self.pending_space = false;
+        self.pending = Pending::None;
         self.emitted = true;
         out.push_str(text);
+        self.last_char = text.chars().last();
     }
 
-    /// Append a standalone word, spaced on both sides.
+    /// Append a standalone notice on a line of its own: it stands in for a
+    /// block, and a block ends where its lines do.
     fn push_word(&mut self, out: &mut String, word: &str) {
-        self.pending_space = true;
+        self.pending = Pending::Break;
         self.push_text(out, word);
-        self.pending_space = true;
+        self.pending = Pending::Break;
     }
 }
 
@@ -286,6 +416,10 @@ enum Step {
     Skip(usize),
     /// Collapse `usize` bytes of whitespace to one space.
     Space(usize),
+    /// Collapse `usize` bytes of whitespace to a line break: the line ended.
+    Break(usize),
+    /// Drop `usize` bytes of heading marks, and remember the line is one.
+    Heading(usize),
     /// Enter a code fence, consuming `usize` bytes.
     OpenFence(usize),
     /// Wait for more input.

@@ -4,8 +4,13 @@ use super::{Normalizer, normalize};
 #[test]
 fn plain_text_passes_through_with_whitespace_collapsed() {
     assert_eq!(
-        normalize("Hello   there.\n\nHow are you?"),
+        normalize("Hello   there.  How\tare you?"),
         "Hello there. How are you?"
+    );
+    // A blank line is a paragraph break, kept as one newline.
+    assert_eq!(
+        normalize("Hello   there.\n\nHow are you?"),
+        "Hello there.\nHow are you?"
     );
     assert_eq!(
         normalize("  leading and trailing  "),
@@ -31,22 +36,95 @@ fn inline_code_keeps_its_contents_but_not_its_backticks() {
 #[test]
 fn a_fenced_code_block_becomes_a_short_notice() {
     let md = "Before\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\nAfter";
-    assert_eq!(normalize(md), "Before code block After");
+    assert_eq!(normalize(md), "Before\ncode block\nAfter");
 }
 
 /// An unterminated fence must not swallow the rest of the utterance — the
 /// listener should still learn a code block was there.
 #[test]
 fn an_unclosed_fence_still_resolves_at_the_end() {
-    assert_eq!(normalize("Before\n```\nfn main() {"), "Before code block");
+    assert_eq!(normalize("Before\n```\nfn main() {"), "Before\ncode block");
 }
 
 #[test]
 fn headings_bullets_and_quotes_lose_their_markers() {
-    assert_eq!(normalize("# Title\nBody"), "Title Body");
-    assert_eq!(normalize("### Deep\ntext"), "Deep text");
-    assert_eq!(normalize("- one\n- two"), "one two");
+    assert_eq!(normalize("# Title\nBody"), "Title\nBody");
+    assert_eq!(normalize("### Deep\ntext"), "Deep\ntext");
+    assert_eq!(normalize("- one\n- two"), "one\ntwo");
     assert_eq!(normalize("> quoted"), "quoted");
+}
+
+/// A heading, a list item, a paragraph: each ends where its line does, period
+/// or no period, and the model must not run them together. The line break is
+/// kept as `\n` for the chunker whenever the page says the line ended.
+#[test]
+fn a_line_break_that_ends_a_line_is_kept() {
+    // The page says so: a blank line, a heading on either side, a list item,
+    // a quote, a fence.
+    assert_eq!(
+        normalize("First paragraph\n\nSecond"),
+        "First paragraph\nSecond"
+    );
+    assert_eq!(normalize("## Summary\nall good"), "Summary\nall good");
+    assert_eq!(normalize("Intro\n## Next"), "Intro\nNext");
+    assert_eq!(normalize("- alpha\n- beta\n- gamma"), "alpha\nbeta\ngamma");
+    assert_eq!(
+        normalize("1. one\n2. two\n10) ten"),
+        "1. one\n2. two\n10) ten"
+    );
+    assert_eq!(normalize("Note\n> quoted"), "Note\nquoted");
+    assert_eq!(
+        normalize("Here:\n```\nx\n```\nDone"),
+        "Here:\ncode block\nDone"
+    );
+    // Plain lines that start the way a sentence does.
+    assert_eq!(
+        normalize("Summary\nEverything passed\nNext steps"),
+        "Summary\nEverything passed\nNext steps"
+    );
+    assert_eq!(
+        normalize("Step one\n\"Quoted\" line"),
+        "Step one\n\"Quoted\" line"
+    );
+    assert_eq!(normalize("Step one\n**Bold** line"), "Step one\nBold line");
+    assert_eq!(normalize("Total\n42 items"), "Total\n42 items");
+    // A script without case: every line ends.
+    assert_eq!(normalize("状態\n正常"), "状態\n正常");
+    // Windows line endings are line endings.
+    assert_eq!(normalize("One\r\nTwo"), "One\nTwo");
+}
+
+/// The other thing a newline means: hard-wrapped prose, where the line ends
+/// mid-sentence. The next line starting lowercase, or the line before ending
+/// mid-clause, says the sentence goes on.
+#[test]
+fn a_line_break_that_wraps_a_sentence_is_a_space() {
+    assert_eq!(
+        normalize("The quick brown fox jumps over\nthe lazy dog."),
+        "The quick brown fox jumps over the lazy dog."
+    );
+    assert_eq!(
+        normalize("apples, pears,\nAnd plums"),
+        "apples, pears, And plums"
+    );
+    assert_eq!(normalize("first;\nSecond"), "first; Second");
+    // A lazy continuation of a list item.
+    assert_eq!(
+        normalize("- an item that wraps\nonto a second line"),
+        "an item that wraps onto a second line"
+    );
+    // Opening markup is looked through to the first letter.
+    assert_eq!(
+        normalize("*emphasis* opens\n*this* line"),
+        "emphasis opens this line"
+    );
+    assert_eq!(
+        normalize("see the\n[docs](https://x.com) here"),
+        "see the docs here"
+    );
+    // A bare `-` or digit that is not a marker is judged as text.
+    assert_eq!(normalize("offset\n-3 units"), "offset\n-3 units");
+    assert_eq!(normalize("version\n1.5 is out"), "version\n1.5 is out");
 }
 
 /// A hyphen only means "bullet" at the start of a line followed by a space.
@@ -114,6 +192,9 @@ fn streaming_a_delta_at_a_time_matches_the_whole_string() {
         "# Title\n- one\n- two\nGo to https://example.com/path now.",
         "Before\n```rust\nfn main() {}\n```\nAfter",
         "Plain sentence with 3.14 and $10.",
+        "Summary\nEverything passed\nNext steps",
+        "1. one\n2. two\n\nwrapped over\nthe line, and\nAnother",
+        "> q\n\npara\n- item\n*this* wraps\n10) ten",
     ];
     for case in cases {
         let whole = normalize(case);
@@ -158,7 +239,7 @@ fn a_partial_fence_is_not_committed_as_inline_code() {
     let mut out = n.push("text ``");
     out.push_str(&n.push("`\ncode here\n```\nafter"));
     out.push_str(&n.finish());
-    assert_eq!(out.trim(), "text code block after");
+    assert_eq!(out.trim(), "text\ncode block\nafter");
 }
 
 /// Without a cap an unterminated construct would hold forever and nothing would

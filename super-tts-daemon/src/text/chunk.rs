@@ -26,6 +26,18 @@
 //! audible: "Dr. Smith arrived" split after `Dr.` produces two utterances with
 //! a pause and a dropped intonation. See `boundary_end`.
 //!
+//! # Line breaks
+//!
+//! The [normalizer](super::normalize) keeps a line break that ends a line — a
+//! heading, a list item, a paragraph — as a `\n`, and here it is a boundary
+//! of a stronger kind than a period. A period is only a *candidate* split: the
+//! chunker packs sentences together until the target is outgrown, because the
+//! model reads the pause in the punctuation itself. A line break carries no
+//! pause the model can read — a backend never sees one — so the text either
+//! side of it is cut apart as soon as the break is known, whatever the
+//! target. A list of five items is five short utterances, which is what it
+//! looks like.
+//!
 //! # Streaming and one-shot must agree
 //!
 //! The daemon's one-shot path is the streaming one with the whole string
@@ -152,8 +164,23 @@ impl Chunker {
 
     /// Pull one chunk if the buffer holds a complete one.
     fn take_ready(&mut self, final_pass: bool) -> Option<String> {
+        // Leading whitespace is never part of a chunk; dropping it here keeps
+        // a line break that arrives at the head of the buffer from being cut
+        // off as an empty chunk.
+        if self.buf.starts_with(char::is_whitespace) {
+            self.buf = self.buf.trim_start().to_string();
+        }
         let target = self.policy.target(self.emitted);
         let len = self.buf.chars().count();
+
+        // A line break ends the chunk where it stands, target or no target —
+        // see the module doc. A line longer than the model's limit is cut at
+        // the limit first, below, and reaches this on a later pass.
+        if let Some(pos) = self.buf.chars().position(|c| c == '\n')
+            && self.policy.max_chars.is_none_or(|max| pos <= max)
+        {
+            return self.split_at(pos + 1);
+        }
 
         // Nothing is emitted until the buffer has actually outgrown its
         // target. Splitting at every boundary the moment one appears would
@@ -189,6 +216,11 @@ impl Chunker {
             },
         };
 
+        self.split_at(split)
+    }
+
+    /// Take the first `split` characters of the buffer as a chunk.
+    fn split_at(&mut self, split: usize) -> Option<String> {
         let head: String = self.buf.chars().take(split).collect();
         let rest: String = self.buf.chars().skip(split).collect();
         let chunk = head.trim().to_string();
@@ -264,6 +296,11 @@ fn last_boundary_within(s: &str, limit: usize, final_pass: bool) -> Boundary {
 ///   is neither.
 fn boundary_end(chars: &[char], i: usize) -> Boundary {
     let c = chars[i];
+    // A line break needs nothing after it to be judged by: the normalizer
+    // already did that, and only kept the ones that end a line.
+    if c == '\n' {
+        return Boundary::At(i + 1);
+    }
     if !TERMINATORS.contains(&c) {
         return Boundary::No;
     }

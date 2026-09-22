@@ -378,7 +378,8 @@ async fn markup_is_normalized_away_before_synthesis() {
         )
         .await
         .expect("speak");
-    assert_eq!(utterance.chunks, 1);
+    // The heading ends with its line, so it is an utterance of its own.
+    assert_eq!(utterance.chunks, 2);
     assert!(engine.playback_handle().await.is_some());
 }
 

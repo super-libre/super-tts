@@ -57,7 +57,10 @@ other endpoint takes it; both spellings mean the same thing.
 The daemon normalizes `text` before synthesis — markup that would otherwise be
 read out literally (emphasis markers, code fences, link targets, table pipes) is
 stripped, and long text is split on sentence boundaries so playback can start
-before the whole thing is synthesized. Numbers, dates, and currency are passed
+before the whole thing is synthesized. A line break that ends a line — a
+heading, a list item, a paragraph — is a boundary too, period or no period, so
+each is spoken as its own utterance rather than run into the next; a line break
+that merely wraps a sentence is a space. Numbers, dates, and currency are passed
 through untouched: the model reads them, because a wrong number-to-words is
 worse than none.
 
