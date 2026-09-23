@@ -651,6 +651,120 @@ async fn a_new_utterance_supersedes_a_live_stream() {
     );
 }
 
+/// Seconds of speech from the mock: one synthesis chunk per sentence under a
+/// 60-character limit, 40 ms each, so about three times what the two-second
+/// ring holds.
+///
+/// A backlog behind the ring is the ordinary case for a reply of any length on
+/// a backend faster than realtime, and it is what every stop has to get past:
+/// the mock's single chunk fits in the ring whole, so a test built on one
+/// cannot see what happens to audio still waiting its turn.
+fn backlog() -> String {
+    "Here is one more sentence to speak aloud. ".repeat(150)
+}
+
+/// `POST /speak/stop` mid-reply. The stop flushed the ring, but the pump still
+/// held seconds of synthesized audio and refilled it — so the voice cut out,
+/// came back a ring's worth further on, and carried on through the backlog.
+#[tokio::test]
+async fn a_stop_is_not_undone_by_the_audio_queued_behind_the_ring() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push(&backlog()).await.expect("push");
+    let playback = engine.playback_handle().await.expect("pipeline");
+    assert!(eventually(|| playback.buffered() > 0).await);
+
+    engine.cancel().await;
+    // Long enough for a pump that missed the stop to refill the ring.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        playback.buffered(),
+        0,
+        "nothing queued behind the ring is played after a stop"
+    );
+    let mut buf = vec![0.0_f32; 512];
+    playback.render(&mut buf);
+    assert!(buf.iter().all(|s| *s == 0.0), "the device stays silent");
+
+    // `POST /speak` is still inside `end` when a user stops it mid-reply, and
+    // it must answer once stopped rather than once the backlog is played.
+    tokio::time::timeout(Duration::from_secs(1), session.end())
+        .await
+        .expect("end returns once stopped")
+        .expect("end");
+}
+
+/// The stream's own `cancel` frame waited for the pump to push its whole
+/// backlog through a ring that only empties as fast as the speakers play — a
+/// cancel that took as long as the speech it was meant to cut.
+#[tokio::test]
+async fn cancelling_a_stream_does_not_wait_for_its_backlog() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DEVICE);
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push(&backlog()).await.expect("push");
+    let playback = engine.playback_handle().await.expect("pipeline");
+    assert!(eventually(|| playback.buffered() > 0).await);
+
+    tokio::time::timeout(Duration::from_secs(1), session.cancel())
+        .await
+        .expect("cancel returns without playing the backlog out");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(playback.buffered(), 0, "and nothing is refilled after it");
+    assert_eq!(engine.current(), None, "and it releases the utterance slot");
+}
+
+/// A new utterance while the old one's backlog is still queued. The old pump
+/// kept writing into the ring the new utterance was writing to, so the two
+/// played interleaved.
+#[tokio::test]
+async fn a_new_utterance_is_not_interleaved_with_the_backlog_it_replaced() {
+    let Some(model) = loaded_model_with_limit(60) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let engine = SpeechEngine::detached(DeviceFormat {
+        sample_rate: MOCK_RATE,
+        channels: 1,
+    });
+    let mut session = engine
+        .begin(&model, SpeakOptions::default())
+        .await
+        .expect("begin");
+    session.push(&backlog()).await.expect("push");
+    let playback = engine.playback_handle().await.expect("pipeline");
+    assert!(eventually(|| playback.buffered() > 0).await);
+
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        engine.speak(&model, "Interrupting.", None, None),
+    )
+    .await
+    .expect("the new utterance is not stuck behind the old one's backlog")
+    .expect("speak");
+    // Long enough for the superseded pump to write, if it still could.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        playback.buffered(),
+        MOCK_SAMPLES,
+        "the ring holds exactly the new utterance"
+    );
+    assert!(session.is_cancelled());
+}
+
 /// Marks reach the streaming client, which is what powers highlight-as-it-
 /// speaks. The one-shot path counts them; only this path forwards them.
 #[tokio::test]

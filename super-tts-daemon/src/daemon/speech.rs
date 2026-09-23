@@ -635,6 +635,7 @@ impl SpeechEngine {
         let pump = tokio::spawn({
             let playback = Arc::clone(&playback);
             let analyze = self.events.is_some();
+            let cancelled = Arc::clone(&flag);
             async move {
                 // The visualizer is analyzed here rather than on the audio
                 // callback: the pump sees every sample on its way to the ring,
@@ -645,6 +646,15 @@ impl SpeechEngine {
                 // belongs to and handed to `publish_bands`.
                 let mut analyzer = None;
                 while let Some(msg) = rx.recv().await {
+                    // The sink runs ahead of the speakers by as much as a
+                    // faster-than-realtime backend can produce, so this channel
+                    // can hold far more than the ring. A stop empties the ring
+                    // but cannot reach in here: the pump has to notice it, or
+                    // it refills the ring from the backlog and the stopped
+                    // utterance carries on.
+                    if cancelled.load(Ordering::Relaxed) {
+                        break;
+                    }
                     match msg {
                         PcmMsg::Samples(samples, params) => {
                             if analyze {
@@ -665,12 +675,12 @@ impl SpeechEngine {
                                     energy: data.total_energy,
                                 });
                             }
-                            if let Err(e) = playback.push(&samples, params).await {
+                            if let Err(e) = playback.push(&samples, params, &cancelled).await {
                                 warn!("playback push failed: {e}");
                                 break;
                             }
                         }
-                        PcmMsg::Boundary => playback.end_chunk().await,
+                        PcmMsg::Boundary => playback.end_chunk(&cancelled).await,
                     }
                 }
             }
@@ -917,7 +927,7 @@ impl SpeakSession {
             self.publish_progress();
             self.finish_now();
         } else {
-            self.playback.finish().await;
+            self.playback.finish(&self.flag).await;
             info!(
                 "utterance {}: {} chars in {} chunk(s), {} marks",
                 self.id, self.chars, self.chunks, self.marks
@@ -974,7 +984,12 @@ impl SpeakSession {
         self.flag.store(true, Ordering::Relaxed);
         self.finished = true;
         self.sink = None;
+        // Aborted, not drained. Waiting for the pump to finish on its own is
+        // waiting for it to push its backlog through a ring that only empties
+        // as fast as the speakers play — a cancel that takes as long as the
+        // speech it was meant to cut. The await is only for the abort to land.
         if let Some(pump) = self.pump.take() {
+            pump.abort();
             let _ = pump.await;
         }
         self.playback.cancel();
@@ -1028,6 +1043,9 @@ impl SpeakSession {
             // as a failure.
             Err(_) if self.is_cancelled() => Ok(()),
             Err(e) => {
+                // Flagged before the flush, like every other stop: otherwise
+                // the pump refills the ring from its backlog.
+                self.flag.store(true, Ordering::Relaxed);
                 self.playback.cancel();
                 Err(SpeakError::Synthesis(e.to_string()))
             }
