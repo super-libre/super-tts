@@ -169,6 +169,7 @@ impl SuperTTSDaemon {
             let t = std::sync::Arc::new(
                 crate::download_progress::DownloadProgressTracker::new(
                     name.to_string(),
+                    (),
                     total_files,
                     cancelled,
                 )
@@ -178,7 +179,7 @@ impl SuperTTSDaemon {
             // settings app's progress card lights up. A previous tracker (from
             // a failed load) is cleared first — the manager rejects parallel
             // downloads, but a leftover entry would block this one.
-            self.download_manager.clear_download();
+            self.download_manager.clear_download(());
             if let Err(e) = self
                 .download_manager
                 .start_download(std::sync::Arc::clone(&t))
@@ -212,7 +213,7 @@ impl SuperTTSDaemon {
                 Err(e) => t.mark_error(&format!("{e:#}")),
             }
             t.broadcast_progress();
-            self.download_manager.clear_download();
+            self.download_manager.clear_download(());
         }
 
         Ok(Box::new(result?))

@@ -2044,6 +2044,7 @@ async fn an_in_flight_download_reaches_the_stage_slot() {
 
     let tracker = Arc::new(DownloadProgressTracker::new(
         "kokoro-82m".to_string(),
+        (),
         3,
         Arc::new(AtomicBool::new(false)),
     ));

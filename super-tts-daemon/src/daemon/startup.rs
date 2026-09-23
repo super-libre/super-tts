@@ -148,7 +148,7 @@ impl SuperTTSDaemon {
                     Self::load_initial_model_and_broadcast(&bg, name.clone(), source).await
                 {
                     warn!("Failed to load startup model {name}: {e}; daemon is idle");
-                    bg.download_manager.clear_download();
+                    bg.download_manager.clear_download(());
                 }
             });
         } else {
