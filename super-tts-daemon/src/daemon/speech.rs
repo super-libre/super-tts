@@ -473,6 +473,7 @@ impl SpeechEngine {
         };
         if !loaded
             .definition
+            .product
             .voice_kinds
             .contains(&super_tts_registry_types::manifest::VoiceKind::Cloned)
         {
@@ -511,7 +512,7 @@ impl SpeechEngine {
             .map_err(|e| SpeakError::UnknownVoice(format!("voice '{voice}': {e}")))?;
         // Checked here rather than at synthesis so the user is told which
         // half is missing, once, instead of watching every request fail.
-        if loaded.definition.clone_needs_transcript && record.transcript.is_none() {
+        if loaded.definition.product.clone_needs_transcript && record.transcript.is_none() {
             return Err(SpeakError::UnknownVoice(format!(
                 "model '{}' clones from a reference transcript, and voice '{}' was stored without one",
                 loaded.definition.name, record.label
@@ -523,7 +524,7 @@ impl SpeechEngine {
         let clip = {
             let library = Arc::clone(&library);
             let id = id.to_string();
-            let budget = loaded.definition.clone_ref_seconds;
+            let budget = loaded.definition.product.clone_ref_seconds;
             tokio::task::spawn_blocking(move || library.clip_pcm(&id, budget))
                 .await
                 .map_err(|e| SpeakError::Synthesis(format!("reading the reference clip: {e}")))?
@@ -604,7 +605,7 @@ impl SpeechEngine {
                 // switch must not land in between.
                 self.ensure_cloned_voice(loaded, voice).await?;
             }
-            ChunkPolicy::for_model(loaded.definition.max_input_chars)
+            ChunkPolicy::for_model(loaded.definition.product.max_input_chars)
         };
 
         // A new utterance supersedes the old. Cancelling before claiming the
@@ -1267,15 +1268,15 @@ pub(crate) fn check_voice(
     } else {
         VoiceKind::Preset
     };
-    if !definition.voice_kinds.contains(&kind) {
+    if !definition.product.voice_kinds.contains(&kind) {
         return Err(SpeakError::UnknownVoice(format!(
             "model '{}' does not accept a {kind} voice id",
             definition.name
         )));
     }
     if kind == VoiceKind::Preset
-        && !definition.voices.is_empty()
-        && !definition.voices.iter().any(|v| v.id == voice)
+        && !definition.product.voices.is_empty()
+        && !definition.product.voices.iter().any(|v| v.id == voice)
     {
         return Err(SpeakError::UnknownVoice(format!(
             "model '{}' declares no voice '{voice}'",

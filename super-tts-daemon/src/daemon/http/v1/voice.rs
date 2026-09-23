@@ -144,9 +144,9 @@ async fn active_model_support(s: &AppState) -> Option<VoiceModelSupport> {
     Some(VoiceModelSupport {
         name: def.name.clone(),
         source: def.source.clone(),
-        clones: def.voice_kinds.contains(&VoiceKind::Cloned),
-        clone_ref_seconds: def.clone_ref_seconds,
-        needs_transcript: def.clone_needs_transcript,
+        clones: def.product.voice_kinds.contains(&VoiceKind::Cloned),
+        clone_ref_seconds: def.product.clone_ref_seconds,
+        needs_transcript: def.product.clone_needs_transcript,
     })
 }
 

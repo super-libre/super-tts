@@ -1453,16 +1453,11 @@ mod tests {
             primary_language: "en".to_string(),
             supported_languages: vec!["en".to_string()],
             estimated_vram_bytes: 0,
-            max_input_chars: None,
             processing_interval: std::time::Duration::from_secs(1),
             supported_devices: devices,
-            voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
-            default_voice: None,
-            clone_ref_seconds: None,
-            clone_needs_transcript: false,
-            voices: Vec::new(),
             realtime: false,
             provider: None,
+            product: super_tts_registry_types::manifest::TtsModel::default(),
         }
     }
 

@@ -19,7 +19,7 @@ use super_tts_daemon::daemon::speech::{SpeakError, SpeechEngine};
 use super_tts_daemon::daemon::types::{LoadedModel, SharedLoadedModel};
 use super_tts_daemon::tts_models::ModelDefinition;
 use super_tts_daemon::tts_models::wasm::WasmBackend;
-use super_tts_registry_types::manifest::{Device, VoiceKind};
+use super_tts_registry_types::manifest::{Device, TtsModel};
 
 /// The mock synthesizes 960 samples of s16le at 24 kHz.
 const MOCK_SAMPLES: usize = 960;
@@ -47,16 +47,11 @@ fn definition() -> ModelDefinition {
         primary_language: "en".into(),
         supported_languages: vec!["en".into()],
         estimated_vram_bytes: 0,
-        max_input_chars: None,
         processing_interval: Duration::from_millis(0),
         supported_devices: vec![Device::None],
-        voice_kinds: vec![VoiceKind::Preset],
-        default_voice: None,
-        clone_ref_seconds: None,
-        clone_needs_transcript: false,
-        voices: Vec::new(),
         realtime: false,
         provider: None,
+        product: TtsModel::default(),
     }
 }
 
@@ -338,7 +333,7 @@ fn loaded_model_with_limit(limit: u32) -> Option<SharedLoadedModel> {
     let backend = WasmBackend::new(&path, Vec::new(), "mock".to_string(), Vec::new())
         .expect("load mock backend");
     let mut def = definition();
-    def.max_input_chars = Some(limit);
+    def.product.max_input_chars = Some(limit);
     Some(Arc::new(tokio::sync::RwLock::new(Some(LoadedModel::new(
         def,
         Box::new(backend),

@@ -288,12 +288,14 @@ mod tests {
             source: source.to_string(),
             id: None,
             name: "Piper".to_string(),
+            description: String::new(),
             version: version.to_string(),
             kind: "subprocess".to_string(),
             entrypoint: "super-tts-backend-piper".to_string(),
             allowed_hosts: Vec::new(),
             secrets: Vec::new(),
             options: Vec::new(),
+            capabilities: Default::default(),
             models: Vec::new(),
         }
     }
