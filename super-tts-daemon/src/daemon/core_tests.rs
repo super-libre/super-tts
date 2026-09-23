@@ -18,20 +18,65 @@ fn make_request(command: &str) -> DaemonRequest {
     }
 }
 
+/// Unloading mid-utterance stops the utterance. It used to be refused with
+/// `speech_in_progress`, which left the audio playing after the user pressed
+/// the button meant to make it stop.
 #[tokio::test]
-async fn guard_model_mutation_flags_speech_in_progress() {
-    use super_tts_shared::models::protocol::ErrorCode;
+async fn unloading_the_model_stops_what_it_is_saying() {
     let daemon = test_daemon().await;
-    // Idle: the mutation is allowed.
-    assert!(daemon.guard_model_mutation("switch models").is_none());
-    // Speaking: the unified guard rejects with the machine-readable
-    // SpeechInProgress code, independent of the human `action` wording.
-    let _claim = daemon.speech.claim_for_test("u-guard");
+    seed_recording_model(&daemon, "m", "github.com/example/stop").await;
+    let _claim = daemon.speech.claim_for_test("u-unload");
+
+    let resp = daemon.handle_unload_active_model().await;
+
+    assert_eq!(resp.status, "success", "{resp:?}");
+    assert!(
+        !daemon.is_busy(),
+        "the utterance was stopped, not waited on"
+    );
+    assert!(
+        daemon.model.read().await.is_none(),
+        "and the model unloaded"
+    );
+}
+
+/// Deselecting the backend is the same: the user's action wins.
+#[tokio::test]
+async fn deselecting_the_backend_stops_what_it_is_saying() {
+    let daemon = test_daemon().await;
+    seed_recording_model(&daemon, "m", "github.com/example/stop").await;
+    let _claim = daemon.speech.claim_for_test("u-deselect");
+
+    let resp = daemon.handle_clear_active_backend().await;
+
+    assert_eq!(resp.status, "success", "{resp:?}");
+    assert!(
+        !daemon.is_busy(),
+        "the utterance was stopped, not waited on"
+    );
+    assert!(
+        daemon.model.read().await.is_none(),
+        "and the model unloaded"
+    );
+}
+
+/// Asking for the model that is already loaded changes nothing, so it must not
+/// interrupt the model either.
+#[tokio::test]
+async fn switching_to_the_loaded_model_leaves_its_speech_alone() {
+    let daemon = test_daemon().await;
+    seed_recording_model(&daemon, "m", "github.com/example/stop").await;
+    let _claim = daemon.speech.claim_for_test("u-noop");
+
     let resp = daemon
-        .guard_model_mutation("switch models")
-        .expect("mutation must be rejected while speaking");
-    assert_eq!(resp.status, "error");
-    assert_eq!(resp.error_code, Some(ErrorCode::SpeechInProgress));
+        .handle_set_model("m".to_string(), "github.com/example/stop".to_string())
+        .await;
+
+    assert_eq!(resp.status, "success", "{resp:?}");
+    assert!(
+        daemon.is_busy(),
+        "a no-op switch does not stop the utterance"
+    );
 }
 
 /// `handle_status` reports `busy` from the speech engine's in-flight slot, so a

@@ -118,6 +118,9 @@ impl SuperTTSDaemon {
             return self.update_device_preference_only(&device).await;
         }
 
+        // Only here, where the model is really reloaded: every return above
+        // leaves it running, so none of them has cause to interrupt it.
+        self.stop_speech_for("switch devices").await;
         info!(
             "Starting device switch from {current_preferred} to {device} (will reload model: {model_to_reload})"
         );
@@ -250,12 +253,6 @@ impl SuperTTSDaemon {
             info!(
                 "Device preference is set to {device} but actual device is {current_actual} - forcing model reload"
             );
-        }
-
-        // Prevent device switching during active recording.
-        if let Some(resp) = self.guard_model_mutation("switch devices") {
-            warn!("Device switch rejected - recording in progress");
-            return Err(resp);
         }
 
         Ok(device)
@@ -762,11 +759,8 @@ impl SuperTTSDaemon {
         }
 
         // Loading and unloading a backend instance mid-utterance is the same
-        // hazard as switching models mid-utterance.
-        if let Some(resp) = self.guard_model_mutation("switch devices") {
-            warn!("Device change rejected - speech in progress");
-            return resp;
-        }
+        // as switching models mid-utterance: the utterance stops.
+        self.stop_speech_for("switch devices").await;
 
         info!("Starting device switch for {name} from {current} to {device}");
         self.reload_onto_device(

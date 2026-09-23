@@ -427,7 +427,8 @@ impl SuperTTSDaemon {
     /// Derived from the speech engine's slot rather than mirrored into a
     /// separate flag. The STT build carried a `busy: RwLock<bool>` alongside
     /// the recording task; two records of one fact drift, and the one that
-    /// gates model mutations is the one you cannot afford to have stale.
+    /// `/status` reports and uninstall waits on is the one you cannot afford
+    /// to have stale.
     #[must_use]
     pub fn is_busy(&self) -> bool {
         self.speech.current().is_some()

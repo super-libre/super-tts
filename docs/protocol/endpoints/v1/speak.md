@@ -14,10 +14,10 @@ utterance to its end, subscribe to
 one request, which is what a status widget actually needs.
 
 **One utterance at a time, newest wins.** A `/speak` while something is already
-playing interrupts it — that is what "speak this instead" means, and it is why
-this endpoint is *not* guarded by `speech_in_progress`. Only swapping the model
-out from under live synthesis is refused (see
-[`/pipeline/{stage}/model`](./pipeline/model.md)).
+playing interrupts it — that is what "speak this instead" means. Taking the
+model away does the same: unloading it, switching it, reloading it, moving it
+to another device or changing its backend stops whatever it was saying rather
+than waiting for it (see [`/pipeline/{stage}/model`](./pipeline/model.md)).
 
 To stream text in as it is generated — an LLM reply spoken as it arrives —
 use [`GET /speak/stream`](./speak/stream.md) instead. This endpoint takes

@@ -115,10 +115,10 @@ Content-Type: application/json
 
 Selecting a **different** backend drops the model with it — the name belonged
 to the old backend, and two backends serving the same model name do not serve
-the same model — and switches the stage off until a model is chosen. The daemon
-is then "backend selected, no model loaded"; at startup such a state comes up
-idle, with nothing auto-loaded. Re-selecting the backend already there changes
-nothing.
+the same model — and switches the stage off until a model is chosen, stopping
+anything that model was saying. The daemon is then "backend selected, no model
+loaded"; at startup such a state comes up idle, with nothing auto-loaded.
+Re-selecting the backend already there changes nothing and interrupts nothing.
 
 **Errors:**
 
@@ -127,14 +127,13 @@ nothing.
 | 404  | `unknown_stage`      | No such position in the pipeline                                 |
 | 400  | `invalid_value`      | `source` missing or empty                                        |
 | 400  | `invalid_backend`    | No installed backend with that `source` serves this stage's role, or its files are missing/invalid |
-| 409  | `speech_in_progress` | An utterance or streaming session is active; stop it first       |
 | 401  | `invalid_session`    | Token unknown / expired / `exe_changed`                          |
 | 403  | `scope_denied`       | Token lacks the `settings` scope                                 |
 
 ## `DELETE /pipeline/{stage}`
 
-Empty the stage: unload the model, and forget it along with the backend. For
-stage 1 that returns the daemon to fully idle — [`POST /speak`](../speak.md)
+Empty the stage: stop anything being spoken, unload the model, and forget it
+along with the backend. For stage 1 that returns the daemon to fully idle — [`POST /speak`](../speak.md)
 answers `409 model_not_loaded` until a backend and a model are chosen again.
 
 Keeping the selection and only stopping the model is
@@ -159,5 +158,4 @@ Content-Type: application/json
 { "status": "success" }
 ```
 
-**Errors:** `404 unknown_stage`, `409 speech_in_progress`, plus the auth errors
-above.
+**Errors:** `404 unknown_stage`, plus the auth errors above.

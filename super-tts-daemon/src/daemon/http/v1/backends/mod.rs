@@ -184,11 +184,10 @@ pub(crate) async fn uninstall_backend(
     // carries is the same `source` it always was.
     let source = decode_source(&source_encoded);
 
-    // Refuse to mutate the backend set mid-utterance / mid-stream — the same
-    // guard the model/backend switch commands use. Removing a backend (and the
-    // `refresh_backends` that follows) under an in-flight session would strand
-    // state the session still depends on.
-    if s.daemon.switch_guard().is_some() {
+    // Refuse to mutate the backend set mid-utterance / mid-stream. Removing a
+    // backend (and the `refresh_backends` that follows) under an in-flight
+    // session would strand state the session still depends on.
+    if s.daemon.is_busy() {
         return registry_error(StatusCode::CONFLICT, "backend_busy");
     }
 

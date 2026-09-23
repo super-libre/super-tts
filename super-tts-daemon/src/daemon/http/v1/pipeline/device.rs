@@ -142,8 +142,9 @@ pub(crate) struct SetDeviceBody {
     summary = "Set a model's device preference",
     description = "\
 Chooses the accelerator this model runs on. If it is the model the stage is currently \
-running, it is reloaded onto the new device before the response is sent; otherwise the \
-choice is recorded and the model's next load picks it up. Either way the choice is the \
+running, it is reloaded onto the new device before the response is sent, stopping \
+anything it was saying; otherwise the choice is recorded and the model's next load \
+picks it up. Either way the choice is the \
 model's own from then on, remembered per `(source, model)`.
 
 A reload that fails puts the model back on the device it had, leaves the setting as it \
@@ -170,7 +171,6 @@ no speech. A client that wants to offer only what will work narrows its picker t
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such stage (`unknown_stage`).", body = ErrorEnvelope),
-        (status = 409, description = "A reload is needed and an utterance or streaming session is in flight (`speech_in_progress`).", body = ErrorEnvelope),
         (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
         (status = 500, description = "The reload failed; the model was put back on the device it had and the setting is unchanged.", body = ErrorEnvelope),
     ),

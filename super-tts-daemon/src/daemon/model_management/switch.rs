@@ -46,32 +46,28 @@ impl SuperTTSDaemon {
         }
     }
 
-    /// Reject a model/backend/device mutation while an utterance is in flight.
-    /// `action` names the operation for the human `message` (e.g. "change the
-    /// backend", "switch models"); the machine-readable identity is always
-    /// [`ErrorCode::SpeechInProgress`], so callers and clients never depend on
-    /// the wording. Real-time (WebSocket) sessions are guarded separately —
-    /// they hold the `model` read lock for their duration, so a mutation's
-    /// write-lock acquisition already serializes behind them.
+    /// Stop the utterance in flight, if any, before taking the model down.
     ///
-    /// Note that `POST /speak` is deliberately *not* guarded: a new utterance
-    /// preempts the current one, which is what a user pressing "speak this
-    /// instead" means. Only swapping the model out from under live synthesis
-    /// is refused. Returns `None` when idle.
-    pub(crate) fn guard_model_mutation(&self, action: &str) -> Option<DaemonResponse> {
-        if self.is_busy() {
-            return Some(DaemonResponse::error_with_code(
-                ErrorCode::SpeechInProgress,
-                &format!("Cannot {action} while speaking. Please wait for it to finish."),
-            ));
+    /// Called by every user action that unloads or replaces the loaded model:
+    /// unloading it, deselecting or changing its backend, switching models or
+    /// devices, and reloading. These used to be refused while anything was
+    /// speaking (`409 speech_in_progress`, "stop it and retry"), which left the
+    /// audio playing after an Unload — the button a user reaches for to make
+    /// the machine stop — so the refusal read as the button not working. The
+    /// latest action wins instead, the same way a new `POST /speak` supersedes
+    /// the one before it: the utterance is cancelled, `speaking_state` goes
+    /// false, and the mutation goes ahead.
+    ///
+    /// Cancelling first also frees the `model` lock sooner. Synthesis holds its
+    /// read half for a chunk at a time, and a cancelled chunk lets go at the
+    /// backend's next frame instead of at the end of the chunk, so the write
+    /// the mutation takes next is not left waiting on speech nobody wants.
+    ///
+    /// `action` is for the log only.
+    pub(crate) async fn stop_speech_for(&self, action: &str) {
+        if let Some(id) = self.speech.cancel().await {
+            info!("stopped utterance {id} to {action}");
         }
-        None
-    }
-
-    /// Backend-mutation guard (`change the backend`) shared by the
-    /// set/clear/unload active-backend commands and the HTTP uninstall handler.
-    pub(crate) fn switch_guard(&self) -> Option<DaemonResponse> {
-        self.guard_model_mutation("change the backend")
     }
 
     /// `source` (repo id) of the currently selected backend, or `None` when
@@ -116,9 +112,6 @@ impl SuperTTSDaemon {
     /// the loaded model. Does not load a model — only `set_model` can fail at
     /// runtime.
     pub async fn handle_set_active_backend(&self, source: String) -> DaemonResponse {
-        if let Some(resp) = self.switch_guard() {
-            return resp;
-        }
         let dir_name = {
             let backends = self.backends.read().await;
             backends
@@ -139,6 +132,7 @@ impl SuperTTSDaemon {
         // is idle. Same-source re-selects don't disturb a loaded model.
         let prev_dir = self.active_backend.read().await.clone();
         if prev_dir.as_deref() != Some(dir_name.as_str()) {
+            self.stop_speech_for("change the backend").await;
             self.unload_current_model().await;
         }
 
@@ -177,9 +171,7 @@ impl SuperTTSDaemon {
 
     /// Clear the active backend: unload any model and return to idle.
     pub async fn handle_clear_active_backend(&self) -> DaemonResponse {
-        if let Some(resp) = self.switch_guard() {
-            return resp;
-        }
+        self.stop_speech_for("deselect the backend").await;
         self.unload_current_model().await;
         *self.active_backend.write().await = None;
         self.config.write().await.clear_active_backend();
@@ -318,10 +310,6 @@ impl SuperTTSDaemon {
     }
 
     async fn preflight_model_switch(&self, model: &str, source: &str) -> Option<DaemonResponse> {
-        if let Some(resp) = self.guard_model_mutation("switch models") {
-            warn!("Model switch rejected - recording in progress");
-            return Some(resp);
-        }
         if let Some(loaded) = self.model.read().await.as_ref()
             && loaded.definition.name == model
             && (source.is_empty() || loaded.definition.source == source)
@@ -335,6 +323,9 @@ impl SuperTTSDaemon {
             );
         }
 
+        // After the no-op check: asking for the model already loaded does not
+        // interrupt it.
+        self.stop_speech_for("switch models").await;
         None
     }
 }

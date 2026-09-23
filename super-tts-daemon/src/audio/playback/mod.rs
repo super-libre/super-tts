@@ -505,8 +505,8 @@ impl Playback {
     /// Returns `false` if the device stopped consuming for `stall_timeout` with
     /// audio still queued — a disconnected sink, a suspended host. The caller
     /// gets to decide what to do about it, but it does not wait forever: the
-    /// utterance slot is what gates loading a different model, and a stalled
-    /// device must not lock the daemon out of it for good.
+    /// utterance slot is what reports the daemon busy, and a stalled device
+    /// must not keep it busy for good.
     pub async fn wait_for_playout(&self, stall_timeout: Duration) -> bool {
         let format = self.device;
         let per_ms = u64::from(format.sample_rate) * u64::from(format.channels.max(1)) / 1000;
