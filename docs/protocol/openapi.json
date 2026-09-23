@@ -6736,6 +6736,10 @@
           "compatible": {
             "type": "boolean"
           },
+          "needs_client_update": {
+            "type": "boolean",
+            "description": "Whether the block is \"this daemon is too old\" rather than \"this\nmachine cannot run it\".\n\nThe two are hidden differently. A host that lacks the right GPU will\nnever run the asset, so Browse tucks it behind \"Show incompatible\"; a\ndaemon one version behind is a thing the user can fix in a minute,\nand hiding it hides the only notice they would get. `false` on an older\ndaemon that does not send the field, which lists as it always did."
+          },
           "reason": {
             "type": [
               "string",
@@ -6920,6 +6924,13 @@
           }
         }
       },
+      "Forge": {
+        "type": "string",
+        "description": "The forge hosting a backend's releases.",
+        "enum": [
+          "github"
+        ]
+      },
       "GpuHostInfo": {
         "type": "object",
         "description": "Host-wide GPU toolchain/driver versions reported on\n[`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md), independent\nof any one GPU. Each field is `null` when that accelerator's runtime isn't\ndetected on this host — see `docs/protocol/endpoints/v1/gpu_info.md` for\nwhat presence and absence do and don't imply for each one.",
@@ -7057,7 +7068,7 @@
             }
           }
         ],
-        "description": "The browse-only model subset the catalog and host-compatibility filter need\nbefore download. The authoritative manifest (languages, files, …) ships as\nthe pinned `manifest` asset and is installed verbatim — it is not re-encoded\nhere. Also the leaf type for `/registry/backends` (`RegistryModel`)."
+        "description": "The browse-only model subset the catalog and host-compatibility filter need\nbefore download. The authoritative manifest (languages, files, …) ships as\nthe pinned `manifest` asset and is installed verbatim — it is not re-encoded\nhere. Also the leaf type of a daemon's registry listing (`RegistryModel`)."
       },
       "IndexOption": {
         "type": "object",
@@ -7169,6 +7180,17 @@
               "repo_url"
             ],
             "properties": {
+              "forge": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Forge",
+                    "description": "Which forge API to speak. Optional: the daemon reads the host out\nof `repo_url` when it is absent, and only a host no adapter serves\nneeds it spelled out."
+                  }
+                ]
+              },
               "repo_url": {
                 "type": "string"
               }
@@ -7659,7 +7681,8 @@
             "$ref": "#/components/schemas/Compatibility"
           },
           "contract": {
-            "type": "string"
+            "type": "string",
+            "description": "The contract generation the backend declares, as published. Carried\nas a string so a client lists an entry whose generation it does not\nknow; `compatibility` says whether this daemon can drive it."
           },
           "description": {
             "type": [
@@ -7691,6 +7714,13 @@
           },
           "license": {
             "type": "string"
+          },
+          "min_client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release of the daemon's product that first understood `contract`,\nas stamped by the indexer. `None` for an index that predates the\nstamp."
           },
           "models": {
             "type": "array",

@@ -110,6 +110,7 @@ fn map_entry(
         license: entry.license.clone(),
         kind: entry.kind.clone(),
         contract: entry.contract.clone(),
+        min_client: entry.min_client.clone(),
         allowed_hosts: entry.allowed_hosts.clone(),
         online: entry.online,
         supports_gpu: entry.supports_gpu,
@@ -228,6 +229,10 @@ pub(crate) async fn list_registry_backends(
             compatible,
             selected_asset,
             reason,
+            // The compatibility check does not yet tell "this daemon is too
+            // old" from "this machine cannot run it", so every block reads as
+            // the second, as it always has.
+            needs_client_update: false,
         };
 
         result.push(map_entry(
