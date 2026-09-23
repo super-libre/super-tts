@@ -42,8 +42,21 @@ impl Drop for DaemonGuard {
     }
 }
 
+fn next_test_uniq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static UNIQ: AtomicU64 = AtomicU64::new(0);
+    UNIQ.fetch_add(1, Ordering::Relaxed)
+}
+
 async fn start_daemon() -> (DaemonGuard, PathBuf) {
-    let unique = format!("tts-speak-stream-{}", std::process::id());
+    // Per test, not per process: the tests in this file run in parallel in
+    // one process, and on a shared socket path the first to finish kills the
+    // daemon the other is still talking to.
+    let unique = format!(
+        "tts-speak-stream-{}-{}",
+        std::process::id(),
+        next_test_uniq()
+    );
     let tmp = std::env::temp_dir();
     let http_socket = tmp.join(format!("{unique}-http.sock"));
     let config_home = tmp.join(format!("{unique}-config"));
