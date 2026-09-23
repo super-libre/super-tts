@@ -571,7 +571,7 @@ mod scope_conformance {
     /// so this pins the two lists together (Tier 2 #8).
     #[test]
     fn every_known_scope_has_specific_permissions() {
-        for scope in super_tts_shared::daemon::scopes::KNOWN_SCOPES {
+        for scope in super_tts_shared::daemon::scopes::known_scopes() {
             assert!(
                 !std::ptr::eq(
                     permissions_for_scope(scope),
