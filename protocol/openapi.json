@@ -1394,7 +1394,7 @@
           "pipeline"
         ],
         "summary": "Select the backend filling a stage (scope: settings)",
-        "description": "Points a stage at an installed backend. Validates that its files are on disk and that it serves this stage's role; it does not load anything, so it cannot fail for the runtime reasons a load can. Run a model with `POST /pipeline/{stage}/model` afterwards.\n\nFill the picker behind this from `GET /pipeline/{stage}/backend/list` rather than from `GET /backend/list`: a backend serving nothing this stage can run is refused here, and offering one hands the user an error to discover by choosing it.\n\nSelecting a *different* backend drops the model with it — a model name belongs to the backend that served it, and two backends serving the same name do not serve the same model — and switches the stage off until a model is chosen.",
+        "description": "Points a stage at an installed backend. Validates that its files are on disk and that it serves this stage's role; it does not load anything, so it cannot fail for the runtime reasons a load can. Run a model with `POST /pipeline/{stage}/model` afterwards.\n\nFill the picker behind this from `GET /pipeline/{stage}/backend/list` rather than from `GET /backend/list`: a backend serving nothing this stage can run is refused here, and offering one hands the user an error to discover by choosing it.\n\nSelecting a *different* backend drops the model with it — a model name belongs to the backend that served it, and two backends serving the same name do not serve the same model — and switches the stage off until a model is chosen, stopping anything that model was saying. Re-selecting the backend already there changes nothing.",
         "operationId": "set_stage_backend",
         "parameters": [
           {
@@ -1471,16 +1471,6 @@
               }
             }
           },
-          "409": {
-            "description": "An utterance or streaming session is in flight (`speech_in_progress`); stop it and retry.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "429": {
             "description": "Per-client rate limit hit; back off and retry.",
             "content": {
@@ -1505,7 +1495,7 @@
           "pipeline"
         ],
         "summary": "Empty a stage (scope: settings)",
-        "description": "Deselects the stage's backend, unloading its model first if one is up, and forgets both. Emptying stage 1 returns the daemon to idle: `POST /speak` answers `409 model_not_loaded` until a backend and a model are chosen again.\n\nThis is not what a Stop button should call. Freeing the device memory while keeping the choice the user made is `DELETE /pipeline/{stage}/model`, which leaves the backend selected so the same model — or another of its models — can be loaded again without picking it a second time.",
+        "description": "Deselects the stage's backend, unloading its model first if one is up, and forgets both. Anything being spoken is stopped. Emptying stage 1 returns the daemon to idle: `POST /speak` answers `409 model_not_loaded` until a backend and a model are chosen again.\n\nThis is not what a Stop button should call. Freeing the device memory while keeping the choice the user made is `DELETE /pipeline/{stage}/model`, which leaves the backend selected so the same model — or another of its models — can be loaded again without picking it a second time.",
         "operationId": "clear_stage_backend",
         "parameters": [
           {
@@ -1554,16 +1544,6 @@
           },
           "404": {
             "description": "No such stage (`unknown_stage`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "An utterance or streaming session is in flight (`speech_in_progress`); stop it and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1855,7 +1835,7 @@
           "pipeline"
         ],
         "summary": "Run a model in a stage (scope: settings)",
-        "description": "Loads `model` into the stage, downloading it first if this machine does not have it yet. That download can be long, so the switch runs on: watch the `download_progress` and `daemon_status_changed` topics on `GET /events`, or poll `GET /pipeline/{stage}/model` and read `switch`. Abandon it with `POST /pipeline/{stage}/model/cancel`.\n\nOmitting `source` uses the backend already selected for the stage; naming one also selects that backend, so a client can go straight from a flat model picker to a load. Two backends may serve the same model name, which is why an omitted `source` resolves against the stage's selection rather than by scanning for whoever serves the name.\n\nA load that fails leaves the backend selected and *no* model loaded. The daemon does not quietly restore whatever was running before, because a client that asked for a switch and was told it succeeded would then be speaking in the old voice.\n\nThe model loads on its own device — set that first with `POST /pipeline/{stage}/model/{model}/device`, which is also how to move a model that is already running.",
+        "description": "Loads `model` into the stage, downloading it first if this machine does not have it yet. That download can be long, so the switch runs on: watch the `download_progress` and `daemon_status_changed` topics on `GET /events`, or poll `GET /pipeline/{stage}/model` and read `switch`. Abandon it with `POST /pipeline/{stage}/model/cancel`.\n\nOmitting `source` uses the backend already selected for the stage; naming one also selects that backend, so a client can go straight from a flat model picker to a load. Two backends may serve the same model name, which is why an omitted `source` resolves against the stage's selection rather than by scanning for whoever serves the name.\n\nA load that fails leaves the backend selected and *no* model loaded. The daemon does not quietly restore whatever was running before, because a client that asked for a switch and was told it succeeded would then be speaking in the old voice.\n\nAnything being spoken is stopped first: the switch is the newer request, the same way a second `POST /speak` supersedes the first. Asking for the model that is already running changes nothing and interrupts nothing.\n\nThe model loads on its own device — set that first with `POST /pipeline/{stage}/model/{model}/device`, which is also how to move a model that is already running.",
         "operationId": "set_stage_model",
         "parameters": [
           {
@@ -1933,7 +1913,7 @@
             }
           },
           "409": {
-            "description": "This stage already has a load in flight (`switch_in_progress`), or an utterance is being spoken (`speech_in_progress`).",
+            "description": "This stage already has a load in flight (`switch_in_progress`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1966,7 +1946,7 @@
           "pipeline"
         ],
         "summary": "Stop a stage's model (scope: settings)",
-        "description": "Unloads the model, freeing its device memory, and leaves the backend selected so another of its models — or the same one, on another device — can be loaded without re-selecting it.\n\nThis is what a Stop button should call. Emptying the stage entirely, forgetting the backend along with the model, is `DELETE /pipeline/{stage}`.",
+        "description": "Unloads the model, freeing its device memory, and leaves the backend selected so another of its models — or the same one, on another device — can be loaded without re-selecting it.\n\nThis is what a Stop button should call, and it stops whatever is being spoken first — a Stop that left the audio playing would not be one. Emptying the stage entirely, forgetting the backend along with the model, is `DELETE /pipeline/{stage}`.",
         "operationId": "clear_stage_model",
         "parameters": [
           {
@@ -2015,16 +1995,6 @@
           },
           "404": {
             "description": "No such stage (`unknown_stage`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "An utterance or streaming session is in flight (`speech_in_progress`); stop it and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2235,7 +2205,7 @@
           "pipeline"
         ],
         "summary": "Re-instantiate a stage's model in place (scope: settings)",
-        "description": "Tears the model down and brings it back up as the same `(model, source)` on the same device, so it picks up a changed secret or option — an API key written through `/backend/{backend_id}/secret/{name}`, say — without the client unloading and reloading by hand.\n\nSynchronous, unlike `POST /pipeline/{stage}/model`: the response is sent once the model is back up, and the daemon then broadcasts the same `model_switched` and `ready` events a completed switch does, so subscribers converge on one state either way. Nothing is re-downloaded; the files on disk are unchanged, and a stage with nothing loaded answers `200` having done nothing.\n\nRarely needed by hand — writing a backend option or secret already reloads every stage running a model from that backend.",
+        "description": "Tears the model down and brings it back up as the same `(model, source)` on the same device, so it picks up a changed secret or option — an API key written through `/backend/{backend_id}/secret/{name}`, say — without the client unloading and reloading by hand.\n\nSynchronous, unlike `POST /pipeline/{stage}/model`: the response is sent once the model is back up, and the daemon then broadcasts the same `model_switched` and `ready` events a completed switch does, so subscribers converge on one state either way. Nothing is re-downloaded; the files on disk are unchanged, and a stage with nothing loaded answers `200` having done nothing. Anything the model is saying is stopped first, since the instance saying it is the one being torn down.\n\nRarely needed by hand — writing a backend option or secret already reloads every stage running a model from that backend.",
         "operationId": "reload_stage_model",
         "parameters": [
           {
@@ -2284,16 +2254,6 @@
           },
           "404": {
             "description": "No such stage (`unknown_stage`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "A daemon-driven utterance is in flight (`speech_in_progress`); stop it and retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2438,7 +2398,7 @@
           "pipeline"
         ],
         "summary": "Set a model's device preference (scope: settings)",
-        "description": "Chooses the accelerator this model runs on. If it is the model the stage is currently running, it is reloaded onto the new device before the response is sent; otherwise the choice is recorded and the model's next load picks it up. Either way the choice is the model's own from then on, remembered per `(source, model)`.\n\nA reload that fails puts the model back on the device it had, leaves the setting as it was, and answers `500` with the reason — a choice is not recorded against a load that did not happen. Asking for the device a loaded model is already on reloads nothing, but a `gpu` preference that fell back to the CPU *is* retried, which is what tracking the preference and the resolved accelerator separately is for.\n\nAsking for `gpu` on a host that cannot provide one is not an error: the load falls back to the CPU and says so in `resolved_accel`, because slower speech is better than no speech. A client that wants to offer only what will work narrows its picker to `GET /pipeline/{stage}/model/{model}/device/list`.",
+        "description": "Chooses the accelerator this model runs on. If it is the model the stage is currently running, it is reloaded onto the new device before the response is sent, stopping anything it was saying; otherwise the choice is recorded and the model's next load picks it up. Either way the choice is the model's own from then on, remembered per `(source, model)`.\n\nA reload that fails puts the model back on the device it had, leaves the setting as it was, and answers `500` with the reason — a choice is not recorded against a load that did not happen. Asking for the device a loaded model is already on reloads nothing, but a `gpu` preference that fell back to the CPU *is* retried, which is what tracking the preference and the resolved accelerator separately is for.\n\nAsking for `gpu` on a host that cannot provide one is not an error: the load falls back to the CPU and says so in `resolved_accel`, because slower speech is better than no speech. A client that wants to offer only what will work narrows its picker to `GET /pipeline/{stage}/model/{model}/device/list`.",
         "operationId": "set_model_device",
         "parameters": [
           {
@@ -2516,16 +2476,6 @@
           },
           "404": {
             "description": "No such stage (`unknown_stage`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "A reload is needed and an utterance or streaming session is in flight (`speech_in_progress`).",
             "content": {
               "application/json": {
                 "schema": {
