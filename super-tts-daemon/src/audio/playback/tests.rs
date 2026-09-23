@@ -14,6 +14,9 @@ const DEVICE: DeviceFormat = DeviceFormat {
     channels: 1,
 };
 
+/// The stop flag of an utterance nobody stops, for tests about everything else.
+static LIVE: AtomicBool = AtomicBool::new(false);
+
 fn params(sample_rate: u32, channels: u16) -> AudioParams {
     AudioParams {
         sample_rate,
@@ -55,7 +58,9 @@ async fn silence_is_rendered_before_anything_is_queued() {
 async fn nothing_is_heard_until_the_prebuffer_fills() {
     let p = Playback::detached(DEVICE);
     // 10 ms at 48 kHz — well under the 120 ms prebuffer.
-    p.push(&vec![1.0_f32; 480], params(48000, 1)).await.unwrap();
+    p.push(&vec![1.0_f32; 480], params(48000, 1), &LIVE)
+        .await
+        .unwrap();
     assert_eq!(p.state(), State::Prebuffering);
     let out = drain(&p, 480, 240);
     assert!(
@@ -76,7 +81,7 @@ async fn nothing_is_heard_until_the_prebuffer_fills() {
 async fn playback_starts_once_the_prebuffer_threshold_is_met() {
     let p = Playback::detached(DEVICE);
     // 200 ms > the 120 ms threshold.
-    p.push(&vec![0.5_f32; 9600], params(48000, 1))
+    p.push(&vec![0.5_f32; 9600], params(48000, 1), &LIVE)
         .await
         .unwrap();
     assert_eq!(p.state(), State::Playing);
@@ -101,14 +106,14 @@ async fn playback_starts_once_the_prebuffer_threshold_is_met() {
 async fn separately_synthesized_chunks_join_without_a_step() {
     let p = Playback::detached(DEVICE);
     // Two DC blocks at opposite levels: butted together they step by 2.0.
-    p.push(&vec![1.0_f32; 24000], params(48000, 1))
+    p.push(&vec![1.0_f32; 24000], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.end_chunk().await;
-    p.push(&vec![-1.0_f32; 24000], params(48000, 1))
+    p.end_chunk(&LIVE).await;
+    p.push(&vec![-1.0_f32; 24000], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
 
     let out = drain(&p, 48000, 512);
     let step = max_step(&out);
@@ -128,10 +133,14 @@ async fn continuity_survives_resampling_from_the_backend_rate() {
             .map(|i| (i as f32 * 0.02 + phase).sin() * 0.5)
             .collect()
     };
-    p.push(&sine(12000, 0.0), params(24000, 1)).await.unwrap();
-    p.end_chunk().await;
-    p.push(&sine(12000, 1.0), params(24000, 1)).await.unwrap();
-    p.finish().await;
+    p.push(&sine(12000, 0.0), params(24000, 1), &LIVE)
+        .await
+        .unwrap();
+    p.end_chunk(&LIVE).await;
+    p.push(&sine(12000, 1.0), params(24000, 1), &LIVE)
+        .await
+        .unwrap();
+    p.finish(&LIVE).await;
 
     let out = drain(&p, 40000, 512);
     let step = max_step(&out);
@@ -153,10 +162,10 @@ async fn a_mono_backend_is_spread_across_a_stereo_device() {
     };
     let p = Playback::detached(stereo);
     // 200 ms of mono, which must become 200 ms of stereo frames.
-    p.push(&vec![0.25_f32; 9600], params(48000, 1))
+    p.push(&vec![0.25_f32; 9600], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
 
     let out = drain(&p, 19200, 512);
     assert_eq!(out.len(), 19200, "200 ms of mono becomes 200 ms of stereo");
@@ -181,7 +190,7 @@ async fn a_mono_backend_is_spread_across_a_stereo_device() {
 #[tokio::test]
 async fn an_underrun_renders_silence_and_is_counted() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![1.0_f32; 9600], params(48000, 1))
+    p.push(&vec![1.0_f32; 9600], params(48000, 1), &LIVE)
         .await
         .unwrap();
     assert_eq!(p.state(), State::Playing);
@@ -208,10 +217,10 @@ async fn an_underrun_renders_silence_and_is_counted() {
 #[tokio::test]
 async fn draining_past_the_end_is_not_counted_as_an_underrun() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![1.0_f32; 9600], params(48000, 1))
+    p.push(&vec![1.0_f32; 9600], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
     let _ = drain(&p, 19200, 4800);
     assert_eq!(p.stats().underrun_samples, 0);
     assert_eq!(p.state(), State::Idle, "the stream idles once drained");
@@ -221,11 +230,11 @@ async fn draining_past_the_end_is_not_counted_as_an_underrun() {
 #[tokio::test]
 async fn an_utterance_shorter_than_the_prebuffer_still_plays() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![0.75_f32; 960], params(48000, 1))
+    p.push(&vec![0.75_f32; 960], params(48000, 1), &LIVE)
         .await
         .unwrap(); // 20 ms
     assert_eq!(p.state(), State::Prebuffering);
-    p.finish().await;
+    p.finish(&LIVE).await;
     assert_eq!(p.state(), State::Draining);
 
     let out = drain(&p, 960, 240);
@@ -238,7 +247,7 @@ async fn an_utterance_shorter_than_the_prebuffer_still_plays() {
 #[tokio::test]
 async fn cancel_goes_silent_within_one_buffer() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![1.0_f32; 48000], params(48000, 1))
+    p.push(&vec![1.0_f32; 48000], params(48000, 1), &LIVE)
         .await
         .unwrap();
     assert_eq!(p.state(), State::Playing);
@@ -257,15 +266,15 @@ async fn cancel_goes_silent_within_one_buffer() {
 #[tokio::test]
 async fn a_cancelled_stream_accepts_a_new_utterance() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![1.0_f32; 48000], params(48000, 1))
+    p.push(&vec![1.0_f32; 48000], params(48000, 1), &LIVE)
         .await
         .unwrap();
     p.cancel();
 
-    p.push(&vec![-0.5_f32; 9600], params(48000, 1))
+    p.push(&vec![-0.5_f32; 9600], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
     let out = drain(&p, 9600, 480);
     assert!(
         out.iter().any(|s| (*s + 0.5).abs() < 1e-6),
@@ -277,10 +286,96 @@ async fn a_cancelled_stream_accepts_a_new_utterance() {
     );
 }
 
+/// The stop that did not stop. A producer running ahead of the speakers has a
+/// write waiting on a full ring, and emptying the ring used to hand that write
+/// the room to refill it: the listener heard the voice cut, then come back a
+/// ring's worth further on and carry on through the backlog.
+#[tokio::test]
+async fn a_cancel_is_not_undone_by_a_write_waiting_for_space() {
+    let p = Arc::new(Playback::detached(DEVICE));
+    let stop = Arc::new(AtomicBool::new(false));
+    let capacity = (DEVICE.sample_rate * RING_SECONDS) as usize;
+
+    // Five seconds into a two-second ring: the write fills it and waits.
+    let writer = tokio::spawn({
+        let p = Arc::clone(&p);
+        let stop = Arc::clone(&stop);
+        async move {
+            p.push(&vec![1.0_f32; 5 * 48000], params(48000, 1), &stop)
+                .await
+        }
+    });
+    for _ in 0..1000 {
+        if p.buffered() == capacity {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(
+        p.buffered(),
+        capacity,
+        "the write filled the ring and waits"
+    );
+    let _ = drain(&p, 24000, 480);
+
+    stop.store(true, Ordering::Relaxed);
+    p.cancel();
+    // Long enough for the waiting write to retry several times.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(p.buffered(), 0, "nothing was written after the cancel");
+    assert_eq!(p.state(), State::Idle);
+    let out = drain(&p, 4800, 480);
+    assert!(out.iter().all(|s| *s == 0.0), "and nothing more is heard");
+    let gave_up = tokio::time::timeout(Duration::from_millis(100), writer).await;
+    assert!(
+        matches!(gave_up, Ok(Ok(Ok(())))),
+        "the write dropped its remainder rather than waiting for room: {gave_up:?}"
+    );
+}
+
+/// A producer that learns of its stop late must not reach into the utterance
+/// that replaced it: a tail held back after the cancel would open the new one
+/// with a fragment of the old, and without the new one's fade-in.
+#[tokio::test]
+async fn a_stopped_utterance_leaves_nothing_for_the_next() {
+    let p = Playback::detached(DEVICE);
+    let old = AtomicBool::new(false);
+    p.push(&vec![1.0_f32; 9600], params(48000, 1), &old)
+        .await
+        .unwrap();
+    old.store(true, Ordering::Relaxed);
+    p.cancel();
+
+    // The stopped utterance's next frame and its chunk boundary, arriving late.
+    p.push(&vec![1.0_f32; 9600], params(48000, 1), &old)
+        .await
+        .unwrap();
+    p.end_chunk(&old).await;
+    assert_eq!(p.buffered(), 0, "a stopped utterance writes nothing");
+    assert_eq!(p.state(), State::Idle);
+
+    let new = AtomicBool::new(false);
+    p.push(&vec![-0.5_f32; 9600], params(48000, 1), &new)
+        .await
+        .unwrap();
+    p.finish(&new).await;
+    let out = drain(&p, 9600, 480);
+    assert!(
+        out.iter().all(|s| *s <= 0.0),
+        "no sample of the stopped utterance reaches the next"
+    );
+    assert!(
+        out[0].abs() < 0.01,
+        "the next utterance opens on its own fade-in, got {}",
+        out[0]
+    );
+}
+
 #[tokio::test]
 async fn an_empty_chunk_is_a_no_op() {
     let p = Playback::detached(DEVICE);
-    p.push(&[], params(48000, 1)).await.unwrap();
+    p.push(&[], params(48000, 1), &LIVE).await.unwrap();
     assert_eq!(p.state(), State::Idle);
     assert_eq!(p.buffered(), 0);
 }
@@ -294,7 +389,7 @@ async fn a_full_ring_applies_backpressure_to_the_producer() {
 
     // Queue the ring full, then confirm a further push cannot complete while
     // nothing is draining it.
-    p.push(&vec![0.1_f32; capacity], params(48000, 1))
+    p.push(&vec![0.1_f32; capacity], params(48000, 1), &LIVE)
         .await
         .unwrap();
     let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples();
@@ -302,7 +397,7 @@ async fn a_full_ring_applies_backpressure_to_the_producer() {
 
     let pending = tokio::time::timeout(
         Duration::from_millis(50),
-        p.push(&vec![0.2_f32; 4800], params(48000, 1)),
+        p.push(&vec![0.2_f32; 4800], params(48000, 1), &LIVE),
     )
     .await;
     assert!(
@@ -318,7 +413,7 @@ async fn a_full_ring_applies_backpressure_to_the_producer() {
 #[tokio::test]
 async fn rendering_a_zero_length_buffer_is_harmless() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![1.0_f32; 9600], params(48000, 1))
+    p.push(&vec![1.0_f32; 9600], params(48000, 1), &LIVE)
         .await
         .unwrap();
     let mut empty: [f32; 0] = [];
@@ -335,10 +430,10 @@ async fn waiting_for_playout_outlasts_the_queued_audio() {
     let p = Arc::new(Playback::detached(DEVICE));
     // A second of audio — well under the ring, so `finish` returns with all of
     // it still unheard, exactly as a faster-than-realtime backend leaves it.
-    p.push(&vec![0.5_f32; 48000], params(48000, 1))
+    p.push(&vec![0.5_f32; 48000], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
     assert_eq!(p.state(), State::Draining);
 
     let waiting = tokio::spawn({
@@ -374,10 +469,10 @@ async fn waiting_for_playout_outlasts_the_queued_audio() {
 #[tokio::test]
 async fn a_stalled_device_gives_up_rather_than_waiting_forever() {
     let p = Playback::detached(DEVICE);
-    p.push(&vec![0.5_f32; 48000], params(48000, 1))
+    p.push(&vec![0.5_f32; 48000], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
 
     // Nothing renders, so nothing is ever consumed.
     let drained = tokio::time::timeout(
@@ -399,10 +494,10 @@ async fn a_stalled_device_gives_up_rather_than_waiting_forever() {
 #[tokio::test]
 async fn a_slow_but_moving_device_is_not_treated_as_stalled() {
     let p = Arc::new(Playback::detached(DEVICE));
-    p.push(&vec![0.5_f32; 48000], params(48000, 1))
+    p.push(&vec![0.5_f32; 48000], params(48000, 1), &LIVE)
         .await
         .unwrap();
-    p.finish().await;
+    p.finish(&LIVE).await;
 
     let feeding = tokio::spawn({
         let p = Arc::clone(&p);

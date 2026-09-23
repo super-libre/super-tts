@@ -30,6 +30,7 @@ pub mod mixer;
 pub mod ring;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -230,7 +231,6 @@ fn stream_error(
     seen: &std::sync::atomic::AtomicU64,
     error: &cpal::StreamError,
 ) {
-    use std::sync::atomic::Ordering;
     let count = seen.fetch_add(1, Ordering::Relaxed) + 1;
     let idle = shared.try_lock().map(|guard| guard.state == State::Idle);
     if idle == Some(true) {
@@ -394,9 +394,18 @@ impl Playback {
     /// backpressure that keeps a fast backend from buffering an entire article
     /// ahead of playback.
     ///
+    /// `cancelled` is the utterance's own stop flag, and once it is set nothing
+    /// more is written — including the rest of a write already waiting for
+    /// space. See [`cancel`](Self::cancel) for why the pipeline has to know.
+    ///
     /// # Errors
     /// Returns an error if resampling fails.
-    pub async fn push(&self, samples: &[f32], params: AudioParams) -> Result<()> {
+    pub async fn push(
+        &self,
+        samples: &[f32],
+        params: AudioParams,
+        cancelled: &AtomicBool,
+    ) -> Result<()> {
         let prepared = mixer::prepare(samples, params, self.device)?;
         if prepared.is_empty() {
             return Ok(());
@@ -407,6 +416,12 @@ impl Playback {
         // the utterance's own two edges are the only discontinuities there are.
         let ready = {
             let mut prod = self.producer.lock();
+            // Under the lock `cancel` resets the producer under, so a stopped
+            // utterance cannot leave its tail behind for the next one to open
+            // with.
+            if cancelled.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             let mut buf = std::mem::take(&mut prod.tail);
             buf.extend_from_slice(&prepared);
             if !prod.started {
@@ -418,7 +433,7 @@ impl Playback {
             buf
         };
         if !ready.is_empty() {
-            self.write_all(&ready).await;
+            self.write_all(&ready, cancelled).await;
         }
         Ok(())
     }
@@ -434,16 +449,21 @@ impl Playback {
     /// the last sample of one continuous with the first of the next, so those
     /// are the boundaries that need fading. The caller knows which is which;
     /// the pipeline cannot infer it.
-    pub async fn end_chunk(&self) {
+    ///
+    /// `cancelled` is the utterance's stop flag, as for [`push`](Self::push).
+    pub async fn end_chunk(&self, cancelled: &AtomicBool) {
         let tail = {
             let mut prod = self.producer.lock();
+            if cancelled.load(Ordering::Relaxed) {
+                return;
+            }
             prod.started = false;
             let mut tail = std::mem::take(&mut prod.tail);
             self.fade.fade_out(&mut tail);
             tail
         };
         if !tail.is_empty() {
-            self.write_all(&tail).await;
+            self.write_all(&tail, cancelled).await;
         }
     }
 
@@ -455,8 +475,10 @@ impl Playback {
     /// of audio the listener has not heard yet, so anything
     /// that reports an utterance over must wait on
     /// [`wait_for_playout`](Self::wait_for_playout) rather than on this.
-    pub async fn finish(&self) {
-        self.end_chunk().await;
+    ///
+    /// `cancelled` is the utterance's stop flag, as for [`push`](Self::push).
+    pub async fn finish(&self, cancelled: &AtomicBool) {
+        self.end_chunk(cancelled).await;
         let mut guard = self.shared.lock();
         if guard.state != State::Idle {
             // Promote out of prebuffering even if the utterance was shorter
@@ -540,6 +562,13 @@ impl Playback {
     /// This is the barge-in path, so it is measured in how fast it goes quiet —
     /// dropping the ring means the next callback renders silence, bounded by
     /// one device buffer rather than by whatever was queued.
+    ///
+    /// **Set the utterance's stop flag first.** Clearing the ring does not stop
+    /// whoever is filling it: a producer ahead of the speakers has a write
+    /// waiting on a full ring, and it refills the ring the moment this empties
+    /// it — so a stop would skip a ring's worth of speech and carry on. The
+    /// producer methods check the flag under the same locks this takes, which
+    /// is what guarantees that nothing written after the clear survives it.
     pub fn cancel(&self) {
         *self.producer.lock() = Producer::default();
         let mut guard = self.shared.lock();
@@ -559,11 +588,18 @@ impl Playback {
         self.shared.lock().render(out);
     }
 
-    /// Write every sample, yielding while the ring is full.
-    async fn write_all(&self, mut samples: &[f32]) {
+    /// Write every sample, yielding while the ring is full, until `cancelled`
+    /// is set — then drop whatever is left.
+    async fn write_all(&self, mut samples: &[f32], cancelled: &AtomicBool) {
         loop {
             {
                 let mut guard = self.shared.lock();
+                // Checked under the lock `cancel` clears the ring under: a
+                // write either lands before the clear and is cleared with it,
+                // or comes after and sees the flag the canceller set first.
+                if cancelled.load(Ordering::Relaxed) {
+                    return;
+                }
                 let n = guard.ring.write(samples);
                 guard.stats.written_samples += n as u64;
                 samples = &samples[n..];
