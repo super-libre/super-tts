@@ -55,7 +55,7 @@ impl Client {
     pub fn new(url: impl Into<String>, cache_path: PathBuf, ttl: Duration) -> Self {
         Self {
             url: url.into(),
-            http: super_tts_forge::http::short_client(),
+            http: super_engine_forge::http::short_client(super_tts_registry_types::Tts::USER_AGENT),
             cache_path,
             ttl,
             state: Arc::default(),

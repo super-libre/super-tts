@@ -174,7 +174,7 @@ async fn resolve_install_entry(
                 "custom-repo install requires `forge`",
             )));
         };
-        let client = super_tts_forge::client(forge);
+        let client = super_engine_forge::client(forge, super_tts_registry_types::Tts::USER_AGENT);
         match crate::registry::custom_repo::resolve(client.as_ref(), repo_url).await {
             Ok(entry) => Ok(entry),
             Err(e) => {

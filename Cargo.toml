@@ -6,7 +6,6 @@
         "super-tts-consent",
         "super-tts-cosmic-applet",
         "super-tts-daemon",
-        "super-tts-forge",
         "super-tts-indexer",
         "super-tts-install",
         "super-tts-registry-types",
@@ -29,7 +28,6 @@
         "super-tts-consent",
         "super-tts-cosmic-applet",
         "super-tts-daemon",
-        "super-tts-forge",
         "super-tts-install",
         "super-tts-registry-types",
         "super-tts-shared",
@@ -111,6 +109,10 @@
         # The code Super TTS shares with Super STT. Pinned by rev, like
         # libcosmic, so a change there reaches this workspace only when the rev
         # is bumped here. Every super-engine crate names the same rev.
+        super-engine-forge = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "4bc0e03381284e491cfb1c22a3fb829d750db3a3",
+        }
         super-engine-spec = {
             git = "https://github.com/super-libre/super-engine",
             rev = "4bc0e03381284e491cfb1c22a3fb829d750db3a3",

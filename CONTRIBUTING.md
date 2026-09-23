@@ -56,7 +56,6 @@ Super TTS is a Rust workspace:
 | `super-tts-consent`        | Consent-popup helper for the auth handshake                      |
 | `super-tts-shared`         | Common types, protocol definitions, validation                   |
 | `super-tts-registry-types` | Super TTS's backend contract, on `super-engine-spec`             |
-| `super-tts-forge`          | Git-forge release sourcing for the registry                      |
 | `super-tts-indexer`        | CI tool that builds the published registry `index.json`          |
 
 The code Super TTS shares with Super STT lives in

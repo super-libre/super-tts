@@ -18,14 +18,14 @@ use thiserror::Error;
 use crate::registry::index_schema::{
     IndexAsset, IndexAssets, IndexBackend, IndexSubprocessAsset, id_from_source,
 };
-use super_tts_forge::{ForgeClient, ReleaseAsset, RepoRef};
+use super_engine_forge::{ForgeClient, ReleaseAsset, RepoRef};
 
 #[derive(Debug, Error)]
 pub enum ResolveError {
     #[error("repo URL `{0}` is not a <host>/<owner>/<repo> reference")]
     BadRepoUrl(String),
     #[error("forge: {0}")]
-    Forge(#[from] super_tts_forge::ForgeError),
+    Forge(#[from] super_engine_forge::ForgeError),
     #[error("backend.toml exceeds {MAX_MANIFEST_BYTES} bytes")]
     ManifestTooLarge,
     #[error("backend.toml is not valid UTF-8: {0}")]
@@ -81,8 +81,8 @@ pub async fn resolve(
         .download(&manifest_url, MAX_MANIFEST_BYTES)
         .await
         .map_err(|e| match e {
-            super_tts_forge::ForgeError::TooLarge { .. } => ResolveError::ManifestTooLarge,
-            e @ super_tts_forge::ForgeError::Http(_) => ResolveError::Forge(e),
+            super_engine_forge::ForgeError::TooLarge { .. } => ResolveError::ManifestTooLarge,
+            e @ super_engine_forge::ForgeError::Http(_) => ResolveError::Forge(e),
         })?;
     let manifest_text = String::from_utf8(manifest_bytes)?;
     // Parse through the canonical manifest so a custom-repo install is validated
@@ -223,7 +223,7 @@ fn synthesize_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super_tts_forge::RepoRef;
+    use super_engine_forge::RepoRef;
 
     #[test]
     fn source_matching_repo_or_namespaced_under_it_is_accepted() {

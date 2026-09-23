@@ -7,7 +7,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::{error, info, warn};
 
-use super_tts_forge::{ForgeClient, RepoRef};
+use super_engine_forge::{ForgeClient, RepoRef};
 
 mod assets;
 mod carryforward;
@@ -58,7 +58,7 @@ pub struct BuildFailure {
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> anyhow::Result<()> {
     // Workspace reqwest uses rustls without a bundled provider; install one.
-    super_tts_forge::install_crypto_provider();
+    super_engine_forge::install_crypto_provider();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     match Args::parse().command {
         Command::Build(args) => run_build(args).await,
@@ -83,7 +83,7 @@ async fn run_build(args: BuildArgs) -> anyhow::Result<()> {
     // Downloads release assets (subprocess bundles can be multi-GB) — use the
     // shared download client, not a timeout-less `Client::new()` that could hang
     // forever on a stalled connection.
-    let http = super_tts_forge::http::download_client();
+    let http = super_engine_forge::http::download_client(super_tts_registry_types::Tts::USER_AGENT);
     let now_iso = chrono_now_iso();
 
     let mut out_backends: Vec<index_json::IndexBackend> = Vec::new();
@@ -93,7 +93,8 @@ async fn run_build(args: BuildArgs) -> anyhow::Result<()> {
             info!("skip `{id}` — removed");
             continue;
         }
-        let client = super_tts_forge::client(entry.forge);
+        let client =
+            super_engine_forge::client(entry.forge, super_tts_registry_types::Tts::USER_AGENT);
         // A malformed `repo` string must not abort the whole build — route it
         // through the same per-entry carry-forward path every other failure uses
         // (Tier 1 #28), instead of `?`-propagating out of the loop.
@@ -270,7 +271,7 @@ fn subprocess_index_entry(
 async fn resolve_index_assets(
     http: &reqwest::Client,
     m: &manifest::Manifest,
-    release_assets: &[super_tts_forge::ReleaseAsset],
+    release_assets: &[super_engine_forge::ReleaseAsset],
 ) -> anyhow::Result<index_json::IndexAssets> {
     let mut idx_assets = index_json::IndexAssets::default();
     if let Some(wasm) = &m.assets.wasm {

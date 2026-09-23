@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Self-update checking. Contract: docs/protocol/endpoints/v1/update.md
 
-use super_tts_forge::{ForgeClient, Release, ReleaseAsset, ReleaseKind, RepoRef};
+use super_engine_forge::{ForgeClient, Release, ReleaseAsset, ReleaseKind, RepoRef};
 use super_tts_shared::models::self_update::{InstallerAsset, SelfUpdateStatus};
 use super_tts_shared::models::update_beta_optin::UpdateBetaOptIn;
 
@@ -391,7 +391,7 @@ impl SelfUpdateChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super_tts_forge::{Release, ReleaseAsset, ReleaseKind};
+    use super_engine_forge::{Release, ReleaseAsset, ReleaseKind};
     use super_tts_shared::models::update_beta_optin::UpdateBetaOptIn;
 
     fn rel(tag: &str, kind: ReleaseKind) -> Release {
@@ -561,7 +561,11 @@ mod tests {
             download_url: format!("{}/i", s.url()),
             size: 2,
         }];
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         assert!(
             resolve_installer_asset(&gh, &r, "x86_64-unknown-linux-gnu")
                 .await
@@ -590,7 +594,11 @@ mod tests {
                 size: 10,
             },
         ];
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         assert!(
             resolve_installer_asset(&gh, &r, "x86_64-unknown-linux-gnu")
                 .await
@@ -622,7 +630,11 @@ mod tests {
                 size: 10,
             },
         ];
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         assert!(
             resolve_installer_asset(&gh, &r, "x86_64-unknown-linux-gnu")
                 .await
@@ -658,7 +670,11 @@ mod tests {
                 size: 10,
             },
         ];
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         let asset = resolve_installer_asset(&gh, &r, "x86_64-unknown-linux-gnu")
             .await
             .unwrap();
@@ -693,7 +709,11 @@ mod tests {
                 size: 10,
             },
         ];
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         assert!(
             resolve_installer_asset(&gh, &r, "x86_64-unknown-linux-gnu")
                 .await
@@ -713,7 +733,11 @@ mod tests {
             )
             .create_async()
             .await;
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         let checker = SelfUpdateChecker::new();
         let (st, did_check) = checker.run_check(&gh, UpdateBetaOptIn::Disabled).await;
         assert!(did_check, "uncontended call must perform its own check");
@@ -759,7 +783,11 @@ mod tests {
             ))
             .create_async()
             .await;
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         let checker = SelfUpdateChecker::new();
         let (st, did_check) = checker.run_check(&gh, UpdateBetaOptIn::Disabled).await;
         assert!(did_check);
@@ -792,7 +820,11 @@ mod tests {
         .with_body(r#"[{"tag_name":"v0.3.0-beta.1","prerelease":true,"assets":[]}]"#)
         .create_async()
         .await;
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         let checker = SelfUpdateChecker::new();
 
         // Succeed with beta ON: resolves a beta candidate.
@@ -841,7 +873,11 @@ mod tests {
             .expect(1)
             .create_async()
             .await;
-        let gh = super_tts_forge::Github::new(s.url(), None);
+        let gh = super_engine_forge::Github::new(
+            s.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         let checker = SelfUpdateChecker::new();
 
         let ((a, a_did_check), (b, b_did_check)) = tokio::join!(
@@ -910,7 +946,11 @@ mod tests {
             .with_body(r#"[{"tag_name":"v0.9.0","prerelease":false,"assets":[]}]"#)
             .create_async()
             .await;
-        let gh = super_tts_forge::Github::new(server.url(), None);
+        let gh = super_engine_forge::Github::new(
+            server.url(),
+            None,
+            super_tts_registry_types::Tts::USER_AGENT,
+        );
         let checker = SelfUpdateChecker::new();
 
         let (status, _) = checker.run_check(&gh, UpdateBetaOptIn::Disabled).await;

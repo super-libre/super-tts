@@ -17,7 +17,7 @@
     reqwest.workspace = true
     serde.workspace = true
     serde_json.workspace = true
-    super-tts-forge = { path = "../super-tts-forge" }
+    super-engine-forge.workspace = true
     super-tts-registry-types = { path = "../super-tts-registry-types" }
     tar = "0.4.46"
     thiserror.workspace = true
