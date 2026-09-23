@@ -239,8 +239,8 @@ Every error returns a JSON body with the same shape:
 ```jsonc
 {
   "status":     "error",
-  "error_code": "speech_in_progress",
-  "message":    "Cannot change the backend while speaking.",
+  "error_code": "model_not_loaded",
+  "message":    "model_not_loaded",
   "data":       { "reason": "<machine-readable reason>", ... }
 }
 ```

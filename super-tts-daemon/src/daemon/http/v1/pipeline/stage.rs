@@ -111,7 +111,8 @@ offering one hands the user an error to discover by choosing it.
 
 Selecting a *different* backend drops the model with it — a model name belongs to the \
 backend that served it, and two backends serving the same name do not serve the same \
-model — and switches the stage off until a model is chosen.",
+model — and switches the stage off until a model is chosen, stopping anything that \
+model was saying. Re-selecting the backend already there changes nothing.",
     params(
         ("stage" = u32, Path,
          description = "Pipeline position. `1` synthesizes — text in, audio out — and is the only position this build has; any other is a `404 unknown_stage` naming the ones that do exist.",
@@ -125,7 +126,6 @@ model — and switches the stage off until a model is chosen.",
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such stage (`unknown_stage`).", body = ErrorEnvelope),
-        (status = 409, description = "An utterance or streaming session is in flight (`speech_in_progress`); stop it and retry.", body = ErrorEnvelope),
         (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
     ),
 )]
@@ -156,8 +156,9 @@ pub(crate) async fn set_stage_backend(
     summary = "Empty a stage",
     description = "\
 Deselects the stage's backend, unloading its model first if one is up, and forgets \
-both. Emptying stage 1 returns the daemon to idle: `POST /speak` answers \
-`409 model_not_loaded` until a backend and a model are chosen again.
+both. Anything being spoken is stopped. Emptying stage 1 returns the daemon to idle: \
+`POST /speak` answers `409 model_not_loaded` until a backend and a model are chosen \
+again.
 
 This is not what a Stop button should call. Freeing the device memory while keeping \
 the choice the user made is `DELETE /pipeline/{stage}/model`, which leaves the backend \
@@ -174,7 +175,6 @@ picking it a second time.",
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such stage (`unknown_stage`).", body = ErrorEnvelope),
-        (status = 409, description = "An utterance or streaming session is in flight (`speech_in_progress`); stop it and retry.", body = ErrorEnvelope),
         (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
     ),
 )]

@@ -35,13 +35,9 @@ impl SuperTTSDaemon {
     }
 
     /// Re-instantiate the currently-loaded model in place (same identity) so a
-    /// changed secret or option takes effect. No-op when idle. Rejected during
-    /// an active recording. A real-time (WebSocket) session holds the `model`
-    /// read lock, so the reload's write-lock acquisition serializes behind it.
+    /// changed secret or option takes effect. No-op when idle. Stops whatever
+    /// is being spoken first — see [`stop_speech_for`](Self::stop_speech_for).
     pub async fn handle_reload_active_model(&self) -> DaemonResponse {
-        if let Some(resp) = self.guard_model_mutation("reload the model") {
-            return resp;
-        }
         let current = self
             .model
             .read()
@@ -53,6 +49,7 @@ impl SuperTTSDaemon {
         };
 
         info!("Reloading active model {name} to apply configuration changes");
+        self.stop_speech_for("reload the model").await;
         self.broadcast_model_loading_status(&name);
         self.unload_current_model().await;
         // Reload where the model belongs, not where the global default points:
@@ -168,14 +165,13 @@ impl SuperTTSDaemon {
     /// Drop the currently loaded model. The active backend stays selected
     /// (the user can immediately pick another of its models); to fully idle
     /// out, clear the active backend instead. No-op when no model is loaded.
-    /// Rejected during an active recording / real-time session.
+    /// Stops whatever is being spoken first — see
+    /// [`stop_speech_for`](Self::stop_speech_for).
     pub async fn handle_unload_active_model(&self) -> DaemonResponse {
-        if let Some(resp) = self.switch_guard() {
-            return resp;
-        }
         if self.model.read().await.is_none() {
             return DaemonResponse::success().with_message("No model to unload".to_string());
         }
+        self.stop_speech_for("unload the model").await;
         let dropped = self
             .model
             .read()

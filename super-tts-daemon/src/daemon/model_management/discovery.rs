@@ -19,12 +19,13 @@ impl SuperTTSDaemon {
             dir.display()
         );
 
-        // Skipped while a session holds the switch guard: removing a
-        // directory under an in-flight utterance would strand state it
-        // still depends on, the same reason uninstall refuses. The
+        // Skipped while an utterance is in flight: removing a directory
+        // under it would strand state it still depends on, the same reason
+        // uninstall refuses. Nobody asked for this cleanup, so unlike a
+        // user's model change it waits rather than stopping the speech. The
         // duplicate is harmless until the next refresh.
         if !losers.is_empty() {
-            if self.switch_guard().is_some() {
+            if self.is_busy() {
                 log::warn!(
                     "{} duplicate backend director(ies) left for a later refresh: \
                      a backend is busy",

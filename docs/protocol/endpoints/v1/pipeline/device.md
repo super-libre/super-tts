@@ -103,8 +103,8 @@ The reload, when there is one, completes before the response, and publishes
 resolved `actual_device` — on [`/events`](../events.md). The stage unloads
 before it loads, because a backend cannot be instantiated twice for the same
 model: the running instance holds the name its replacement needs. An utterance
-therefore cannot be in flight across the swap, which is why
-`409 speech_in_progress` guards it.
+therefore cannot be in flight across the swap, so anything the model is saying
+is stopped first.
 
 If the reload fails, the model is put back on the device it had and its setting
 is left as it was, and the call fails with the reason — the user's choice is
@@ -123,7 +123,6 @@ they were asking for.
 | HTTP | `error_code`         | Meaning                                                                    |
 |------|----------------------|----------------------------------------------------------------------------|
 | 400  | `invalid_device`     | `device` is not `"cpu"`, `"gpu"` or an accepted alias; or the model's manifest does not declare it (a CPU-only model cannot be sent to the GPU); or the model is online and has no local device. Nothing is recorded. |
-| 409  | `speech_in_progress` | A reload is needed and an utterance or streaming session is in flight       |
 | 500  | *(uncoded)*          | The reload failed. The `message` names the failure and the device the model was put back on; the setting is unchanged. |
 
 Requesting `"gpu"` for a model whose install or host cannot provide one is

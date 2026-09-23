@@ -115,6 +115,10 @@ A load that fails leaves the backend selected and *no* model loaded. The daemon 
 not quietly restore whatever was running before, because a client that asked for a \
 switch and was told it succeeded would then be speaking in the old voice.
 
+Anything being spoken is stopped first: the switch is the newer request, the same way \
+a second `POST /speak` supersedes the first. Asking for the model that is already \
+running changes nothing and interrupts nothing.
+
 The model loads on its own device — set that first with \
 `POST /pipeline/{stage}/model/{model}/device`, which is also how to move a model that \
 is already running.",
@@ -131,7 +135,7 @@ is already running.",
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such stage (`unknown_stage`).", body = ErrorEnvelope),
-        (status = 409, description = "This stage already has a load in flight (`switch_in_progress`), or an utterance is being spoken (`speech_in_progress`).", body = ErrorEnvelope),
+        (status = 409, description = "This stage already has a load in flight (`switch_in_progress`).", body = ErrorEnvelope),
         (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
     ),
 )]
@@ -165,8 +169,9 @@ Unloads the model, freeing its device memory, and leaves the backend selected so
 another of its models — or the same one, on another device — can be loaded without \
 re-selecting it.
 
-This is what a Stop button should call. Emptying the stage entirely, forgetting the \
-backend along with the model, is `DELETE /pipeline/{stage}`.",
+This is what a Stop button should call, and it stops whatever is being spoken first — \
+a Stop that left the audio playing would not be one. Emptying the stage entirely, \
+forgetting the backend along with the model, is `DELETE /pipeline/{stage}`.",
     params(
         ("stage" = u32, Path,
          description = "Pipeline position. `1` synthesizes — text in, audio out — and is the only position this build has; any other is a `404 unknown_stage` naming the ones that do exist.",
@@ -178,7 +183,6 @@ backend along with the model, is `DELETE /pipeline/{stage}`.",
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such stage (`unknown_stage`).", body = ErrorEnvelope),
-        (status = 409, description = "An utterance or streaming session is in flight (`speech_in_progress`); stop it and retry.", body = ErrorEnvelope),
         (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
     ),
 )]
@@ -252,7 +256,8 @@ Synchronous, unlike `POST /pipeline/{stage}/model`: the response is sent once th
 model is back up, and the daemon then broadcasts the same `model_switched` and `ready` \
 events a completed switch does, so subscribers converge on one state either way. \
 Nothing is re-downloaded; the files on disk are unchanged, and a stage with nothing \
-loaded answers `200` having done nothing.
+loaded answers `200` having done nothing. Anything the model is saying is stopped \
+first, since the instance saying it is the one being torn down.
 
 Rarely needed by hand — writing a backend option or secret already reloads every stage \
 running a model from that backend.",
@@ -267,7 +272,6 @@ running a model from that backend.",
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such stage (`unknown_stage`).", body = ErrorEnvelope),
-        (status = 409, description = "A daemon-driven utterance is in flight (`speech_in_progress`); stop it and retry.", body = ErrorEnvelope),
         (status = 429, description = "Per-client rate limit hit; back off and retry.", body = ErrorEnvelope),
         (status = 500, description = "Re-instantiation failed; the previous instance is gone and the stage is left with nothing loaded.", body = ErrorEnvelope),
     ),

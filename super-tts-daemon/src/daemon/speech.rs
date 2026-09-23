@@ -57,8 +57,9 @@ const ANALYSIS_WINDOW: usize = 1024;
 ///
 /// Generous, because the honest reason for a pause is a slow sink rather than a
 /// dead one, and cutting `speaking_state` short is the bug this whole path
-/// exists to fix. Bounded, because the utterance slot gates loading a different
-/// model: a sink that went away must not hold the daemon busy forever.
+/// exists to fix. Bounded, because the utterance slot is what `/status` reports
+/// as busy and what uninstalling a backend waits on: a sink that went away must
+/// not hold the daemon busy forever.
 const PLAYOUT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How often the visualizer publisher looks at the playback position.
@@ -365,8 +366,9 @@ impl SpeechEngine {
     }
 
     /// Claim the in-flight slot without synthesizing anything, so a test can
-    /// put the daemon into the "model is occupied" state that gates model
-    /// mutations. Returns a guard that releases the slot when dropped.
+    /// put the daemon into the "model is occupied" state that `/status`,
+    /// uninstall and the model-change handlers read. Returns a guard that
+    /// releases the slot when dropped.
     ///
     /// Exists because [`SuperTTSDaemon::is_busy`] reads this slot rather than a
     /// mirrored flag: with no way to claim it, every busy-gated test would have

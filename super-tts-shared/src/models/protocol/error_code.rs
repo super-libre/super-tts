@@ -15,10 +15,14 @@ use serde::{Deserialize, Serialize};
 pub enum ErrorCode {
     // --- 409 Conflict: the request is well-formed but the daemon's current
     // state forbids it. ---
-    /// An utterance is being synthesized or played; a mutation that needs the
-    /// model (backend switch, model switch, reload, unload, device switch)
-    /// must wait for it to finish. Note that `POST /speak` is *not* in that
-    /// list — a new utterance deliberately preempts the current one.
+    /// An utterance was being synthesized or played, so a mutation that needs
+    /// the model (backend switch, model switch, reload, unload, device switch)
+    /// was refused.
+    ///
+    /// No longer emitted: those mutations now stop the utterance and go ahead,
+    /// the way a new `POST /speak` always preempted the current one. Kept so a
+    /// client still talking to an older daemon parses it as itself rather than
+    /// as [`ErrorCode::Unknown`].
     SpeechInProgress,
     /// A model download/switch is already in flight.
     DownloadInProgress,

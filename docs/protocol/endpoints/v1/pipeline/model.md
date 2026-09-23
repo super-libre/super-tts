@@ -144,6 +144,11 @@ selected and **no model is loaded**: the daemon does not silently restore the
 model that was running, because a client that asked for a switch and got a
 success would otherwise be speaking in the old voice without being told.
 
+Anything being spoken is stopped when the switch starts: the switch is the newer
+request, the same way a second [`POST /speak`](../speak.md) supersedes the
+first. Asking for the model that is already running changes nothing and
+interrupts nothing.
+
 The model loads on its own
 [device](./device.md#get-pipelinestagemodelmodeldevice), which is not part of
 this request: set it first, and it is remembered for every later load of that
@@ -161,7 +166,6 @@ place.
 | 400  | `invalid_backend`        | `source` omitted and no backend is selected for this stage                   |
 | 400  | `online_models_disabled` | The model is online and [`allow_online_models`](../settings/allow_online_models.md) is `false` |
 | 409  | `switch_in_progress`     | This stage already has a load in flight — cancel it or wait                  |
-| 409  | `speech_in_progress`     | An utterance is in flight; stop it or let it finish before switching         |
 | 401  | `invalid_session`        | Token unknown / expired / `exe_changed`                                      |
 | 403  | `scope_denied`           | Token lacks the `settings` scope                                             |
 
@@ -169,7 +173,8 @@ place.
 
 Stop this stage, **keeping its backend selected and the model it was pointed
 at**, so restarting it is one `POST` with no arguments to re-derive. No-op when
-the stage is not running; rejected while an utterance is in flight.
+the stage is not running. Anything being spoken is stopped first: this is what a
+Stop button calls, and a Stop that left the audio playing would not be one.
 
 The stage reads back as `enabled: false` with `model` unchanged and
 `loaded: false`. This is what frees device memory without costing the user
@@ -194,8 +199,7 @@ Authorization: Bearer tts_…64hex…
 { "status": "success", "message": "Unloaded kokoro-82m" }
 ```
 
-**Errors:** `404 unknown_stage`, `409 speech_in_progress`, plus the auth errors
-above.
+**Errors:** `404 unknown_stage`, plus the auth errors above.
 
 ## `POST /pipeline/{stage}/model/cancel`
 
@@ -265,9 +269,9 @@ Rarely needed by hand: writing a
 [secret](../backends/secrets.md) already reloads every stage running a model
 from that backend, so the new value takes effect immediately.
 
-Rejected while a daemon-driven utterance is in flight. A
-[`/speak/stream`](../speak/stream.md) session holds the model read lock, so a
-reload requested during one serializes behind it rather than being rejected.
+Anything the model is saying is stopped first, since the instance saying it is
+the one being torn down — including when the reload comes from a
+[secret](../backends/secrets.md) write rather than from this endpoint.
 
 **Request:**
 
@@ -296,7 +300,6 @@ No request body.
 | HTTP | `error_code`         | Meaning                                                                  |
 |------|----------------------|--------------------------------------------------------------------------|
 | 404  | `unknown_stage`      | No such position in the pipeline                                         |
-| 409  | `speech_in_progress` | An utterance is in flight — stop it and retry                            |
 | 401  | `invalid_session`    | Token unknown / expired / `exe_changed`                                  |
 | 403  | `scope_denied`       | Token lacks the `settings` scope                                         |
 | 500  | *(uncoded)*          | Re-instantiation failed (`Model reload failed: …`); the previous instance is gone and the stage is left with nothing loaded |
