@@ -9,6 +9,7 @@
 //!   Shown for a native caller, never for a web one — see [`Caller`].
 //! - `SUPER_TTS_AUTH_SCOPES`   — space-separated scope set (e.g. `speak status`)
 //! - `SUPER_TTS_AUTH_EXE_PATH` — peer `/proc/<pid>/exe` (trusted, kernel-resolved)
+//! - `SUPER_TTS_AUTH_FLATPAK_APP_ID` — set only when the caller is inside a flatpak
 //! - `SUPER_TTS_AUTH_WEB_ORIGIN` — set only when the caller reached the daemon
 //!   over its TCP listener, carrying the browser-reported origin. The daemon
 //!   sets this *or* `SUPER_TTS_AUTH_EXE_PATH`, never both, and this one wins.
@@ -240,8 +241,17 @@ impl cosmic::Application for ConsentApp {
         // native caller gets one: for a web caller the sentence already *is*
         // the verified identity, and repeating the origin underneath would
         // read as a second, corroborating fact when there is only one.
-        if let Caller::Native { exe_path } = &self.caller {
-            control = control.push(text::body(format!("Executable:  {exe_path}")));
+        if let Caller::Native {
+            exe_path,
+            flatpak_app_id,
+        } = &self.caller
+        {
+            control = control.push(text::body(match flatpak_app_id {
+                // Name the app the user installed. Its executable path lives
+                // inside its sandbox, so it identifies nothing here.
+                Some(id) => format!("Flatpak app:  {id}"),
+                None => format!("Executable:  {exe_path}"),
+            }));
         }
 
         control = control.push(
@@ -464,7 +474,14 @@ fn maybe_spawn_auto_approve_timer() {}
 /// rather than infer it from an empty field.
 enum Caller {
     /// A program on this machine, named by the path the kernel resolved.
-    Native { exe_path: String },
+    Native {
+        exe_path: String,
+        /// Set only for a sandboxed caller. Its `exe_path` is resolved inside
+        /// its own sandbox, so showing that path would name a file the user
+        /// cannot go and look at, and one that every other flatpak could
+        /// equally present.
+        flatpak_app_id: Option<String>,
+    },
     /// A web page, named by the origin its browser reported.
     Web { origin: String },
 }
@@ -501,6 +518,9 @@ fn read_caller() -> Caller {
     }
     Caller::Native {
         exe_path: request_var(contract::EXE_PATH).unwrap_or_else(|_| "<unknown path>".to_string()),
+        flatpak_app_id: request_var(contract::FLATPAK_APP_ID)
+            .ok()
+            .filter(|id| !id.is_empty()),
     }
 }
 
