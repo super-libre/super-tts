@@ -8,7 +8,7 @@ pub mod download_stream;
 pub mod keyring;
 pub mod output;
 pub mod registry;
-pub mod resource_management;
+pub use super_engine_daemon::resource_management;
 pub mod self_update;
 pub mod services;
 pub mod text;

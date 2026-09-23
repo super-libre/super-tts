@@ -39,7 +39,6 @@
         version = "0.1",
         features = ["http1", "server", "server-auto", "tokio"]
     }
-    keyring.workspace = true
     libc.workspace = true
     log.workspace = true
     parking_lot.workspace = true
@@ -54,6 +53,7 @@
     semver = "1.0.28"
     serde.workspace = true
     serde_json.workspace = true
+    super-engine-daemon.workspace = true
     super-engine-forge.workspace = true
     super-tts-registry-types = { path = "../super-tts-registry-types", features = ["openapi"] }
     # Shared crate

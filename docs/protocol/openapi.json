@@ -36,7 +36,7 @@
           "auth"
         ],
         "summary": "Ask the user for a session token (no token needed)",
-        "description": "The consent handshake, and the only endpoint reachable without a token.\n\nThe daemon reads `SO_PEERCRED` on your connection, resolves `/proc/<pid>/exe`, and shows the user a popup naming that binary and the scopes you asked for. On Allow it mints a 32-byte token bound to that binary and valid for 30 days.\n\nA denial is remembered for the `(binary, scopes)` pair for the rest of the daemon's lifetime and answers `403` immediately without re-prompting — renaming your app does not clear it, since the key is the binary. Restarting the daemon does.\n\nDo not call this to find out whether a token you already hold is still good: that is `GET /auth/status`, which never prompts.\n\nSetting `SUPER_TTS_AUTO_APPROVE=1` in the daemon's environment skips the popup entirely; it is honored only in debug builds, for tests and CI, so a stray environment variable cannot defeat the consent gate in a shipped binary.",
+        "description": "The consent handshake, and the only endpoint reachable without a token.\n\nThe daemon reads `SO_PEERCRED` on your connection, resolves `/proc/<pid>/exe`, and shows the user a popup naming that binary and the scopes you asked for. On Allow it mints a 32-byte token bound to that binary and valid for 30 days.\n\nA denial is remembered for the `(binary, scopes)` pair for the rest of the daemon's lifetime and answers `403` immediately without re-prompting — renaming your app does not clear it, since the key is the binary. Restarting the daemon does.\n\nDo not call this to find out whether a token you already hold is still good: that is `GET /auth/status`, which never prompts.\n\nSetting the product's `AUTO_APPROVE` variable to `1` in the daemon's environment (`SUPER_STT_AUTO_APPROVE` for Super STT, `SUPER_TTS_AUTO_APPROVE` for Super TTS) skips the popup entirely; it is honored only in debug builds, for tests and CI, so a stray environment variable cannot defeat the consent gate in a shipped binary.",
         "operationId": "auth_request",
         "requestBody": {
           "content": {
@@ -98,7 +98,7 @@
           "auth"
         ],
         "summary": "Check the held token without prompting (any valid token)",
-        "description": "Reports what the presented token is good for, and never opens a consent popup — which is what makes it the right probe for a headless or CLI client. Reaching this handler at all means the token validated.\n\nUse it to fail fast on a token about to expire, rather than discovering it mid-utterance. `GET /ping` proves the daemon is up; this proves the token still is.",
+        "description": "Reports what the presented token is good for, and never opens a consent popup — which is what makes it the right probe for a headless or CLI client. Reaching this handler at all means the token validated.\n\nUse it to fail fast on a token about to expire, rather than discovering it mid-operation. `GET /ping` proves the daemon is up; this proves the token still is.",
         "operationId": "auth_status",
         "responses": {
           "200": {
@@ -6353,8 +6353,8 @@
             },
             "description": "The scopes to request, at least one. Every entry must be known or the\nwhole request is refused; ask only for what you need, since the user\nsees the list.",
             "example": [
-              "speak",
-              "status"
+              "status",
+              "settings"
             ]
           },
           "version": {
@@ -6387,8 +6387,8 @@
             },
             "description": "The scopes the token was minted under.",
             "example": [
-              "speak",
-              "status"
+              "status",
+              "settings"
             ]
           },
           "status": {
@@ -7580,7 +7580,7 @@
       },
       "ReasonEnvelope": {
         "type": "object",
-        "description": "The auth-failure envelope: `message` names the failure and `data.reason`\nsays which of its cases occurred.\n\nDistinct from [`ErrorEnvelope`] because the auth surface predates\n`error_code` and clients read `data.reason` there. Both are documented\nrather than reconciled, since changing either is a breaking wire change.",
+        "description": "The auth-failure envelope: `message` names the failure and `data.reason`\nsays which of its cases occurred.\n\nDistinct from `ErrorEnvelope` because the auth surface predates\n`error_code` and clients read `data.reason` there. Both are documented\nrather than reconciled, since changing either is a breaking wire change.",
         "required": [
           "status",
           "message",

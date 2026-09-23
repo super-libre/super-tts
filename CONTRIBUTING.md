@@ -61,7 +61,8 @@ Super TTS is a Rust workspace:
 The code Super TTS shares with Super STT lives in
 [super-engine](https://github.com/super-libre/super-engine), pinned by rev in
 the root `Cargo.toml`. A fix to the backend manifest types, for example, goes
-there, and reaches this workspace when the pin is bumped.
+there, and reaches this workspace when the pin is bumped. So does a fix to the
+daemon's session tokens, consent checks or route guards.
 
 The protocol and backend contract that clients and backend authors build
 against live in [`docs/protocol/`](./docs/protocol/).

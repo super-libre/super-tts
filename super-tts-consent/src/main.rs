@@ -2,7 +2,8 @@
 //! Super TTS consent dialog — a small floating libcosmic window that the
 //! daemon spawns when an app asks to authenticate.
 //!
-//! The daemon spawns this binary with env vars carrying the request details:
+//! The daemon spawns this binary with env vars carrying the request details
+//! (the names are [`contract`]'s, shared with Super STT):
 //!
 //! - `SUPER_TTS_AUTH_APP_NAME` — declared (untrusted) app name from the request.
 //!   Shown for a native caller, never for a web one — see [`Caller`].
@@ -44,6 +45,10 @@ use cosmic::widget::{button, dialog, icon, text};
 use std::io::Write;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use super_tts_shared::SUPER_TTS;
+use super_tts_shared::consent::contract;
+// The decision payloads written to stdout right before exit.
+use contract::{ALLOW, DENY, DISMISSED};
 
 const APP_ID: &str = "ai.menjivar.super-tts-consent";
 
@@ -68,10 +73,11 @@ const SQUARE_CORNERS: CornerRadius = CornerRadius {
 static AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(|| cosmic::widget::Id::new("super-tts-consent-autosize"));
 
-/// Decision payload written to stdout right before exit.
-const ALLOW: &str = "allow";
-const DENY: &str = "deny";
-const DISMISSED: &str = "dismissed";
+/// The value of the request variable `name` (one of [`contract`]'s), under
+/// Super TTS's prefix.
+fn request_var(name: &str) -> Result<String, std::env::VarError> {
+    std::env::var(SUPER_TTS.env(name))
+}
 
 /// Set the moment the user picks Allow or Deny. Used by the
 /// signal handler to skip an extra "dismissed" line if the user
@@ -421,14 +427,15 @@ fn install_termination_handlers() {
 /// builds with `debug_assertions` on, so the smoke tests keep working.
 #[cfg(debug_assertions)]
 fn maybe_spawn_auto_approve_timer() {
-    let Ok(raw) = std::env::var("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS") else {
+    let var = SUPER_TTS.env(contract::AUTO_APPROVE_AFTER_MS);
+    let Ok(raw) = std::env::var(&var) else {
         return;
     };
     let Ok(ms) = raw.parse::<u64>() else {
-        log::warn!("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS={raw:?} is not a valid u64; ignoring");
+        log::warn!("{var}={raw:?} is not a valid u64; ignoring");
         return;
     };
-    log::info!("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS={ms}; auto-approving after {ms}ms");
+    log::info!("{var}={ms}; auto-approving after {ms}ms");
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(ms));
         // Mark decided so the SIGTERM/atexit paths don't also write
@@ -470,9 +477,8 @@ struct AuthRequestPayload {
 
 fn read_env() -> AuthRequestPayload {
     AuthRequestPayload {
-        app_name: std::env::var("SUPER_TTS_AUTH_APP_NAME")
-            .unwrap_or_else(|_| "<unknown app>".to_string()),
-        scopes: std::env::var("SUPER_TTS_AUTH_SCOPES")
+        app_name: request_var(contract::APP_NAME).unwrap_or_else(|_| "<unknown app>".to_string()),
+        scopes: request_var(contract::SCOPES)
             .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
@@ -488,14 +494,13 @@ fn read_env() -> AuthRequestPayload {
 /// means a stale `SUPER_TTS_AUTH_EXE_PATH` inherited from the environment can
 /// never turn a website into an executable in the sentence the user reads.
 fn read_caller() -> Caller {
-    if let Ok(origin) = std::env::var("SUPER_TTS_AUTH_WEB_ORIGIN")
+    if let Ok(origin) = request_var(contract::WEB_ORIGIN)
         && !origin.is_empty()
     {
         return Caller::Web { origin };
     }
     Caller::Native {
-        exe_path: std::env::var("SUPER_TTS_AUTH_EXE_PATH")
-            .unwrap_or_else(|_| "<unknown path>".to_string()),
+        exe_path: request_var(contract::EXE_PATH).unwrap_or_else(|_| "<unknown path>".to_string()),
     }
 }
 

@@ -10,15 +10,14 @@
 //! Enforcing that here rather than in a router guard is what lets one endpoint
 //! serve `playback_events`, `audio_visualization` and `daemon_status` at once.
 
-use crate::daemon::http::internal::auth::consent::{PeerIdentity, resolve_peer_identity};
-use crate::daemon::http::internal::auth::middleware::AuthContext;
-use crate::daemon::http::internal::auth::tokens::TokenStore;
 use crate::daemon::http::internal::helpers::responses::{invalid_session, reason, scope_denied};
 use crate::daemon::http::state::{AppState, PeerInfo};
 use crate::daemon::http::wire::{ErrorEnvelope, ReasonEnvelope};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use super_engine_daemon::auth::tokens::TokenStore;
+use super_engine_daemon::auth::{AuthContext, PeerIdentity, resolve_peer_identity};
 
 /// Build the raw bytes of one SSE `event: <name>\ndata: <json>\n\n` frame from
 /// an already-serialized JSON `data:` string. `data` must be single-line (no raw
@@ -207,7 +206,7 @@ pub(crate) async fn events(
         sse_tx.clone(),
         cancel,
         peer.and_then(|p| p.0.pid),
-        s.tokens.clone(),
+        s.auth.tokens().clone(),
         ctx.token,
         ctx.meta.grantee,
     );
