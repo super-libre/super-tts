@@ -221,13 +221,14 @@ fn load_backend(dir: &Path) -> anyhow::Result<DiscoveredBackend> {
             primary_language: entry.primary_language.clone(),
             supported_languages: entry.supported_languages.clone(),
             estimated_vram_bytes: entry.estimated_vram_bytes,
-            max_input_chars: entry.max_input_chars,
+            max_input_chars: entry.product.max_input_chars,
             processing_interval: interval,
             supported_devices,
-            voice_kinds: entry.voice_kinds.clone(),
-            clone_ref_seconds: entry.clone_ref_seconds,
-            clone_needs_transcript: entry.clone_needs_transcript,
+            voice_kinds: entry.product.voice_kinds.clone(),
+            clone_ref_seconds: entry.product.clone_ref_seconds,
+            clone_needs_transcript: entry.product.clone_needs_transcript,
             voices: entry
+                .product
                 .voices
                 .iter()
                 .map(|v| crate::tts_models::model_definition::PresetVoice {
@@ -235,7 +236,7 @@ fn load_backend(dir: &Path) -> anyhow::Result<DiscoveredBackend> {
                     label: v.display_name().to_string(),
                 })
                 .collect(),
-            default_voice: entry.default_voice.clone(),
+            default_voice: entry.product.default_voice.clone(),
             realtime: entry.realtime,
             provider: entry.provider.clone(),
         });

@@ -7028,23 +7028,36 @@
         }
       },
       "IndexModel": {
-        "type": "object",
-        "description": "The browse-only model subset the catalog and host-compatibility filter need\nbefore download. The authoritative manifest (languages, files, …) ships as\nthe pinned `manifest` asset and is installed verbatim — it is not re-encoded\nhere. Also the leaf type for `/registry/backends` (`RegistryModel`).",
-        "required": [
-          "name",
-          "supported_devices"
-        ],
-        "properties": {
-          "name": {
-            "type": "string"
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The per-model fields Super TTS's index carries beside `name` and\n`supported_devices`: none yet."
+              }
+            ],
+            "description": "The fields the product adds ([`Product::IndexModel`])."
           },
-          "supported_devices": {
-            "type": "array",
-            "items": {
-              "type": "string"
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "supported_devices"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "supported_devices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
-        }
+        ],
+        "description": "The browse-only model subset the catalog and host-compatibility filter need\nbefore download. The authoritative manifest (languages, files, …) ships as\nthe pinned `manifest` asset and is installed verbatim — it is not re-encoded\nhere. Also the leaf type for `/registry/backends` (`RegistryModel`)."
       },
       "IndexOption": {
         "type": "object",
