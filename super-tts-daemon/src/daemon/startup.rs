@@ -104,7 +104,7 @@ impl SuperTTSDaemon {
             notifier: Arc::new(tokio::sync::Mutex::new(
                 crate::output::notification::Notifier::dbus(),
             )),
-            self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
+            self_update: Arc::new(crate::self_update::checker()),
             speech: Arc::new(
                 crate::daemon::speech::SpeechEngine::new()
                     .with_events(Arc::clone(&events))

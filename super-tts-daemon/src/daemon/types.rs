@@ -310,7 +310,7 @@ pub(crate) async fn test_daemon() -> SuperTTSDaemon {
         notifier: Arc::new(tokio::sync::Mutex::new(
             crate::output::notification::Notifier::fake(true).0,
         )),
-        self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
+        self_update: Arc::new(crate::self_update::checker()),
         // Detached: the test daemon must never claim a real output device.
         // A path unique to this daemon, never created unless something
         // writes to it: a shared one would let two tests see each other's
