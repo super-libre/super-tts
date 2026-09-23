@@ -6718,7 +6718,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "super-engine-client"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=c44dac359dc8c4a542b87ef2142c94fae3b2f126#c44dac359dc8c4a542b87ef2142c94fae3b2f126"
+source = "git+https://github.com/super-libre/super-engine?rev=38cc814776981e6ac3d2bf2da4814eb5a2313b2b#38cc814776981e6ac3d2bf2da4814eb5a2313b2b"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -6737,12 +6737,13 @@ dependencies = [
 [[package]]
 name = "super-engine-daemon"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=c44dac359dc8c4a542b87ef2142c94fae3b2f126#c44dac359dc8c4a542b87ef2142c94fae3b2f126"
+source = "git+https://github.com/super-libre/super-engine?rev=38cc814776981e6ac3d2bf2da4814eb5a2313b2b#38cc814776981e6ac3d2bf2da4814eb5a2313b2b"
 dependencies = [
  "anyhow",
  "axum",
  "base64",
  "chrono",
+ "flate2",
  "futures-util",
  "gpu-probe",
  "hex",
@@ -6761,6 +6762,7 @@ dependencies = [
  "super-engine-forge",
  "super-engine-protocol",
  "super-engine-spec",
+ "tar",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -6772,7 +6774,7 @@ dependencies = [
 [[package]]
 name = "super-engine-forge"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=c44dac359dc8c4a542b87ef2142c94fae3b2f126#c44dac359dc8c4a542b87ef2142c94fae3b2f126"
+source = "git+https://github.com/super-libre/super-engine?rev=38cc814776981e6ac3d2bf2da4814eb5a2313b2b#38cc814776981e6ac3d2bf2da4814eb5a2313b2b"
 dependencies = [
  "async-trait",
  "log",
@@ -6786,7 +6788,7 @@ dependencies = [
 [[package]]
 name = "super-engine-protocol"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=c44dac359dc8c4a542b87ef2142c94fae3b2f126#c44dac359dc8c4a542b87ef2142c94fae3b2f126"
+source = "git+https://github.com/super-libre/super-engine?rev=38cc814776981e6ac3d2bf2da4814eb5a2313b2b#38cc814776981e6ac3d2bf2da4814eb5a2313b2b"
 dependencies = [
  "dirs",
  "env_logger",
@@ -6802,7 +6804,7 @@ dependencies = [
 [[package]]
 name = "super-engine-spec"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=c44dac359dc8c4a542b87ef2142c94fae3b2f126#c44dac359dc8c4a542b87ef2142c94fae3b2f126"
+source = "git+https://github.com/super-libre/super-engine?rev=38cc814776981e6ac3d2bf2da4814eb5a2313b2b#38cc814776981e6ac3d2bf2da4814eb5a2313b2b"
 dependencies = [
  "hex",
  "ring",
@@ -6898,7 +6900,6 @@ dependencies = [
  "clap",
  "cpal",
  "dirs",
- "flate2",
  "futures",
  "futures-util",
  "gpu-probe",
@@ -6922,7 +6923,6 @@ dependencies = [
  "super-engine-forge",
  "super-tts-registry-types",
  "super-tts-shared",
- "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
