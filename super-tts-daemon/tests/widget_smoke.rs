@@ -30,7 +30,7 @@ const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 /// design, and that's exactly what we want to verify. We do
 /// `session::forget` in the test's drop guard so we don't leak entries
 /// on the developer's keyring.
-const TEST_APP_ID: AppId = AppId("widget-smoke-test");
+const TEST_APP_ID: AppId = session::app_id("widget-smoke-test");
 const TEST_APP_NAME: &str = "widget-smoke-test";
 const TEST_SCOPES: &[&str] = &["playback_events", "audio_visualization"];
 const TEST_TOPICS: &[&str] = &["speaking_state", "frequency_bands"];

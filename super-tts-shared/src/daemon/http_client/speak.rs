@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Client half of `POST /v1/speak` and `POST /v1/speak/stop`.
+//! Client half of `POST /v1/speak` and `POST /v1/speak/stop`: Super TTS's own
+//! endpoints, on the transport it shares with Super STT.
 //!
 //! Speaking is fire-and-forget by design: the daemon answers `202` as soon as
 //! the utterance is queued and keeps playing after the connection closes, so
@@ -12,10 +13,12 @@
 //! settings the user owns, reached through the settings endpoints; an utterance
 //! reads them, it does not choose them.
 
-use super::super::internal::error::HttpResult;
-use super::super::internal::transport;
-use crate::models::protocol::DaemonResponse;
 use std::path::PathBuf;
+
+use super_engine_client::http_client::HttpResult;
+use super_engine_client::http_client::transport;
+
+use crate::models::protocol::DaemonResponse;
 
 /// `POST /speak` — synthesize `text` with the active model and play it.
 ///
@@ -32,9 +35,13 @@ use std::path::PathBuf;
 /// Returns an error if the daemon HTTP listener isn't reachable or the
 /// response can't be parsed.
 pub async fn speak(socket_path: PathBuf, token: &str, text: &str) -> HttpResult<DaemonResponse> {
-    let body = serde_json::json!({ "text": text });
-    let req = transport::build_post_json("/speak", &body, Some(token))?;
-    transport::send_request::<DaemonResponse>(&socket_path, req).await
+    transport::post_json(
+        socket_path,
+        token,
+        "/speak",
+        &serde_json::json!({ "text": text }),
+    )
+    .await
 }
 
 /// `POST /speak/stop` — stop the current utterance and drop queued audio.
@@ -46,6 +53,5 @@ pub async fn speak(socket_path: PathBuf, token: &str, text: &str) -> HttpResult<
 /// Returns an error if the daemon HTTP listener isn't reachable or the
 /// response can't be parsed.
 pub async fn speak_stop(socket_path: PathBuf, token: &str) -> HttpResult<DaemonResponse> {
-    let req = transport::build_post_json("/speak/stop", &serde_json::json!({}), Some(token))?;
-    transport::send_request::<DaemonResponse>(&socket_path, req).await
+    transport::post_json(socket_path, token, "/speak/stop", &serde_json::json!({})).await
 }

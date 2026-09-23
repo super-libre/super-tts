@@ -6,7 +6,7 @@ pub mod registry;
 pub mod utils;
 pub mod validation;
 
-pub use super_engine_protocol::logging;
+pub use super_engine_protocol::{SUPER_TTS, logging};
 
 pub mod audio;
 

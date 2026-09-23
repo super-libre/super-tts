@@ -23,7 +23,7 @@ use super_tts_shared::daemon::http_client;
 use super_tts_shared::daemon::session::{self, AppId};
 use super_tts_shared::validation::get_http_socket_path;
 
-const APP_ID: AppId = AppId("super-tts-cli");
+const APP_ID: AppId = super_tts_shared::daemon::session::app_id("super-tts-cli");
 const APP_NAME: &str = "Super TTS CLI";
 const SCOPES: &[&str] = &["speak", "status"];
 
