@@ -145,6 +145,7 @@ impl SuperTTSDaemon {
             cuda: None,
             rocm: None,
             vulkan: None,
+            metal: None,
         });
 
         // Count the files we'll provision so the tracker's denominator is
@@ -502,6 +503,7 @@ fn host_can_run(host: &Host, accel: &str) -> bool {
         "cuda" => host.cuda.is_some(),
         "rocm" => host.rocm.is_some(),
         "vulkan" => host.vulkan.is_some(),
+        "metal" => host.metal.is_some(),
         _ => false,
     }
 }
@@ -521,6 +523,7 @@ mod resolve_accel_tests {
             }),
             rocm: None,
             vulkan: None,
+            metal: None,
         }
     }
 
@@ -533,6 +536,7 @@ mod resolve_accel_tests {
                 version: None,
             }),
             vulkan: None,
+            metal: None,
         }
     }
 
@@ -544,6 +548,7 @@ mod resolve_accel_tests {
             vulkan: Some(VulkanHost {
                 api_version: gpu_probe::VulkanVersion::new(1, 3, 0),
             }),
+            metal: None,
         }
     }
 

@@ -170,9 +170,14 @@ fn map_entry(
     description = "\
 Every backend published to the registry, with the models each serves and whether this \
 machine can run it. `compatibility.compatible` is decided against the host's actual \
-accelerators, so the list reflects what is installable here rather than what exists in \
-general; pass `include_incompatible=true` to see the rest, each with a \
-`compatibility.reason` worth showing the user.
+accelerators and this Super TTS's version, so the list reflects what is installable here \
+rather than what exists in general; pass `include_incompatible=true` to see the rest, each \
+with a `compatibility.reason` worth showing the user.
+
+`needs_client_update` separates the two ways a backend can be blocked: a host that lacks \
+the right GPU will never run it, but a Super TTS one version behind is something the user \
+can fix in a minute. Those are listed even without `include_incompatible`; surface them \
+differently.
 
 `update_available` is the daemon's answer rather than the client's arithmetic: it \
 compares the installed `backend.toml` on disk against what the index offers, by \
@@ -212,27 +217,22 @@ pub(crate) async fn list_registry_backends(
         }
 
         let sel = compat::select(&host, entry);
-        let compatible = !matches!(sel, compat::Selection::Incompatible { .. });
+        let compatible = sel.reason().is_none();
+        let needs_client_update = sel.needs_client_update();
 
-        if !compatible && !q.include_incompatible {
+        // A client-update block is always listed: `include_incompatible` is
+        // about hardware this host will never satisfy, and swallowing "your
+        // Super TTS is too old" behind the same toggle hides the one notice
+        // that would tell the user what to do.
+        if !compatible && !needs_client_update && !q.include_incompatible {
             continue;
         }
 
-        let selected_asset = compat::to_selected_asset(entry, &sel);
-        let reason = if let compat::Selection::Incompatible { ref reason } = sel {
-            Some(reason.clone())
-        } else {
-            None
-        };
-
         let compat_field = Compatibility {
             compatible,
-            selected_asset,
-            reason,
-            // The compatibility check does not yet tell "this daemon is too
-            // old" from "this machine cannot run it", so every block reads as
-            // the second, as it always has.
-            needs_client_update: false,
+            selected_asset: compat::to_selected_asset(entry, &sel),
+            reason: sel.reason().map(ToOwned::to_owned),
+            needs_client_update,
         };
 
         result.push(map_entry(

@@ -547,6 +547,7 @@ impl SuperTTSDaemon {
                 cuda: None,
                 rocm: None,
                 vulkan: None,
+                metal: None,
             });
         host_available_devices(&host)
     }
@@ -1192,6 +1193,7 @@ mod tests {
             cuda: None,
             rocm: None,
             vulkan: None,
+            metal: None,
         }
     }
 
