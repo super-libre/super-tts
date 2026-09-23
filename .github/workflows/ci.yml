@@ -13,6 +13,23 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      # Line tables, not full debug info. `cargo test --workspace` links a
+      # test binary per integration test, and each carries the DWARF of the
+      # whole dependency graph: at the default level a daemon test binary is
+      # ~700 MB, four-fifths of it debug info, and two dozen of them ran the
+      # runner's disk out. That surfaced as `ld terminated with signal 7 [Bus
+      # error]` on whichever binary happened to link last, not as anything
+      # about space, and every test and coverage run failed that way from
+      # early September. Line tables keep file:line in panics and backtraces,
+      # which is what a CI failure is read by; the daemon's test build drops
+      # to ~5 GB.
+      #
+      # Set on the jobs that link, not workflow-wide. Clippy only checks, so
+      # it gains nothing — and a profile change invalidates every artifact in
+      # its restored cache, which it then rebuilds beside the stale ones until
+      # the disk runs out, the very failure this is here to fix.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     strategy:
       fail-fast: false
       # PRs gate on `stable` only (fast feedback). The `beta`/`nightly`
@@ -23,6 +40,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      # The runner's 72 GB disk arrives mostly full of toolchains this
+      # workflow never touches, and even with line tables the test build left
+      # it 3.5 GB spare. Deleting the largest of them buys back room before the
+      # build instead of hoping the build stays small.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - uses: taiki-e/install-action@v2.85.13
         with:
@@ -91,6 +118,12 @@ jobs:
       # the fix is `just openapi`, and the diff above says what moved.
       - name: Check the OpenAPI document is current
         run: just openapi-check
+
+      # A full disk fails as a linker crash that never mentions space, so say
+      # how much was left — on a failed run too, which is when it matters.
+      - name: Report disk left
+        if: always()
+        run: df -h / && du -sh target 2>/dev/null || true
 
   clippy:
     name: Clippy
@@ -257,8 +290,19 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
+    env:
+      # See the test job: the instrumented build links the same binaries.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v7
+
+      # As in the test job, and needed more here: instrumented binaries are
+      # larger than the test job's, which already came within 3.5 GB of full.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - uses: taiki-e/install-action@v2.85.13
         with:
@@ -310,6 +354,12 @@ jobs:
       # this profile data without re-running the suite.
       - name: Collect coverage
         run: cargo llvm-cov --workspace --remap-path-prefix --ignore-filename-regex 'tests/' --no-report
+
+      # As in the test job: the instrumented build is the largest this
+      # workflow makes, and a full disk does not say so when it fails.
+      - name: Report disk left
+        if: always()
+        run: df -h / && du -sh target 2>/dev/null || true
 
       - name: LCOV report + summary
         run: |
