@@ -10,89 +10,23 @@
 //! and an isolated `XDG_DATA_HOME`, so the library under test is a temporary
 //! directory and never the developer's own voices.
 
+mod common;
+
+use common::{Method, StatusCode, TestDaemon};
+use hyper::Request;
+
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::client::conn::http1::handshake;
-use hyper::{Method, Request, StatusCode};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-use super_tts_shared::daemon::http_client;
+use std::path::PathBuf;
 use tokio::net::UnixStream;
-use tokio::time::sleep;
 
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
-
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-            let _ = std::fs::remove_dir_all(p);
-        }
-    }
-}
-
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
-
-async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
-    let unique = format!("tts-voices-{}-{}", std::process::id(), next_test_uniq());
-    let tmp = std::env::temp_dir();
-    let http_socket = tmp.join(format!("{unique}-http.sock"));
-    let config_home = tmp.join(format!("{unique}-config"));
-    let data_home = tmp.join(format!("{unique}-data"));
-
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-    std::fs::create_dir_all(&data_home).expect("create test data dir");
-    // Isolate the cache too: the registry client persists its index under
-    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
-    // running side by side overwrite each other's.
-    let cache_home = data_home.join("cache");
-    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1")
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("XDG_CACHE_HOME", &cache_home)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    let guard = DaemonGuard {
-        child,
-        cleanup_paths: vec![http_socket.clone(), config_home, data_home],
-    };
-
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists()
-            && http_client::auth_request(http_socket.clone(), "voices-smoke-probe", &["status"])
-                .await
-                .is_ok()
-        {
-            let auth = http_client::auth_request(http_socket.clone(), "voices-smoke", scopes)
-                .await
-                .expect("auth_request for test scopes");
-            return (guard, http_socket, auth.session_token);
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!("daemon HTTP listener not ready within 120s");
+async fn start_daemon(scopes: &[&str]) -> (TestDaemon, PathBuf, String) {
+    let daemon = common::daemon("voices");
+    let daemon = daemon.start().await;
+    let token = daemon.token("voices-smoke", scopes).await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket, token)
 }
 
 /// One request with an arbitrary body, returning `(status, content-type, bytes)`.

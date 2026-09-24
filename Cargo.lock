@@ -6718,7 +6718,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "super-engine-client"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -6737,7 +6737,7 @@ dependencies = [
 [[package]]
 name = "super-engine-daemon"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6783,7 +6783,7 @@ dependencies = [
 [[package]]
 name = "super-engine-forge"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "async-trait",
  "log",
@@ -6797,7 +6797,7 @@ dependencies = [
 [[package]]
 name = "super-engine-indexer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6822,7 +6822,7 @@ dependencies = [
 [[package]]
 name = "super-engine-installer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "clap",
  "dirs",
@@ -6843,7 +6843,7 @@ dependencies = [
 [[package]]
 name = "super-engine-protocol"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "dirs",
  "env_logger",
@@ -6860,7 +6860,7 @@ dependencies = [
 [[package]]
 name = "super-engine-spec"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=925a6b3bb6ebbe26744fe5a459c93d4916a21041#925a6b3bb6ebbe26744fe5a459c93d4916a21041"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
 dependencies = [
  "hex",
  "ring",
@@ -6872,6 +6872,21 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 1.1.0+spec-1.1.0",
  "utoipa",
+]
+
+[[package]]
+name = "super-engine-test-daemon"
+version = "0.1.0"
+source = "git+https://github.com/super-libre/super-engine?rev=afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc#afba4a50d70b8202ccfcd9e51dcbb601cf4aeafc"
+dependencies = [
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "serde_json",
+ "super-engine-client",
+ "super-engine-protocol",
+ "tokio",
 ]
 
 [[package]]
@@ -6912,6 +6927,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "super-engine-test-daemon",
  "super-tts-shared",
  "tokio",
 ]
@@ -6976,6 +6992,7 @@ dependencies = [
  "serde_json",
  "super-engine-daemon",
  "super-engine-forge",
+ "super-engine-test-daemon",
  "super-tts-registry-types",
  "super-tts-shared",
  "tempfile",

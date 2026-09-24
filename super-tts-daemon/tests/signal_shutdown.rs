@@ -11,104 +11,30 @@
 //! graceful stop reaches `std::process::exit(0)`, while a default-disposition
 //! kill leaves the process signalled, with no exit code at all.
 
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+mod common;
+
+use common::TestDaemon;
+
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tokio::time::sleep;
 
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
-
-/// Removes the temp `XDG_RUNTIME_DIR`, and kills the daemon if a test failed
-/// before it could stop on its own.
-struct DaemonGuard {
-    child: Child,
-    xdg_runtime_dir: PathBuf,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.xdg_runtime_dir);
-    }
-}
-
-/// Monotonic per-call counter so tests in this binary get unique paths.
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Spawn a daemon against isolated XDG dirs and wait for its socket.
-///
-/// `XDG_DATA_HOME` is isolated so no backend is discovered: these tests are
-/// about the signal path, and a real backend would make them depend on a
-/// systemd user session.
-async fn start_daemon() -> (DaemonGuard, PathBuf) {
-    let xdg = std::env::temp_dir().join(format!(
-        "tts-signal-test-{}-{}",
-        std::process::id(),
-        next_test_uniq()
-    ));
-    std::fs::create_dir_all(xdg.join("tts")).expect("create xdg/tts dir");
-    let config_home = xdg.join("config");
-    std::fs::create_dir_all(&config_home).expect("create xdg/config dir");
-    let data_home = xdg.join("data");
-    std::fs::create_dir_all(&data_home).expect("create xdg/data dir");
-    // Isolate the cache too: the registry client persists its index under
-    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
-    // running side by side overwrite each other's.
-    let cache_home = xdg.join("cache");
-    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
-
-    let http_socket = xdg.join("tts").join("super-tts-http.sock");
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1")
-        .env("XDG_RUNTIME_DIR", &xdg)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("XDG_CACHE_HOME", &cache_home)
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    let guard = DaemonGuard {
-        child,
-        xdg_runtime_dir: xdg,
-    };
-
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists() {
-            // The socket file appearing is not quite the same as the signal
-            // handler being installed; both happen during startup, and the
-            // handler is registered first.
-            sleep(Duration::from_millis(300)).await;
-            return (guard, http_socket);
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-    panic!(
-        "daemon did not bind its socket within 120s ({})",
-        http_socket.display()
-    );
+async fn start_daemon() -> (TestDaemon, PathBuf) {
+    let daemon = common::daemon("signal").default_socket().start().await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket)
 }
 
 /// Send `signal` to the daemon and wait for it to exit.
 ///
 /// Returns the exit status, or `None` if it was still running at the deadline.
 async fn signal_and_wait(
-    guard: &mut DaemonGuard,
+    guard: &mut TestDaemon,
     signal: i32,
     timeout: Duration,
 ) -> Option<std::process::ExitStatus> {
-    let pid = i32::try_from(guard.child.id()).expect("pid fits i32");
+    let pid = i32::try_from(guard.child().id()).expect("pid fits i32");
     // Safety: `pid` is this test's own direct child, still unreaped, so the id
     // cannot have been recycled onto an unrelated process.
     let sent = unsafe { libc::kill(pid, signal) };
@@ -116,7 +42,7 @@ async fn signal_and_wait(
 
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        match guard.child.try_wait().expect("try_wait") {
+        match guard.child().try_wait().expect("try_wait") {
             Some(status) => return Some(status),
             None => sleep(Duration::from_millis(100)).await,
         }

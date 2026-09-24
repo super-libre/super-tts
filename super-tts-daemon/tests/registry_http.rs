@@ -19,95 +19,29 @@
 //! cargo test -p super-tts-daemon --test registry_http -- --ignored --nocapture
 //! ```
 
-use http_body_util::{BodyExt, Empty, Full};
+mod common;
+
+use common::{Method, StatusCode, TestDaemon};
+use hyper::Request;
+
+use http_body_util::{BodyExt, Empty};
 use hyper::body::Bytes;
 use hyper::client::conn::http1::handshake;
-use hyper::{Method, Request, StatusCode};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::Duration;
 use super_tts_shared::daemon::http_client;
 use super_tts_shared::registry::RegistryListResponse;
 use tokio::net::UnixStream;
-use tokio::time::sleep;
-
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 
 // ---------- harness ----------------------------------------------------------
 
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-}
-
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Spawn a hermetic daemon configured to use `registry_url` instead of the
-/// live registry URL. Returns the guard and the Unix socket path.
-async fn start_daemon_with_registry(registry_url: &str) -> (DaemonGuard, PathBuf) {
-    let unique = format!("tts-reg-{}-{}", std::process::id(), next_test_uniq());
-    let tmp = std::env::temp_dir();
-    let http_socket = tmp.join(format!("{unique}-http.sock"));
-    let config_home = tmp.join(format!("{unique}-config"));
-    let data_home = tmp.join(format!("{unique}-data"));
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-    std::fs::create_dir_all(&data_home).expect("create test data dir");
-    // Isolate the cache too: the registry client persists its index under
-    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
-    // running side by side overwrite each other's.
-    let cache_home = data_home.join("cache");
-    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
+async fn start_daemon_with_registry(registry_url: &str) -> (TestDaemon, PathBuf) {
+    let daemon = common::daemon("registry")
         .env("SUPER_TTS_REGISTRY_URL", registry_url)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("XDG_CACHE_HOME", &cache_home)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    // Hand the child to the guard before the readiness loop: the timeout
-    // panic below must still kill and reap the daemon, not leak it.
-    let guard = DaemonGuard {
-        child,
-        cleanup_paths: vec![http_socket.clone()],
-    };
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists()
-            && http_client::auth_request(http_socket.clone(), "registry-test", &["settings"])
-                .await
-                .is_ok()
-        {
-            return (guard, http_socket);
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!(
-        "daemon HTTP listener did not become ready within 120s (socket: {})",
-        http_socket.display()
-    );
+        .start()
+        .await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket)
 }
 
 // ---------- raw HTTP helpers -------------------------------------------------
@@ -117,32 +51,7 @@ async fn raw_get_json(
     path: &str,
     token: &str,
 ) -> (StatusCode, serde_json::Value) {
-    let stream = UnixStream::connect(socket_path).await.expect("connect");
-    let io = hyper_util::rt::TokioIo::new(stream);
-    let (mut sender, conn) = handshake::<_, Empty<Bytes>>(io).await.expect("handshake");
-    tokio::spawn(async move {
-        let _ = conn.await;
-    });
-
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri(format!("http://tts.local/v1{path}"))
-        .header("host", "tts.local")
-        .header("authorization", format!("Bearer {token}"))
-        .body(Empty::<Bytes>::new())
-        .expect("build req");
-
-    let resp = sender.send_request(req).await.expect("send req");
-    let status = resp.status();
-    let body_bytes = resp
-        .into_body()
-        .collect()
-        .await
-        .expect("collect")
-        .to_bytes();
-    let body: serde_json::Value =
-        serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
-    (status, body)
+    common::request(socket_path, Method::GET, path, Some(token), None).await
 }
 
 async fn raw_post_json(
@@ -151,34 +60,7 @@ async fn raw_post_json(
     token: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
-    let body_bytes = serde_json::to_vec(&body).expect("encode body");
-    let stream = UnixStream::connect(socket_path).await.expect("connect");
-    let io = hyper_util::rt::TokioIo::new(stream);
-    let (mut sender, conn) = handshake::<_, Full<Bytes>>(io).await.expect("handshake");
-    tokio::spawn(async move {
-        let _ = conn.await;
-    });
-
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri(format!("http://tts.local/v1{path}"))
-        .header("host", "tts.local")
-        .header("authorization", format!("Bearer {token}"))
-        .header("content-type", "application/json")
-        .header("content-length", body_bytes.len().to_string())
-        .body(Full::new(Bytes::from(body_bytes)))
-        .expect("build req");
-
-    let resp = sender.send_request(req).await.expect("send req");
-    let status = resp.status();
-    let bytes = resp
-        .into_body()
-        .collect()
-        .await
-        .expect("collect")
-        .to_bytes();
-    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    (status, body)
+    common::request(socket_path, Method::POST, path, Some(token), Some(&body)).await
 }
 
 /// Open `GET /v1/events?topics=registry_install` and return the raw response

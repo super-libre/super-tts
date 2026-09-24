@@ -14,93 +14,24 @@
 //! Uses `SUPER_TTS_AUTO_APPROVE=1` (no GUI) + `SUPER_TTS_KEYRING_MOCK=1`
 //! (in-memory keyring), so it runs in the default `cargo test` flow.
 
+mod common;
+
+use common::TestDaemon;
+
 use futures_util::{SinkExt, StreamExt};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::Duration;
 use super_tts_shared::daemon::http_client;
 use tokio::net::UnixStream;
-use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
-
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-            let _ = std::fs::remove_dir_all(p);
-        }
-    }
-}
-
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
-
-async fn start_daemon() -> (DaemonGuard, PathBuf) {
-    // Per test, not per process: the tests in this file run in parallel in
-    // one process, and on a shared socket path the first to finish kills the
-    // daemon the other is still talking to.
-    let unique = format!(
-        "tts-speak-stream-{}-{}",
-        std::process::id(),
-        next_test_uniq()
-    );
-    let tmp = std::env::temp_dir();
-    let http_socket = tmp.join(format!("{unique}-http.sock"));
-    let config_home = tmp.join(format!("{unique}-config"));
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-    let data_home = tmp.join(format!("{unique}-data"));
-    std::fs::create_dir_all(&data_home).expect("create test data dir");
-    // Isolate the cache too: the registry client persists its index under
-    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
-    // running side by side overwrite each other's.
-    let cache_home = data_home.join("cache");
-    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1")
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("XDG_CACHE_HOME", &cache_home)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    // Hand the child to the guard before the readiness loop: the timeout
-    // panic below must still kill and reap the daemon, not leak it.
-    let guard = DaemonGuard {
-        child,
-        cleanup_paths: vec![http_socket.clone(), config_home, data_home],
-    };
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists()
-            && http_client::auth_request(http_socket.clone(), "speak-stream-smoke", &["status"])
-                .await
-                .is_ok()
-        {
-            return (guard, http_socket);
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!("daemon HTTP listener not ready within 120s");
+/// Per test, not per process: the tests in this file run in parallel in one
+/// process, and each needs a daemon of its own.
+async fn start_daemon() -> (TestDaemon, PathBuf) {
+    let daemon = common::daemon("speak-stream").start().await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket)
 }
 
 /// A frame crosses the upgraded connection in each direction.
