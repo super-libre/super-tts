@@ -111,27 +111,27 @@
         # is bumped here. Every super-engine crate names the same rev.
         super-engine-client = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "df39ade85b73b61c15254dc3d964941c09148cf6",
+            rev = "baf250406f4e075150a22624d1c6bfdbb6a127bc",
         }
         super-engine-daemon = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "df39ade85b73b61c15254dc3d964941c09148cf6",
+            rev = "baf250406f4e075150a22624d1c6bfdbb6a127bc",
         }
         super-engine-forge = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "df39ade85b73b61c15254dc3d964941c09148cf6",
+            rev = "baf250406f4e075150a22624d1c6bfdbb6a127bc",
         }
         super-engine-indexer = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "df39ade85b73b61c15254dc3d964941c09148cf6",
+            rev = "baf250406f4e075150a22624d1c6bfdbb6a127bc",
         }
         super-engine-protocol = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "df39ade85b73b61c15254dc3d964941c09148cf6",
+            rev = "baf250406f4e075150a22624d1c6bfdbb6a127bc",
         }
         super-engine-spec = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "df39ade85b73b61c15254dc3d964941c09148cf6",
+            rev = "baf250406f4e075150a22624d1c6bfdbb6a127bc",
         }
         thiserror = "2.0"
         tokio = {
