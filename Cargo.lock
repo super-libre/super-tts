@@ -6718,7 +6718,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "super-engine-client"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -6737,7 +6737,7 @@ dependencies = [
 [[package]]
 name = "super-engine-daemon"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6770,6 +6770,7 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
+ "toml 1.1.0+spec-1.1.0",
  "utoipa",
  "uuid",
  "wasmtime",
@@ -6780,7 +6781,7 @@ dependencies = [
 [[package]]
 name = "super-engine-forge"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "async-trait",
  "log",
@@ -6794,7 +6795,7 @@ dependencies = [
 [[package]]
 name = "super-engine-indexer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6819,7 +6820,7 @@ dependencies = [
 [[package]]
 name = "super-engine-installer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "clap",
  "dirs",
@@ -6840,7 +6841,7 @@ dependencies = [
 [[package]]
 name = "super-engine-protocol"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "dirs",
  "env_logger",
@@ -6857,7 +6858,7 @@ dependencies = [
 [[package]]
 name = "super-engine-spec"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=be24061fc602619620cd3aa68dbe82b87755607a#be24061fc602619620cd3aa68dbe82b87755607a"
+source = "git+https://github.com/super-libre/super-engine?rev=b1f040167d07301c5aa0e980e83b9e72ccffbf7e#b1f040167d07301c5aa0e980e83b9e72ccffbf7e"
 dependencies = [
  "hex",
  "ring",
