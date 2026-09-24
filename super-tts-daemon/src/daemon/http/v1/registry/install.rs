@@ -7,6 +7,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use super_tts_registry_types::forge::Forge;
 use super_tts_shared::registry::{InstallAccepted, InstallRequest};
 
 use super::pipeline::{InflightMarker, spawn_install_pipeline};
@@ -22,7 +23,7 @@ pub(crate) struct InstallBody {
     pub(crate) source: Option<String>,
     pub(crate) repo_url: Option<String>,
     pub(crate) local_path: Option<String>,
-    pub(crate) forge: Option<super_tts_registry_types::forge::Forge>,
+    pub(crate) forge: Option<Forge>,
 }
 
 /// Map a [`custom_repo::ResolveError`] to a synchronous HTTP status + body
@@ -144,6 +145,52 @@ fn acquire_install_inflight(s: &AppState, source_key: &str) -> Result<InflightMa
     )
 }
 
+/// The forge to query for a Custom-repo install: whichever one the client
+/// declared, else the one serving the host in `repo_url`.
+///
+/// A pasted repository URL already names its host, and the Add-a-backend sheet
+/// has no second thing to ask the operator for, so requiring `forge` alongside
+/// it made that install path unusable from the app rather than safer. Falling
+/// back to a *forge* would be the unsafe move — the GitHub adapter ignores
+/// `RepoRef::host` and would query `api.github.com` for a GitLab URL's
+/// owner/repo — so an unserved host is a hard error here, and declaring `forge`
+/// stays the way to reach one (GitHub Enterprise via `GITHUB_API_BASE`).
+/// `registry.toml` entries are unaffected: an entry author still declares
+/// `forge`, and the indexer never infers it.
+///
+/// # Errors
+/// The same `(status, error token)` pair the other resolve helpers produce,
+/// plus the message to put beside it: `bad_repo_url` when `repo_url` is not a
+/// `<host>/<owner>/<repo>` reference, `unsupported_forge` when no adapter
+/// serves its host.
+fn install_forge(
+    declared: Option<Forge>,
+    repo_url: &str,
+) -> Result<Forge, (StatusCode, &'static str, String)> {
+    if let Some(forge) = declared {
+        return Ok(forge);
+    }
+    // Parsed here only to read the host; `custom_repo::resolve` parses again
+    // for its own use. The failure routes through the same mapping it would
+    // have, so a malformed URL answers identically whether or not `forge` was
+    // declared.
+    let repo = super_engine_forge::RepoRef::parse(repo_url).map_err(|_| {
+        let e = crate::registry::custom_repo::ResolveError::BadRepoUrl(repo_url.to_owned());
+        let (status, error) = custom_repo_error_response(&e);
+        (status, error, e.to_string())
+    })?;
+    super_engine_forge::forge_for_host(&repo.host).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "unsupported_forge",
+            format!(
+                "no forge adapter serves `{}`; declare `forge` to pick one",
+                repo.host
+            ),
+        )
+    })
+}
+
 /// Phase 3 — Resolve the registry entry from whichever of
 /// `source` / `repo_url` / `local_path` was supplied.
 ///
@@ -168,13 +215,9 @@ async fn resolve_install_entry(
         };
         Ok(found)
     } else if let Some(ref repo_url) = body.repo_url {
-        let Some(forge) = body.forge else {
-            return Err(Box::new(super::registry_error_msg(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "custom-repo install requires `forge`",
-            )));
-        };
+        let forge = install_forge(body.forge, repo_url).map_err(|(status, error, msg)| {
+            Box::new(super::registry_error_msg(status, error, &msg))
+        })?;
         let client = super_engine_forge::client(forge, super_tts_registry_types::Tts::USER_AGENT);
         match crate::registry::custom_repo::resolve(client.as_ref(), repo_url).await {
             Ok(entry) => Ok(entry),
@@ -262,7 +305,8 @@ fn select_install_compat(
     description = "\
 Installs a backend from the registry, from a git-forge repository, or from a directory \
 already staged on this machine — send exactly one of `source`, `repo_url`, or \
-`local_path` (a `repo_url` install also needs `forge`).
+`local_path`. A `repo_url` install may also name its `forge`; without one the daemon \
+picks the forge serving the URL's host.
 
 The daemon picks the release asset matching this host's architecture and accelerators, \
 and answers `202` as soon as that choice is made: the download, verification and \
@@ -278,7 +322,7 @@ installed is `POST /registry/backend/update`, which runs this same pipeline.",
     security(("session_token" = ["settings"])),
     responses(
         (status = 202, description = "Accepted; the install runs in the background.", body = InstallAccepted),
-        (status = 400, description = "Not exactly one of `source`, `repo_url`, `local_path` (`bad_request`), a `repo_url` that is not `<host>/<owner>/<repo>` (`bad_repo_url`), or a relative `local_path` (`bad_local_path`).", body = RegistryError),
+        (status = 400, description = "Not exactly one of `source`, `repo_url`, `local_path` (`bad_request`), a `repo_url` that is not `<host>/<owner>/<repo>` (`bad_repo_url`), a `repo_url` on a host no forge adapter serves and no `forge` to pick one (`unsupported_forge`), or a relative `local_path` (`bad_local_path`).", body = RegistryError),
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No catalog entry for that `source`, or the repo, release, directory or manifest does not exist (`not_found`).", body = RegistryError),
@@ -360,4 +404,55 @@ pub(crate) async fn install_registry_backend(
         serde_json::to_string(&resp_body).unwrap_or_default(),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Forge, install_forge};
+    use axum::http::StatusCode;
+
+    /// The regression this helper exists for: the Add-a-backend sheet posts a
+    /// pasted `repo_url` and nothing else, and requiring `forge` beside it made
+    /// every such install answer `400` without reaching the forge at all.
+    #[test]
+    fn a_pasted_github_url_needs_no_declared_forge() {
+        for url in [
+            "https://github.com/owner/backend",
+            "github.com/owner/backend",
+            "https://github.com/owner/backend.git",
+            "https://GitHub.com/owner/backend/",
+        ] {
+            assert_eq!(install_forge(None, url).ok(), Some(Forge::Github), "{url}");
+        }
+    }
+
+    /// The escape hatch for a host the map does not know: a GitHub Enterprise
+    /// server, reached by pointing `GITHUB_API_BASE` at its API.
+    #[test]
+    fn a_declared_forge_wins_over_the_host() {
+        assert_eq!(
+            install_forge(Some(Forge::Github), "github.mycorp.example/owner/backend").ok(),
+            Some(Forge::Github)
+        );
+    }
+
+    /// Guessing GitHub here would not fail loudly: the adapter addresses a repo
+    /// by owner and name alone, so it would fetch a *different* project of the
+    /// same name from api.github.com and install it.
+    #[test]
+    fn an_unserved_host_is_rejected_rather_than_guessed() {
+        let (status, error, _) = install_forge(None, "https://gitlab.com/owner/backend")
+            .expect_err("no adapter serves gitlab.com");
+        assert_eq!(
+            (status, error),
+            (StatusCode::BAD_REQUEST, "unsupported_forge")
+        );
+    }
+
+    #[test]
+    fn a_malformed_repo_url_answers_bad_repo_url() {
+        let (status, error, _) =
+            install_forge(None, "owner/backend").expect_err("not <host>/<owner>/<repo>");
+        assert_eq!((status, error), (StatusCode::BAD_REQUEST, "bad_repo_url"));
+    }
 }

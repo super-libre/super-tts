@@ -3450,7 +3450,7 @@
           "registry"
         ],
         "summary": "Install a backend (scope: settings)",
-        "description": "Installs a backend from the registry, from a git-forge repository, or from a directory already staged on this machine — send exactly one of `source`, `repo_url`, or `local_path` (a `repo_url` install also needs `forge`).\n\nThe daemon picks the release asset matching this host's architecture and accelerators, and answers `202` as soon as that choice is made: the download, verification and install run in the background. Follow them on the `registry_install` event topic, keyed by the returned `install_id`. A `warning` of `unverified_source` means the bytes came from somewhere the registry does not vouch for — a custom repo or a local directory — and is worth showing the user.\n\nInstalling neither selects the backend nor loads a model; do that through `POST /pipeline/{stage}` and `POST /pipeline/{stage}/model`. Upgrading one already installed is `POST /registry/backend/update`, which runs this same pipeline.",
+        "description": "Installs a backend from the registry, from a git-forge repository, or from a directory already staged on this machine — send exactly one of `source`, `repo_url`, or `local_path`. A `repo_url` install may also name its `forge`; without one the daemon picks the forge serving the URL's host.\n\nThe daemon picks the release asset matching this host's architecture and accelerators, and answers `202` as soon as that choice is made: the download, verification and install run in the background. Follow them on the `registry_install` event topic, keyed by the returned `install_id`. A `warning` of `unverified_source` means the bytes came from somewhere the registry does not vouch for — a custom repo or a local directory — and is worth showing the user.\n\nInstalling neither selects the backend nor loads a model; do that through `POST /pipeline/{stage}` and `POST /pipeline/{stage}/model`. Upgrading one already installed is `POST /registry/backend/update`, which runs this same pipeline.",
         "operationId": "install_registry_backend",
         "requestBody": {
           "content": {
@@ -3474,7 +3474,7 @@
             }
           },
           "400": {
-            "description": "Not exactly one of `source`, `repo_url`, `local_path` (`bad_request`), a `repo_url` that is not `<host>/<owner>/<repo>` (`bad_repo_url`), or a relative `local_path` (`bad_local_path`).",
+            "description": "Not exactly one of `source`, `repo_url`, `local_path` (`bad_request`), a `repo_url` that is not `<host>/<owner>/<repo>` (`bad_repo_url`), a `repo_url` on a host no forge adapter serves and no `forge` to pick one (`unsupported_forge`), or a relative `local_path` (`bad_local_path`).",
             "content": {
               "application/json": {
                 "schema": {
