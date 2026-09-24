@@ -535,7 +535,7 @@ async fn the_global_language_setting_lists_what_it_accepts() {
         "a regional tag the setter takes: {offered:?}"
     );
 
-    // The list is the promise: a tag off it round-trips through the setting.
+    // The list is the promise: a tag on it round-trips through the setting.
     let (st, body) = post_req(
         &sock,
         "/settings/language",
@@ -545,6 +545,21 @@ async fn the_global_language_setting_lists_what_it_accepts() {
     .await;
     assert_eq!(st, StatusCode::OK, "offered es-MX but refused it: {body}");
     assert_eq!(body["language"], "es-MX", "{body}");
+
+    // And a tag off it is refused, so the list is the whole truth.
+    let (st, body) = post_req(
+        &sock,
+        "/settings/language",
+        &token,
+        serde_json::json!({ "language": "zz" }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        StatusCode::BAD_REQUEST,
+        "a tag off the list must be refused: {body}"
+    );
+    assert_eq!(body["error_code"], "unsupported_language", "{body}");
 }
 
 /// Case 5 — A `status`-scoped token must be denied (403) on the global and

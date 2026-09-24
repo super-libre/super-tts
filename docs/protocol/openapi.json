@@ -8093,7 +8093,7 @@
         "properties": {
           "language": {
             "type": "string",
-            "description": "A BCP-47 tag such as `es-MX`, or `auto` to let each model choose. Use `DELETE` to clear it."
+            "description": "A tag `GET /settings/language/list` offers, such as `es-MX`, or `auto` to let each model choose; any other is refused. Use `DELETE` to clear it."
           }
         }
       },

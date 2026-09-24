@@ -40,7 +40,8 @@ settings_setter!(
 it: a per-model setting, or a `language` field in a single `POST /speak` body. It spares a user \
 who speaks one language from pinning every model individually. A model that does not serve the \
 chosen tag ignores it and uses its own default, so this never makes a model fail to speak.",
-    "A BCP-47 tag such as `es-MX`, or `auto` to let each model choose. Use `DELETE` to clear it.",
+    "A tag `GET /settings/language/list` offers, such as `es-MX`, or `auto` to let each model \
+choose; any other is refused. Use `DELETE` to clear it.",
 );
 settings_dispatch!(
     clear_language,

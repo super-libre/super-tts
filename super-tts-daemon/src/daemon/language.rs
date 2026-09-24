@@ -59,6 +59,13 @@ pub const GLOBAL_LANGUAGES: &[&str] = &[
     "te-IN", "th-TH", "tr-TR", "uk-UA", "ur-PK", "vi-VN", "cy-GB",
 ];
 
+/// Whether `tag` is one the global setting accepts: a published tag, or the
+/// reserved `auto`.
+#[must_use]
+pub fn is_offered_globally(tag: &str) -> bool {
+    tag == "auto" || GLOBAL_LANGUAGES.contains(&tag)
+}
+
 fn has_region(tag: &str) -> bool {
     tag.contains('-')
 }

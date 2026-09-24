@@ -30,13 +30,8 @@ impl SuperTTSDaemon {
     /// client building its picker from the tags alone would silently drop the
     /// one entry that works on every model, multilingual or not.
     ///
-    /// Note that this is the offer, not a validator: `set_primary_language`
-    /// still stores whatever tag it is handed. A tag from outside this list is
-    /// not lost — it is simply resolved per model like any other, and reaches
-    /// the model only when that model declares it (or its base language). What
-    /// the list promises is that everything *in* it is a tag this daemon means
-    /// to support, which is what a picker needs and could not previously ask
-    /// for.
+    /// It is also what `set_primary_language` accepts: a tag off it is
+    /// refused, so the list is the whole truth a picker needs.
     ///
     /// An associated function rather than a method: the list is the daemon's
     /// published vocabulary, not a property of any one running daemon, and
@@ -58,6 +53,19 @@ impl SuperTTSDaemon {
     }
 
     pub async fn handle_set_primary_language(&self, language: String) -> DaemonResponse {
+        // The list is the promise, so the setter has to keep it. Before this,
+        // `/settings/language` took any string at all, so a client could not
+        // know what it would do with one.
+        if !crate::daemon::language::is_offered_globally(&language) {
+            return DaemonResponse::error_with_code(
+                ErrorCode::UnsupportedLanguage,
+                &format!(
+                    "Language `{language}` is not one GET /settings/language/list offers. \
+                     A model-specific tag belongs on that model, at \
+                     POST /pipeline/{{stage}}/model/{{model}}/language."
+                ),
+            );
+        }
         {
             let mut config = self.config.write().await;
             config.update_primary_language(Some(language.clone()));
