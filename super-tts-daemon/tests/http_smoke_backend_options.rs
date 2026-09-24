@@ -509,7 +509,7 @@ async fn a_value_of_the_wrong_type_is_refused() {
         body["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("float"),
+            .contains("takes a number"),
         "the refusal names the type rather than a list of choices: {body}"
     );
 
