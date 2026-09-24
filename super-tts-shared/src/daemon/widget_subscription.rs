@@ -4,7 +4,9 @@
 //! Super TTS's.
 
 pub use super_engine_client::widget_subscription::*;
-use super_engine_protocol::{SUPER_TTS, scopes};
+use super_engine_protocol::scopes;
+
+use crate::SUPER_TTS;
 
 /// The scope a subscriber needs for Super TTS's event `topic`, or `None` for
 /// a topic Super TTS does not publish. Mirrors the daemon's

@@ -2,8 +2,8 @@
 //! Session tokens, kept in the keyring per app:
 //! [`super_engine_client::session`], with the product bound to Super TTS.
 
+use crate::SUPER_TTS;
 pub use super_engine_client::session::{AppId, forget, load, obtain, save, with_token};
-use super_engine_protocol::SUPER_TTS;
 
 /// The [`AppId`] Super TTS's app `name` keeps its token under, e.g.
 /// `app_id("super-tts-app")`.

@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use super_engine_protocol::SUPER_TTS;
+use crate::SUPER_TTS;
 use super_engine_protocol::paths;
 
 /// `$XDG_CONFIG_HOME/super-tts`, with the fallbacks
