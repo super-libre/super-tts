@@ -2,24 +2,11 @@
 //! Super TTS's names: everything the daemon and its clients meet on, from the
 //! socket to the scopes a token can carry. See
 //! `super_engine_protocol::ProductSpec`.
+//!
+//! [`SUPER_TTS`] is defined in `super-tts-registry-types`, where the
+//! installer can reach it; the tests of what Super TTS shipped live here.
 
-use super_engine_protocol::ProductSpec;
-
-/// Super TTS: text to speech.
-pub static SUPER_TTS: ProductSpec = ProductSpec {
-    display_name: "Super TTS",
-    slug: "super-tts",
-    short_name: "tts",
-    env_prefix: "SUPER_TTS",
-    tcp_port: 7301,
-    repo: "github.com/jorge-menjivar/super-tts",
-    index_url: "https://jorge-menjivar.github.io/super-tts/index.json",
-    scopes: &["speak", "voices", "playback_events"],
-    topics: &[
-        ("speaking_state", "playback_events"),
-        ("speech_progress", "playback_events"),
-    ],
-};
+pub use super_tts_registry_types::product::SUPER_TTS;
 
 #[cfg(test)]
 mod tests {

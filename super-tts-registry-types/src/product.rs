@@ -6,9 +6,32 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use super_engine_protocol::ProductSpec;
 use super_engine_spec::manifest::{ContractField, Manifest, ManifestError, ModelEntry};
 pub use super_engine_spec::product::{Generation, Product};
 use super_engine_spec::product::{SchemaNames, generation_from_str};
+
+/// Super TTS's names: everything the daemon and its clients meet on, from the
+/// socket to the scopes a token can carry. See [`ProductSpec`].
+///
+/// Defined here, beside [`Tts`], rather than in `super-tts-shared`, so the
+/// installer can name it without that crate's keyring and HTTP client.
+/// `super_tts_shared::product` re-exports it, with the tests that pin what
+/// Super TTS shipped.
+pub static SUPER_TTS: ProductSpec = ProductSpec {
+    display_name: "Super TTS",
+    slug: "super-tts",
+    short_name: "tts",
+    env_prefix: "SUPER_TTS",
+    tcp_port: 7301,
+    repo: "github.com/jorge-menjivar/super-tts",
+    index_url: "https://jorge-menjivar.github.io/super-tts/index.json",
+    scopes: &["speak", "voices", "playback_events"],
+    topics: &[
+        ("speaking_state", "playback_events"),
+        ("speech_progress", "playback_events"),
+    ],
+};
 
 /// Super TTS, as a [`Product`] of the backend contract.
 #[derive(Debug, Clone, Copy)]
