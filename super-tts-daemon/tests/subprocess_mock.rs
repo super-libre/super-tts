@@ -17,10 +17,20 @@ use super_tts_shared::audio::frames::{FrameKind, SampleFormat};
 
 /// Removes the per-test backend dir on scope exit — including panic unwinds, so a
 /// failed assertion doesn't leak `~/.cache/super-tts-mock-test-<pid>`.
+///
+/// Also the cache dir the daemon grants that backend, which is named after the
+/// backend dir and lives under the real `~/.cache/super-tts/backends`, so each
+/// run would otherwise leave one behind per test.
 struct CleanupDir(std::path::PathBuf);
 impl Drop for CleanupDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        if let Some(name) = self.0.file_name() {
+            let cache = super_tts_shared::paths::cache_dir()
+                .join("backends")
+                .join(name);
+            let _ = std::fs::remove_dir_all(cache);
+        }
     }
 }
 
