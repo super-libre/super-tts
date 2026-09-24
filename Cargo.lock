@@ -6718,7 +6718,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "super-engine-client"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -6737,7 +6737,7 @@ dependencies = [
 [[package]]
 name = "super-engine-daemon"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6772,6 +6772,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "toml 1.1.0+spec-1.1.0",
+ "ulid",
  "utoipa",
  "uuid",
  "wasmtime",
@@ -6782,7 +6783,7 @@ dependencies = [
 [[package]]
 name = "super-engine-forge"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "async-trait",
  "log",
@@ -6796,7 +6797,7 @@ dependencies = [
 [[package]]
 name = "super-engine-indexer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6821,7 +6822,7 @@ dependencies = [
 [[package]]
 name = "super-engine-installer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "clap",
  "dirs",
@@ -6842,7 +6843,7 @@ dependencies = [
 [[package]]
 name = "super-engine-protocol"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "dirs",
  "env_logger",
@@ -6859,7 +6860,7 @@ dependencies = [
 [[package]]
 name = "super-engine-spec"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=74b467d9d378b3315997ac1cebdec387740e45a6#74b467d9d378b3315997ac1cebdec387740e45a6"
+source = "git+https://github.com/super-libre/super-engine?rev=19d87e62d84b7d6c8265ff9998b9959225eb1db7#19d87e62d84b7d6c8265ff9998b9959225eb1db7"
 dependencies = [
  "hex",
  "ring",
@@ -6982,7 +6983,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "toml 1.1.0+spec-1.1.0",
- "ulid",
  "urlencoding",
  "utoipa",
  "utoipa-axum",

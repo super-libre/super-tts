@@ -7794,7 +7794,7 @@
       },
       "RegistryError": {
         "type": "object",
-        "description": "The registry surface's error envelope, which carries one extra key.\n\nThese endpoints shipped before `error_code` existed, spelling the failure\nidentity as `error`. That key is still sent, because clients read it; the\nstandard `error_code` was added alongside rather than in place of it, so the\nwhole surface honors the \"`error_code` on every error\" rule without breaking\nanyone. Both name the same failure and always agree.\n\nDocumented as its own shape rather than folded into [`ErrorEnvelope`]:\n`error` appears *only* here, and putting it on the shared envelope would\ntell every other endpoint's reader to expect a key they will never receive.",
+        "description": "The registry surface's error envelope, which carries one extra key.\n\nThese endpoints shipped before `error_code` existed, spelling the failure\nidentity as `error`. That key is still sent, because clients read it; the\nstandard `error_code` was added alongside rather than in place of it, so the\nwhole surface honors the \"`error_code` on every error\" rule without breaking\nanyone. Both name the same failure and always agree.\n\nDocumented as its own shape rather than folded into a daemon's general\nerror envelope: `error` appears *only* here, and putting it on the shared\nenvelope would tell every other endpoint's reader to expect a key they will\nnever receive.",
         "required": [
           "status",
           "error_code",
