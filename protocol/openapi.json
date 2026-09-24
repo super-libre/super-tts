@@ -36,7 +36,7 @@
           "auth"
         ],
         "summary": "Ask the user for a session token (no token needed)",
-        "description": "The consent handshake, and the only endpoint reachable without a token.\n\nThe daemon reads `SO_PEERCRED` on your connection, resolves `/proc/<pid>/exe`, and shows the user a popup naming that binary and the scopes you asked for. On Allow it mints a 32-byte token bound to that binary and valid for 30 days.\n\nA denial is remembered for the `(binary, scopes)` pair for the rest of the daemon's lifetime and answers `403` immediately without re-prompting — renaming your app does not clear it, since the key is the binary. Restarting the daemon does.\n\nDo not call this to find out whether a token you already hold is still good: that is `GET /auth/status`, which never prompts.\n\nSetting `SUPER_TTS_AUTO_APPROVE=1` in the daemon's environment skips the popup entirely; it is honored only in debug builds, for tests and CI, so a stray environment variable cannot defeat the consent gate in a shipped binary.",
+        "description": "The consent handshake, and the only endpoint reachable without a token.\n\nThe daemon reads `SO_PEERCRED` on your connection, resolves `/proc/<pid>/exe`, and shows the user a popup naming that binary and the scopes you asked for. On Allow it mints a 32-byte token bound to that binary and valid for 30 days.\n\nA denial is remembered for the `(binary, scopes)` pair for the rest of the daemon's lifetime and answers `403` immediately without re-prompting — renaming your app does not clear it, since the key is the binary. Restarting the daemon does.\n\nDo not call this to find out whether a token you already hold is still good: that is `GET /auth/status`, which never prompts.\n\nSetting the product's `AUTO_APPROVE` variable to `1` in the daemon's environment (`<PREFIX>_AUTO_APPROVE`, where `<PREFIX>` is the product's) skips the popup entirely; it is honored only in debug builds, for tests and CI, so a stray environment variable cannot defeat the consent gate in a shipped binary.",
         "operationId": "auth_request",
         "requestBody": {
           "content": {
@@ -98,7 +98,7 @@
           "auth"
         ],
         "summary": "Check the held token without prompting (any valid token)",
-        "description": "Reports what the presented token is good for, and never opens a consent popup — which is what makes it the right probe for a headless or CLI client. Reaching this handler at all means the token validated.\n\nUse it to fail fast on a token about to expire, rather than discovering it mid-utterance. `GET /ping` proves the daemon is up; this proves the token still is.",
+        "description": "Reports what the presented token is good for, and never opens a consent popup — which is what makes it the right probe for a headless or CLI client. Reaching this handler at all means the token validated.\n\nUse it to fail fast on a token about to expire, rather than discovering it mid-operation. `GET /ping` proves the daemon is up; this proves the token still is.",
         "operationId": "auth_status",
         "responses": {
           "200": {
@@ -519,7 +519,7 @@
             }
           },
           "400": {
-            "description": "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, or it is `base_url` and names no host. Use `DELETE` to clear an override.",
+            "description": "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, it is `base_url` and names no host, or it is longer than 4000 characters or carries a control character. An option value is sent as an `x-tts-option-<name>` request header, which can hold neither a line break nor an unbounded number of bytes, so a value that cannot be delivered is refused rather than stored. Use `DELETE` to clear an override.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3450,7 +3450,7 @@
           "registry"
         ],
         "summary": "Install a backend (scope: settings)",
-        "description": "Installs a backend from the registry, from a git-forge repository, or from a directory already staged on this machine — send exactly one of `source`, `repo_url`, or `local_path` (a `repo_url` install also needs `forge`).\n\nThe daemon picks the release asset matching this host's architecture and accelerators, and answers `202` as soon as that choice is made: the download, verification and install run in the background. Follow them on the `registry_install` event topic, keyed by the returned `install_id`. A `warning` of `unverified_source` means the bytes came from somewhere the registry does not vouch for — a custom repo or a local directory — and is worth showing the user.\n\nInstalling neither selects the backend nor loads a model; do that through `POST /pipeline/{stage}` and `POST /pipeline/{stage}/model`. Upgrading one already installed is `POST /registry/backend/update`, which runs this same pipeline.",
+        "description": "Installs a backend from the registry, from a git-forge repository, or from a directory already staged on this machine — send exactly one of `source`, `repo_url`, or `local_path`. A `repo_url` install may also name its `forge`; without one the daemon picks the forge serving the URL's host.\n\nThe daemon picks the release asset matching this host's architecture and accelerators, and answers `202` as soon as that choice is made: the download, verification and install run in the background. Follow them on the `registry_install` event topic, keyed by the returned `install_id`. A `warning` of `unverified_source` means the bytes came from somewhere the registry does not vouch for — a custom repo or a local directory — and is worth showing the user.\n\nInstalling neither selects the backend nor loads a model; do that through `POST /pipeline/{stage}` and `POST /pipeline/{stage}/model`. Upgrading one already installed is `POST /registry/backend/update`, which runs this same pipeline.",
         "operationId": "install_registry_backend",
         "requestBody": {
           "content": {
@@ -3474,7 +3474,7 @@
             }
           },
           "400": {
-            "description": "Not exactly one of `source`, `repo_url`, `local_path` (`bad_request`), a `repo_url` that is not `<host>/<owner>/<repo>` (`bad_repo_url`), or a relative `local_path` (`bad_local_path`).",
+            "description": "Not exactly one of `source`, `repo_url`, `local_path` (`bad_request`), a `repo_url` that is not `<host>/<owner>/<repo>` (`bad_repo_url`), a `repo_url` on a host no forge adapter serves and no `forge` to pick one (`unsupported_forge`), or a relative `local_path` (`bad_local_path`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3579,7 +3579,7 @@
           "registry"
         ],
         "summary": "Browse the published backend catalog (scope: settings)",
-        "description": "Every backend published to the registry, with the models each serves and whether this machine can run it. `compatibility.compatible` is decided against the host's actual accelerators, so the list reflects what is installable here rather than what exists in general; pass `include_incompatible=true` to see the rest, each with a `compatibility.reason` worth showing the user.\n\n`update_available` is the daemon's answer rather than the client's arithmetic: it compares the installed `backend.toml` on disk against what the index offers, by `source`, and refuses a downgrade. An entry with no `installed_version` is an install, not an update.\n\nThis is what is *available*; `GET /backend/list` is what is installed. The index is cached and re-fetched on a schedule — `POST /registry/backend/refresh` forces that now.",
+        "description": "Every backend published to the registry, with the models each serves and whether this machine can run it. `compatibility.compatible` is decided against the host's actual accelerators and this Super TTS's version, so the list reflects what is installable here rather than what exists in general; pass `include_incompatible=true` to see the rest, each with a `compatibility.reason` worth showing the user.\n\n`needs_client_update` separates the two ways a backend can be blocked: a host that lacks the right GPU will never run it, but a Super TTS one version behind is something the user can fix in a minute. Those are listed even without `include_incompatible`; surface them differently.\n\n`update_available` is the daemon's answer rather than the client's arithmetic: it compares the installed `backend.toml` on disk against what the index offers, by `source`, and refuses a downgrade. An entry with no `installed_version` is an install, not an update.\n\nThis is what is *available*; `GET /backend/list` is what is installed. The index is cached and re-fetched on a schedule — `POST /registry/backend/refresh` forces that now.",
         "operationId": "list_registry_backends",
         "parameters": [
           {
@@ -6353,8 +6353,8 @@
             },
             "description": "The scopes to request, at least one. Every entry must be known or the\nwhole request is refused; ask only for what you need, since the user\nsees the list.",
             "example": [
-              "speak",
-              "status"
+              "status",
+              "settings"
             ]
           },
           "version": {
@@ -6387,8 +6387,8 @@
             },
             "description": "The scopes the token was minted under.",
             "example": [
-              "speak",
-              "status"
+              "status",
+              "settings"
             ]
           },
           "status": {
@@ -6736,6 +6736,10 @@
           "compatible": {
             "type": "boolean"
           },
+          "needs_client_update": {
+            "type": "boolean",
+            "description": "Whether the block is \"this daemon is too old\" rather than \"this\nmachine cannot run it\".\n\nThe two are hidden differently. A host that lacks the right GPU will\nnever run the asset, so Browse tucks it behind \"Show incompatible\"; a\ndaemon one version behind is a thing the user can fix in a minute,\nand hiding it hides the only notice they would get. `false` on an older\ndaemon that does not send the field, which lists as it always did."
+          },
           "reason": {
             "type": [
               "string",
@@ -6920,9 +6924,16 @@
           }
         }
       },
+      "Forge": {
+        "type": "string",
+        "description": "The forge hosting a backend's releases.",
+        "enum": [
+          "github"
+        ]
+      },
       "GpuHostInfo": {
         "type": "object",
-        "description": "Host-wide GPU toolchain/driver versions reported on\n[`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md), independent\nof any one GPU. Each field is `null` when that accelerator's runtime isn't\ndetected on this host — see `docs/protocol/endpoints/v1/gpu_info.md` for\nwhat presence and absence do and don't imply for each one.",
+        "description": "Host-wide GPU toolchain/driver versions reported on\n`GET /gpu_info`, independent\nof any one GPU. Each field is `null` when that accelerator's runtime isn't\ndetected on this host. Presence says the runtime is installed, not that a\nGPU is behind it: a caller wanting that reads the GPUs themselves.",
         "properties": {
           "cuda": {
             "oneOf": [
@@ -6958,7 +6969,7 @@
       },
       "GpuInfo": {
         "type": "object",
-        "description": "One GPU as reported by [`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md).\n`vendor` is a lowercase `snake_case` tag (`nvidia` / `amd` / `intel` /\n`apple` / `unknown`). `total_bytes` is dedicated VRAM for discrete GPUs and\nthe shared system-memory ceiling for integrated/unified GPUs;\n`free_bytes` / `used_bytes` are `null` when the platform doesn't report them.",
+        "description": "One GPU as reported by `GET /gpu_info`.\n`vendor` is a lowercase `snake_case` tag (`nvidia` / `amd` / `intel` /\n`apple` / `unknown`). `total_bytes` is dedicated VRAM for discrete GPUs and\nthe shared system-memory ceiling for integrated/unified GPUs;\n`free_bytes` / `used_bytes` are `null` when the platform doesn't report them.",
         "required": [
           "name",
           "vendor",
@@ -7028,23 +7039,36 @@
         }
       },
       "IndexModel": {
-        "type": "object",
-        "description": "The browse-only model subset the catalog and host-compatibility filter need\nbefore download. The authoritative manifest (languages, files, …) ships as\nthe pinned `manifest` asset and is installed verbatim — it is not re-encoded\nhere. Also the leaf type for `/registry/backends` (`RegistryModel`).",
-        "required": [
-          "name",
-          "supported_devices"
-        ],
-        "properties": {
-          "name": {
-            "type": "string"
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The per-model fields Super TTS's index carries beside `name` and\n`supported_devices`: none yet."
+              }
+            ],
+            "description": "The fields the product adds ([`Product::IndexModel`])."
           },
-          "supported_devices": {
-            "type": "array",
-            "items": {
-              "type": "string"
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "supported_devices"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "supported_devices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
-        }
+        ],
+        "description": "The browse-only model subset the catalog and host-compatibility filter need\nbefore download. The authoritative manifest (languages, files, …) ships as\nthe pinned `manifest` asset and is installed verbatim — it is not re-encoded\nhere. Also the leaf type of a daemon's registry listing (`RegistryModel`)."
       },
       "IndexOption": {
         "type": "object",
@@ -7156,6 +7180,17 @@
               "repo_url"
             ],
             "properties": {
+              "forge": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Forge",
+                    "description": "Which forge API to speak. Optional: the daemon reads the host out\nof `repo_url` when it is absent, and only a host no adapter serves\nneeds it spelled out."
+                  }
+                ]
+              },
               "repo_url": {
                 "type": "string"
               }
@@ -7261,6 +7296,34 @@
           "status": {
             "type": "string",
             "example": "success"
+          }
+        }
+      },
+      "LoadProgress": {
+        "type": "object",
+        "description": "A backend's own account of its load in progress.",
+        "properties": {
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kind of load: `initial_setup` for a first load that pays a one-time\ncost, `loading` otherwise. Absent when the backend does not say."
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "How far through `step` the load is, 0.0 to 1.0, or through the whole\nload when there is no `step`. Absent when the backend cannot tell."
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the load is doing now: `loading_weights`, `building_kernels` or\n`warming_up`, or an id from a newer backend, which a client shows as a\nload in progress. Absent when the backend does not say."
           }
         }
       },
@@ -7567,7 +7630,7 @@
       },
       "ReasonEnvelope": {
         "type": "object",
-        "description": "The auth-failure envelope: `message` names the failure and `data.reason`\nsays which of its cases occurred.\n\nDistinct from [`ErrorEnvelope`] because the auth surface predates\n`error_code` and clients read `data.reason` there. Both are documented\nrather than reconciled, since changing either is a breaking wire change.",
+        "description": "The auth-failure envelope: `message` names the failure and `data.reason`\nsays which of its cases occurred.\n\nDistinct from `ErrorEnvelope` because the auth surface predates\n`error_code` and clients read `data.reason` there. Both are documented\nrather than reconciled, since changing either is a breaking wire change.",
         "required": [
           "status",
           "message",
@@ -7646,7 +7709,8 @@
             "$ref": "#/components/schemas/Compatibility"
           },
           "contract": {
-            "type": "string"
+            "type": "string",
+            "description": "The contract generation the backend declares, as published. Carried\nas a string so a client lists an entry whose generation it does not\nknow; `compatibility` says whether this daemon can drive it."
           },
           "description": {
             "type": [
@@ -7678,6 +7742,13 @@
           },
           "license": {
             "type": "string"
+          },
+          "min_client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release of the daemon's product that first understood `contract`,\nas stamped by the indexer. `None` for an index that predates the\nstamp."
           },
           "models": {
             "type": "array",
@@ -7723,7 +7794,7 @@
       },
       "RegistryError": {
         "type": "object",
-        "description": "The registry surface's error envelope, which carries one extra key.\n\nThese endpoints shipped before `error_code` existed, spelling the failure\nidentity as `error`. That key is still sent, because clients read it; the\nstandard `error_code` was added alongside rather than in place of it, so the\nwhole surface honors the \"`error_code` on every error\" rule without breaking\nanyone. Both name the same failure and always agree.\n\nDocumented as its own shape rather than folded into [`ErrorEnvelope`]:\n`error` appears *only* here, and putting it on the shared envelope would\ntell every other endpoint's reader to expect a key they will never receive.",
+        "description": "The registry surface's error envelope, which carries one extra key.\n\nThese endpoints shipped before `error_code` existed, spelling the failure\nidentity as `error`. That key is still sent, because clients read it; the\nstandard `error_code` was added alongside rather than in place of it, so the\nwhole surface honors the \"`error_code` on every error\" rule without breaking\nanyone. Both name the same failure and always agree.\n\nDocumented as its own shape rather than folded into a daemon's general\nerror envelope: `error` appears *only* here, and putting it on the shared\nenvelope would tell every other endpoint's reader to expect a key they will\nnever receive.",
         "required": [
           "status",
           "error_code",
@@ -7794,7 +7865,7 @@
       },
       "RocmHostInfo": {
         "type": "object",
-        "description": "The installed `ROCm` userspace release, e.g. `\"6.2.4\"`. Advisory only — see\n`docs/protocol/endpoints/v1/gpu_info.md`; `arch_target` is what a build must\nactually match.",
+        "description": "The installed `ROCm` userspace release, e.g. `\"6.2.4\"`. Advisory only:\n[`GpuInfo::arch_target`] is what a build must actually match.",
         "required": [
           "version"
         ],
@@ -8022,7 +8093,7 @@
         "properties": {
           "language": {
             "type": "string",
-            "description": "A BCP-47 tag such as `es-MX`, or `auto` to let each model choose. Use `DELETE` to clear it."
+            "description": "A tag `GET /settings/language/list` offers, such as `es-MX`, or `auto` to let each model choose; any other is refused. Use `DELETE` to clear it."
           }
         }
       },
@@ -8294,6 +8365,17 @@
           "download": {
             "$ref": "#/components/schemas/SwitchDownload",
             "description": "Byte and file progress, for the `downloading` phase."
+          },
+          "load": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LoadProgress",
+                "description": "The backend's own account of the load, in the `loading_model` phase:\nits phase, its step, and how far through the step it is. Absent until\nthe backend reports any of it, and from backends that never do."
+              }
+            ]
           },
           "phase": {
             "type": "string",
