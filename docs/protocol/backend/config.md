@@ -615,7 +615,7 @@ websocket = true
 
 | Field       | Type | Required | Notes                                                                              |
 |-------------|------|----------|------------------------------------------------------------------------------------|
-| `websocket` | bool | no       | Opt into the `super-tts:realtime/ws` import and the `super-tts:realtime/ws-server` export (see [wasm.md — Realtime](./wasm.md#realtime-websocket)). When `true`, the daemon wires those interfaces into the WASM component for every session on a realtime model. **wasm-only** — a `subprocess` backend declaring `websocket = true` is rejected at discovery. Default `false`. |
+| `websocket` | bool | no       | Opt into the `super-engine:realtime/ws` import and the `super-engine:realtime/ws-server` export (see [wasm.md — Realtime](./wasm.md#realtime-websocket)). When `true`, the daemon wires those interfaces into the WASM component for every session on a realtime model. **wasm-only** — a `subprocess` backend declaring `websocket = true` is rejected at discovery. Default `false`. |
 
 ## `[[models]]`
 
