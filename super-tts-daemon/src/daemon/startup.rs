@@ -111,7 +111,7 @@ impl SuperTTSDaemon {
                     .with_voices(Arc::clone(&voices)),
             ),
             voices,
-            loading: Arc::new(crate::daemon::types::LoadGate::default()),
+            loading: Arc::new(super_engine_daemon::load_gate::LoadGate::default()),
         };
 
         daemon.post_init().await;
