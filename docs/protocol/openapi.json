@@ -6933,7 +6933,7 @@
       },
       "GpuHostInfo": {
         "type": "object",
-        "description": "Host-wide GPU toolchain/driver versions reported on\n[`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md), independent\nof any one GPU. Each field is `null` when that accelerator's runtime isn't\ndetected on this host — see `docs/protocol/endpoints/v1/gpu_info.md` for\nwhat presence and absence do and don't imply for each one.",
+        "description": "Host-wide GPU toolchain/driver versions reported on\n`GET /gpu_info`, independent\nof any one GPU. Each field is `null` when that accelerator's runtime isn't\ndetected on this host. Presence says the runtime is installed, not that a\nGPU is behind it: a caller wanting that reads the GPUs themselves.",
         "properties": {
           "cuda": {
             "oneOf": [
@@ -6969,7 +6969,7 @@
       },
       "GpuInfo": {
         "type": "object",
-        "description": "One GPU as reported by [`GET /gpu_info`](../../../docs/protocol/endpoints/v1/gpu_info.md).\n`vendor` is a lowercase `snake_case` tag (`nvidia` / `amd` / `intel` /\n`apple` / `unknown`). `total_bytes` is dedicated VRAM for discrete GPUs and\nthe shared system-memory ceiling for integrated/unified GPUs;\n`free_bytes` / `used_bytes` are `null` when the platform doesn't report them.",
+        "description": "One GPU as reported by `GET /gpu_info`.\n`vendor` is a lowercase `snake_case` tag (`nvidia` / `amd` / `intel` /\n`apple` / `unknown`). `total_bytes` is dedicated VRAM for discrete GPUs and\nthe shared system-memory ceiling for integrated/unified GPUs;\n`free_bytes` / `used_bytes` are `null` when the platform doesn't report them.",
         "required": [
           "name",
           "vendor",
@@ -7865,7 +7865,7 @@
       },
       "RocmHostInfo": {
         "type": "object",
-        "description": "The installed `ROCm` userspace release, e.g. `\"6.2.4\"`. Advisory only — see\n`docs/protocol/endpoints/v1/gpu_info.md`; `arch_target` is what a build must\nactually match.",
+        "description": "The installed `ROCm` userspace release, e.g. `\"6.2.4\"`. Advisory only:\n[`GpuInfo::arch_target`] is what a build must actually match.",
         "required": [
           "version"
         ],
