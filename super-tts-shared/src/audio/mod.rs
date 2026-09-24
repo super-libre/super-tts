@@ -12,6 +12,6 @@ pub mod frames;
 // behind the `analysis` feature. Consumers that only render bands (the applet)
 // get `FrequencyData` without pulling in `spectrum-analyzer`.
 #[cfg(feature = "analysis")]
-pub mod analysis;
-#[cfg(feature = "analysis")]
 pub use analysis::*;
+#[cfg(feature = "analysis")]
+pub use super_engine_protocol::audio::analysis;
