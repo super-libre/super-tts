@@ -968,7 +968,7 @@ impl SuperTTSDaemon {
 /// the backend's `installed_accel` from `GET /backends`.
 pub(crate) fn host_available_devices(host: &crate::registry::host_detect::Host) -> Vec<String> {
     let mut devices = vec!["cpu".to_string()];
-    if host.cuda.is_some() || host.rocm.is_some() || host.vulkan.is_some() {
+    if host.cuda.is_some() || host.rocm.is_some() || host.vulkan.is_some() || host.metal.is_some() {
         devices.push("gpu".to_string());
     }
     devices
@@ -1226,6 +1226,15 @@ mod tests {
         });
         assert_eq!(
             host_available_devices(&vulkan),
+            vec!["cpu".to_string(), "gpu".to_string()]
+        );
+
+        // Metal is the accelerator on every Mac, so a daemon that left it out
+        // here would offer a Mac the CPU and nothing else.
+        let mut metal = bare_host();
+        metal.metal = Some(crate::registry::host_detect::MetalHost);
+        assert_eq!(
+            host_available_devices(&metal),
             vec!["cpu".to_string(), "gpu".to_string()]
         );
     }
