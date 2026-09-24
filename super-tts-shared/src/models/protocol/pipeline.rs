@@ -133,6 +133,11 @@ pub struct StageSwitch {
     pub started_at: String,
     /// Byte and file progress, for the `downloading` phase.
     pub download: SwitchDownload,
+    /// The backend's own account of the load, in the `loading_model` phase:
+    /// its phase, its step, and how far through the step it is. Absent until
+    /// the backend reports any of it, and from backends that never do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<super::LoadProgress>,
 }
 
 /// The model a [`StageSwitch`] is loading.
@@ -343,6 +348,7 @@ mod tests {
                     percentage: 25.0,
                     eta_seconds: Some(30),
                 },
+                load: None,
             }),
         };
 
@@ -379,6 +385,7 @@ mod tests {
                 percentage: 100.0,
                 eta_seconds: None,
             },
+            load: None,
         });
         let json = serde_json::to_value(slot).expect("serializes");
         assert!(json["model"].is_null());

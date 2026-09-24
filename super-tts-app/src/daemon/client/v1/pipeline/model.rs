@@ -118,6 +118,8 @@ struct StageSwitch {
     started_at: Option<String>,
     #[serde(default)]
     download: Option<StageDownload>,
+    #[serde(default)]
+    load: Option<super_tts_shared::models::protocol::LoadProgress>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -192,6 +194,7 @@ pub async fn get_download_status(
             // The polled `switch` shape carries no error detail; failure text
             // arrives on the `download_progress` SSE event.
             error: None,
+            load: switch.load,
         }))
     })
     .await

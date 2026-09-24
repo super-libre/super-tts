@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use http_body_util::BodyExt;
 use log::info;
 use super_engine_daemon::subprocess::{self as engine, Launch, json_headers};
+use super_tts_shared::models::protocol::LoadProgress;
 
 use crate::tts_models::backends::manifest::Manifest;
 use crate::tts_models::synthesize::{ModelInfo, ModelInfoData, ModelState, Synthesize};
@@ -106,6 +107,15 @@ impl SubprocessBackend {
             t.broadcast_progress();
         }
 
+        // What the backend reports of its own load goes to the tracker, so the
+        // card can say what the load is doing rather than sit on a full bar.
+        let forward = tracker.map(|t| {
+            move |load: LoadProgress| {
+                t.set_load_progress(load);
+                t.broadcast_progress();
+            }
+        });
+
         let backend = engine::SubprocessBackend::spawn(
             &super_tts_shared::SUPER_TTS,
             Launch {
@@ -116,6 +126,9 @@ impl SubprocessBackend {
                 devices: &model.supported_devices,
                 device_pref,
                 context_headers,
+                on_load_progress: forward
+                    .as_ref()
+                    .map(|f| f as &(dyn Fn(LoadProgress) + Send + Sync)),
             },
         )
         .await?;

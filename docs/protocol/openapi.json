@@ -7299,6 +7299,34 @@
           }
         }
       },
+      "LoadProgress": {
+        "type": "object",
+        "description": "A backend's own account of its load in progress.",
+        "properties": {
+          "phase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kind of load: `initial_setup` for a first load that pays a one-time\ncost, `loading` otherwise. Absent when the backend does not say."
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "How far through `step` the load is, 0.0 to 1.0, or through the whole\nload when there is no `step`. Absent when the backend cannot tell."
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the load is doing now: `loading_weights`, `building_kernels` or\n`warming_up`, or an id from a newer backend, which a client shows as a\nload in progress. Absent when the backend does not say."
+          }
+        }
+      },
       "ModelDevice": {
         "type": "object",
         "description": "A model's device preference, what it resolved to, and what this host can\noffer it.",
@@ -8337,6 +8365,17 @@
           "download": {
             "$ref": "#/components/schemas/SwitchDownload",
             "description": "Byte and file progress, for the `downloading` phase."
+          },
+          "load": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LoadProgress",
+                "description": "The backend's own account of the load, in the `loading_model` phase:\nits phase, its step, and how far through the step it is. Absent until\nthe backend reports any of it, and from backends that never do."
+              }
+            ]
           },
           "phase": {
             "type": "string",

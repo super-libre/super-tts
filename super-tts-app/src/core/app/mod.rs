@@ -40,6 +40,9 @@ pub enum ModelOperationState {
     Loading {
         target_model: String,
         status_message: String,
+        /// What the backend reports of its load — a first-time setup, the
+        /// step it is on, how far through — once it reports anything.
+        load: Option<super_tts_shared::models::protocol::LoadProgress>,
     },
     /// Model operation failed
     Error { message: String },
