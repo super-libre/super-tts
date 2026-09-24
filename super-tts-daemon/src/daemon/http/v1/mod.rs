@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `/v1` — one module per path, named for the path it answers on.
 //!
-//! A directory where a path has sub-resources worth separating ([`auth`],
-//! [`backends`], [`pipeline`], [`registry`], [`settings`]); a file otherwise,
-//! holding that path and any sub-path small enough to read beside it. Two
-//! modules are named for something other than a path because they are not
-//! endpoints: [`macros`], which generates the one-value settings handlers, and
-//! [`wire`], the narrow response bodies they answer with.
+//! A directory where a path has sub-resources worth separating ([`backends`],
+//! [`pipeline`], [`registry`], [`settings`]); a file otherwise, holding that
+//! path and any sub-path small enough to read beside it. Two modules are named
+//! for something other than a path because they are not endpoints: [`macros`],
+//! which generates the one-value settings handlers, and [`wire`], the narrow
+//! response bodies they answer with.
+//!
+//! `/auth` is the exception: its routes are `super_engine_daemon::auth::routes`,
+//! shared with Super STT, and only registered here.
 
 // Must come first: `#[macro_use]` puts the settings-endpoint macros in scope for
 // every module declared after it.
 #[macro_use]
 mod macros;
 
-pub(crate) mod auth;
 pub(crate) mod backends;
 pub(crate) mod events;
 pub(crate) mod gpu_info;
@@ -28,14 +30,16 @@ pub(crate) mod update;
 pub(crate) mod voice;
 pub(crate) mod wire;
 
-use crate::daemon::http::internal::auth::middleware::{
-    require_allowed_origin, require_any_authenticated, require_rate_limit, require_secrets_scope,
-    require_settings_scope, require_speak_scope, require_status_scope, require_voices_scope,
-};
+use crate::daemon::http::internal::auth::{require_speak_scope, require_voices_scope};
 use crate::daemon::http::openapi::ApiDoc;
 use crate::daemon::http::state::AppState;
 use axum::Router;
 use axum::middleware;
+use super_engine_daemon::auth::middleware::{
+    require_allowed_origin, require_any_authenticated, require_rate_limit, require_secrets_scope,
+    require_settings_scope, require_status_scope,
+};
+use super_engine_daemon::auth::routes as auth;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -77,14 +81,14 @@ fn scope_groups() -> ScopeGroups {
     ScopeGroups {
         any: OpenApiRouter::new()
             .routes(routes!(ping::ping))
-            .routes(routes!(auth::status::auth_status))
+            .routes(routes!(auth::auth_status))
             .merge(events::routes()),
         status: OpenApiRouter::new().routes(routes!(status::status)),
         speak: speak::routes().merge(speak_stream::routes()),
         settings: settings_routes(),
         secrets: backends::secrets::routes(),
         voices: voice::routes(),
-        unauthenticated: OpenApiRouter::new().routes(routes!(auth::request::auth_request)),
+        unauthenticated: OpenApiRouter::new().routes(routes!(auth::auth_request)),
     }
 }
 
@@ -116,9 +120,9 @@ fn guarded(groups: ScopeGroups, state: &AppState) -> ScopeGroups {
     macro_rules! guard {
         ($group:expr, $scope:expr) => {
             $group
-                .layer(middleware::from_fn_with_state(state.clone(), $scope))
+                .layer(middleware::from_fn_with_state(state.auth.clone(), $scope))
                 .layer(middleware::from_fn_with_state(
-                    state.clone(),
+                    state.auth.clone(),
                     require_rate_limit,
                 ))
         };
@@ -163,7 +167,7 @@ pub(crate) fn router(state: AppState) -> Router {
     let (router, _spec) = assemble(guarded(scope_groups(), &state)).split_for_parts();
     router
         .layer(middleware::from_fn_with_state(
-            state.clone(),
+            state.auth.clone(),
             require_allowed_origin,
         ))
         .with_state(state)

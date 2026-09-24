@@ -1,46 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! One home for the Super TTS XDG base directories.
-//!
-//! Replaces the byte-identical daemon↔applet `get_config_path` cores and the
-//! scattered `dirs`-miss fallbacks. Each helper returns the `super-tts`
-//! subdirectory of its XDG base, applying the same fallback the call sites used
-//! (so behavior is unchanged) — callers append their own filename. The
-//! validated runtime-socket path lives separately in
-//! [`crate::validation`] (`get_http_socket_path` etc.).
+//! Super TTS's base directories: [`super_engine_protocol::paths`] for
+//! [`SUPER_TTS`]. Callers append their own filename. The runtime socket path
+//! lives in [`crate::validation`] (`get_http_socket_path` etc.).
 
 use std::path::PathBuf;
 
-/// `$XDG_CONFIG_HOME/super-tts` (fallback `$HOME/.config/super-tts`, else
-/// `/tmp/.config/super-tts`). Daemon: append `daemon.toml`; applet: append
+use crate::SUPER_TTS;
+use super_engine_protocol::paths;
+
+/// `$XDG_CONFIG_HOME/super-tts`, with the fallbacks
+/// [`paths::config_dir`] names. Daemon: append `daemon.toml`; applet: append
 /// `applet-<variant>.toml`.
 #[must_use]
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| home_join(".config"))
-        .join("super-tts")
+    paths::config_dir(&SUPER_TTS)
 }
 
-/// `$XDG_DATA_HOME/super-tts` (fallback `$HOME/.local/share/super-tts`, else
-/// `/tmp/.local/share/super-tts`). Used for installed backends.
+/// `$XDG_DATA_HOME/super-tts`, with the fallbacks [`paths::data_dir`] names.
+/// Used for installed backends.
 #[must_use]
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| home_join(".local/share"))
-        .join("super-tts")
+    paths::data_dir(&SUPER_TTS)
 }
 
-/// `$XDG_CACHE_HOME/super-tts` (fallback `$TMPDIR/super-tts`). Used for the
-/// registry index cache and staged installs.
+/// `$XDG_CACHE_HOME/super-tts`, with the fallbacks [`paths::cache_dir`]
+/// names. Used for the registry index cache and staged installs.
 #[must_use]
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("super-tts")
-}
-
-/// `$HOME/<suffix>`, falling back to `/tmp/<suffix>` when `HOME` is unset —
-/// the shared fallback for the config/data dirs above.
-fn home_join(suffix: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(suffix)
+    paths::cache_dir(&SUPER_TTS)
 }

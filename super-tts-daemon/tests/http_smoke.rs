@@ -17,96 +17,22 @@
 //! cargo test -p super-tts --test http_smoke -- --nocapture
 //! ```
 
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-use super_tts_shared::daemon::http_client;
-use tokio::time::sleep;
+mod common;
 
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
+use common::TestDaemon;
+
+use std::path::PathBuf;
+use super_tts_shared::daemon::http_client;
+
 const APP_NAME: &str = "super-tts smoke test";
 const SCOPES: &[&str] = &["speak", "status"];
 
-struct DaemonGuard {
-    child: Child,
-    xdg_runtime_dir: PathBuf,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.xdg_runtime_dir);
-    }
-}
-
-/// Monotonic per-call counter so concurrent tests in the same test
-/// binary get unique paths. `Instant::now().elapsed().as_nanos()`
-/// returns 0 immediately after construction and would collide.
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
-
-async fn start_daemon() -> (DaemonGuard, PathBuf) {
-    let xdg = std::env::temp_dir().join(format!(
-        "tts-test-{}-{}",
-        std::process::id(),
-        next_test_uniq()
-    ));
-    std::fs::create_dir_all(xdg.join("tts")).expect("create xdg/tts dir");
-    // CRITICAL: also isolate XDG_CONFIG_HOME so the test daemon
-    // doesn't read or write the developer's real
-    // `~/.config/super-tts/daemon.toml`. Without this, every test
-    // run that passes `--audio-theme silent` or `--device cpu`
-    // overwrites the real user's saved settings via
-    // `apply_cli_overrides_to_config`.
-    let config_home = xdg.join("config");
-    std::fs::create_dir_all(&config_home).expect("create xdg/config dir");
-    // Isolate XDG_DATA_HOME so the daemon discovers no backends (hermetic):
-    // it comes up idle and fast, without spawning a real backend at startup.
-    let data_home = xdg.join("data");
-    std::fs::create_dir_all(&data_home).expect("create xdg/data dir");
-
-    let http_socket = xdg.join("tts").join("super-tts-http.sock");
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
-        .env("XDG_RUNTIME_DIR", &xdg)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("SUPER_TTS_AUTO_APPROVE", "1") // bypass consent popup
-        .env("SUPER_TTS_MUTE_CUES", "1") // never beep on the runner's speakers
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    // Hand the child to the guard before the readiness loop: the timeout
-    // panic below must still kill and reap the daemon, not leak it.
-    let guard = DaemonGuard {
-        child,
-        xdg_runtime_dir: xdg,
-    };
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists() {
-            // Try minting a token to confirm the HTTP listener is fully alive.
-            if http_client::auth_request(http_socket.clone(), APP_NAME, SCOPES)
-                .await
-                .is_ok()
-            {
-                return (guard, http_socket);
-            }
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!(
-        "daemon HTTP listener did not become ready within 120s (socket: {})",
-        http_socket.display()
-    );
+/// The socket is left where the daemon puts it when told nothing, under a
+/// runtime directory of the test's own, so these tests cover that default too.
+async fn start_daemon() -> (TestDaemon, PathBuf) {
+    let daemon = common::daemon("smoke").default_socket().start().await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket)
 }
 
 #[tokio::test]

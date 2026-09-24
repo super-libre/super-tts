@@ -104,14 +104,14 @@ impl SuperTTSDaemon {
             notifier: Arc::new(tokio::sync::Mutex::new(
                 crate::output::notification::Notifier::dbus(),
             )),
-            self_update: Arc::new(crate::self_update::SelfUpdateChecker::new()),
+            self_update: Arc::new(crate::self_update::checker()),
             speech: Arc::new(
                 crate::daemon::speech::SpeechEngine::new()
                     .with_events(Arc::clone(&events))
                     .with_voices(Arc::clone(&voices)),
             ),
             voices,
-            loading: Arc::new(crate::daemon::types::LoadGate::default()),
+            loading: Arc::new(super_engine_daemon::load_gate::LoadGate::default()),
         };
 
         daemon.post_init().await;
@@ -148,7 +148,7 @@ impl SuperTTSDaemon {
                     Self::load_initial_model_and_broadcast(&bg, name.clone(), source).await
                 {
                     warn!("Failed to load startup model {name}: {e}; daemon is idle");
-                    bg.download_manager.clear_download();
+                    bg.download_manager.clear_download(());
                 }
             });
         } else {

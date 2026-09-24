@@ -16,7 +16,7 @@ pub(super) struct UdpSubscriptionId(pub(super) u64);
 /// cached for normal config calls — [`SETTINGS_SCOPES`] grants the
 /// playback / visualization / daemon-status topics below.
 pub(super) const SETTINGS_APP_ID: super_tts_shared::daemon::session::AppId =
-    super_tts_shared::daemon::session::AppId("super-tts-app");
+    super_tts_shared::daemon::session::app_id("super-tts-app");
 const SETTINGS_APP_NAME: &str = "Super TTS Settings App";
 /// Topics the settings app subscribes to over `GET /events`.
 ///

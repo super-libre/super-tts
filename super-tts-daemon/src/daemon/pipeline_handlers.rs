@@ -183,6 +183,7 @@ impl SuperTTSDaemon {
                 percentage: progress.percentage,
                 eta_seconds: progress.eta_seconds,
             },
+            load: progress.load,
         })
     }
 

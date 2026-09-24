@@ -342,7 +342,8 @@ async fn verify_installer_checksum(bin: &Path, expected_hex: &str) -> Result<(),
 /// guaranteed final emission (see the `any_progress`/`last_reported` check
 /// below) — keep the two in step per that function's own doc comment.
 async fn download_installer(url: &str, dest: &Path, tx: &mut Tx) -> Result<(), String> {
-    let client = super_tts_forge::http::download_client();
+    let client =
+        super_engine_forge::http::download_client(super_tts_registry_types::Tts::USER_AGENT);
     let mut resp = client
         .get(url)
         .send()
@@ -679,14 +680,14 @@ mod tests {
         // `total` stays 0 for the whole transfer, so the old `done == total`
         // check could never fire, and nothing else in the loop would either
         // — the fetch would silently report zero progress.
-        super_tts_forge::install_crypto_provider();
+        super_engine_forge::install_crypto_provider();
         let mut s = mockito::Server::new_async().await;
         s.mock("GET", "/blob")
             .with_status(200)
             .with_chunked_body(|w| w.write_all(&[3u8; 1000]))
             .create_async()
             .await;
-        // pid + an atomic counter (super-tts-install/src/escalate.rs's test
+        // pid + an atomic counter (super-engine-installer's test
         // temp-dir convention) so parallel tests can't collide; clear a
         // pre-existing directory first since the pid+counter name is only
         // unique within one process run.

@@ -26,12 +26,14 @@ fn discovered(dir: &str, source: &str) -> DiscoveredBackend {
         source: source.to_string(),
         id: None,
         name: "Kokoro (local)".to_string(),
+        description: String::new(),
         version: "1.0.0".to_string(),
         kind: "subprocess".to_string(),
         entrypoint: "kokoro".to_string(),
         allowed_hosts: Vec::new(),
         secrets: Vec::new(),
         options: Vec::new(),
+        capabilities: Default::default(),
         models: Vec::new(),
     }
 }

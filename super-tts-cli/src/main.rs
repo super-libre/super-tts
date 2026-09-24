@@ -23,7 +23,7 @@ use super_tts_shared::daemon::http_client;
 use super_tts_shared::daemon::session::{self, AppId};
 use super_tts_shared::validation::get_http_socket_path;
 
-const APP_ID: AppId = AppId("super-tts-cli");
+const APP_ID: AppId = super_tts_shared::daemon::session::app_id("super-tts-cli");
 const APP_NAME: &str = "Super TTS CLI";
 const SCOPES: &[&str] = &["speak", "status"];
 
@@ -239,7 +239,7 @@ mod tests {
     use super_tts_shared::daemon::scopes::is_known_scope;
 
     /// The CLI's requested scope set must be a subset of the daemon's shared
-    /// catalog. Without this, a wire-scope rename in `scopes::KNOWN_SCOPES`
+    /// catalog. Without this, a wire-scope rename in `scopes::known_scopes`
     /// would leave `SCOPES` requesting a token the daemon rejects, and the
     /// break would only surface at runtime as a failed `/auth/request`. Mirrors
     /// the consent binary's `scope_conformance` guard (audit 2 Tier 3 #33).
@@ -248,7 +248,7 @@ mod tests {
         for scope in SCOPES {
             assert!(
                 is_known_scope(scope),
-                "CLI requests scope `{scope}` that is not in scopes::KNOWN_SCOPES"
+                "CLI requests scope `{scope}` that is not in scopes::known_scopes"
             );
         }
     }

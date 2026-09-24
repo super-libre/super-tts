@@ -103,6 +103,8 @@ Per-entry fields beyond what `index.json` carries:
   for one carrying several — the same two spellings
   [`backend.toml`](../../../backend/config.md#assets) accepts.
 - `compatibility.reason` — present only when `compatible = false`. Human-readable.
+  `POST .../install` and `POST .../update` return the same sentence as their
+  `422 incompatible` `message`, so the cause is stated wherever the block is met.
 - `installed_version` — present if the backend is already installed on this
   host, regardless of its registry status. Read from the installed
   `backend.toml` on every request, so it reflects what is on disk now rather
@@ -115,9 +117,10 @@ Per-entry fields beyond what `index.json` carries:
   both. The daemon matches an installed backend to this entry by `source`, so
   a backend installed from a custom repository or a local directory is matched
   the same way one installed from the registry is. `false` when nothing is
-  installed, when the installed version is at or ahead of the index's, or when
+  installed, when the installed version is at or ahead of the index's, when
   either version does not parse — so a stale or older index never advertises a
-  downgrade. Clients that want to *show* the versions still have both fields.
+  downgrade — or when `compatibility.compatible` is `false`, since a release
+  this host cannot install is not an update the user can take. Clients that want to *show* the versions still have both fields.
 
 ## Failure modes
 

@@ -557,16 +557,11 @@ async fn list_backends_catalog_and_option_override() {
             primary_language: "en".to_string(),
             supported_languages: vec!["en".to_string()],
             estimated_vram_bytes: 0,
-            max_input_chars: None,
             processing_interval: Duration::from_secs(1),
             supported_devices: vec![super_tts_registry_types::manifest::Device::None],
-            voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
-            default_voice: None,
-            clone_ref_seconds: None,
-            clone_needs_transcript: false,
-            voices: Vec::new(),
             realtime: false,
             provider: None,
+            product: super_tts_registry_types::manifest::TtsModel::default(),
         }],
         // A manifest may not declare a default for `base_url`, so the catalog's
         // effective value starts unset and only the override fills it in.
@@ -715,12 +710,14 @@ fn fixture_backend_devices(
         source: source.to_string(),
         id: None,
         name: name.to_string(),
+        description: String::new(),
         version: "1.0.0".to_string(),
         kind: "wasm".to_string(),
         entrypoint: format!("{dir_name}.wasm"),
         allowed_hosts: Vec::new(),
         secrets: Vec::new(),
         options: Vec::new(),
+        capabilities: Default::default(),
         models: vec![ModelDefinition {
             name: model_name.to_string(),
             source: source.to_string(),
@@ -728,16 +725,11 @@ fn fixture_backend_devices(
             primary_language: "en".to_string(),
             supported_languages: vec!["en".to_string()],
             estimated_vram_bytes: 0,
-            max_input_chars: None,
             processing_interval: Duration::from_secs(1),
             supported_devices,
-            voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
-            default_voice: None,
-            clone_ref_seconds: None,
-            clone_needs_transcript: false,
-            voices: Vec::new(),
             realtime: false,
             provider: None,
+            product: super_tts_registry_types::manifest::TtsModel::default(),
         }],
     }
 }
@@ -999,16 +991,11 @@ async fn seed_recording_model(daemon: &SuperTTSDaemon, name: &str, source: &str)
         primary_language: "en".to_string(),
         supported_languages: vec!["en".to_string()],
         estimated_vram_bytes: 0,
-        max_input_chars: None,
         processing_interval: Duration::from_secs(1),
         supported_devices: vec![super_tts_registry_types::manifest::Device::None],
-        voice_kinds: vec![super_tts_registry_types::manifest::VoiceKind::Preset],
-        default_voice: None,
-        clone_ref_seconds: None,
-        clone_needs_transcript: false,
-        voices: Vec::new(),
         realtime: false,
         provider: None,
+        product: super_tts_registry_types::manifest::TtsModel::default(),
     };
     let info = ModelInfoData::new(name, source, true, true, Duration::from_secs(1));
     let reconfigured: SeenContexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1043,6 +1030,74 @@ fn backend_with_option(
         required: false,
     }];
     backend
+}
+
+/// A value the transports cannot carry is refused, and not stored.
+///
+/// An option value is injected as an `x-tts-option-*` request header, and a
+/// header holds no control character. Storing one and reporting success is the
+/// worst outcome available: the settings UI then shows a value the backend is
+/// not using, and every request the backend makes dies inside the transport
+/// naming a header rather than the setting the user typed. Both halves are
+/// asserted — the refusal, and that nothing was written behind it.
+#[tokio::test]
+async fn an_option_value_a_header_cannot_carry_is_refused() {
+    use super_tts_shared::models::protocol::ErrorCode;
+
+    let daemon = test_daemon().await;
+    let source = "github.com/x/opts";
+    *daemon.backends.write().await = vec![backend_with_option(source, "style")];
+
+    for bad in ["two\nlines", "a\tb", "x".repeat(4001).as_str()] {
+        let resp = daemon
+            .handle_set_backend_option(source.to_string(), "style".to_string(), bad.to_string())
+            .await;
+
+        assert_eq!(resp.status, "error", "{bad:?} should be refused");
+        assert_eq!(
+            resp.error_code,
+            Some(ErrorCode::InvalidValue),
+            "the code the endpoint already documents for a value it will not take"
+        );
+        assert!(
+            daemon
+                .config
+                .read()
+                .await
+                .backend_option(source, "style")
+                .is_none(),
+            "a refused value must not be stored: {bad:?}"
+        );
+    }
+
+    // The guard is about shape, not length alone — an ordinary value still
+    // writes.
+    let resp = daemon
+        .handle_set_backend_option(source.to_string(), "style".to_string(), "terse".to_string())
+        .await;
+    assert_eq!(resp.status, "success");
+}
+
+/// An option no installed backend declares is left alone.
+///
+/// Nothing injects it, so there is no delivery to protect, and guarding it
+/// here would refuse a write the HTTP layer has already refused with
+/// `unknown_option` for a better reason.
+#[tokio::test]
+async fn the_shape_guard_only_speaks_for_options_a_backend_declares() {
+    let daemon = test_daemon().await;
+    let source = "github.com/x/opts";
+    *daemon.backends.write().await = vec![backend_with_option(source, "style")];
+
+    let resp = daemon
+        .handle_set_backend_option(
+            source.to_string(),
+            "undeclared".to_string(),
+            "two\nlines".to_string(),
+        )
+        .await;
+
+    assert_eq!(resp.status, "success");
 }
 
 /// An option write for the *active* backend reaches the running model without
@@ -2057,6 +2112,7 @@ async fn an_in_flight_download_reaches_the_stage_slot() {
 
     let tracker = Arc::new(DownloadProgressTracker::new(
         "kokoro-82m".to_string(),
+        (),
         3,
         Arc::new(AtomicBool::new(false)),
     ));
@@ -2171,14 +2227,18 @@ async fn list_model_voices_follows_what_the_setter_accepts() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/kokoro";
     let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
-    backend.models[0].voices = vec![
-        crate::tts_models::model_definition::PresetVoice {
+    backend.models[0].product.voices = vec![
+        super_tts_registry_types::manifest::VoiceEntry {
             id: "af_bella".to_string(),
-            label: "Bella (American, female)".to_string(),
+            label: Some("Bella (American, female)".to_string()),
+            language: None,
+            tags: Vec::new(),
         },
-        crate::tts_models::model_definition::PresetVoice {
+        super_tts_registry_types::manifest::VoiceEntry {
             id: "am_adam".to_string(),
-            label: "Adam (American, male)".to_string(),
+            label: Some("Adam (American, male)".to_string()),
+            language: None,
+            tags: Vec::new(),
         },
     ];
     *daemon.backends.write().await = vec![backend];
@@ -2217,9 +2277,11 @@ async fn setting_a_voice_the_model_does_not_have_is_refused() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/kokoro";
     let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
-    backend.models[0].voices = vec![crate::tts_models::model_definition::PresetVoice {
+    backend.models[0].product.voices = vec![super_tts_registry_types::manifest::VoiceEntry {
         id: "af_bella".to_string(),
-        label: "Bella".to_string(),
+        label: Some("Bella".to_string()),
+        language: None,
+        tags: Vec::new(),
     }];
     *daemon.backends.write().await = vec![backend];
 
@@ -2251,11 +2313,13 @@ async fn a_stored_voice_survives_until_it_is_cleared() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/kokoro";
     let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
-    backend.models[0].voices = vec![crate::tts_models::model_definition::PresetVoice {
+    backend.models[0].product.voices = vec![super_tts_registry_types::manifest::VoiceEntry {
         id: "af_bella".to_string(),
-        label: "Bella".to_string(),
+        label: Some("Bella".to_string()),
+        language: None,
+        tags: Vec::new(),
     }];
-    backend.models[0].default_voice = Some("af_bella".to_string());
+    backend.models[0].product.default_voice = Some("af_bella".to_string());
     *daemon.backends.write().await = vec![backend];
 
     let block = |resp: super_tts_shared::models::protocol::DaemonResponse| {
@@ -2302,7 +2366,8 @@ async fn a_model_with_no_default_reports_no_voice() {
     let daemon = test_daemon().await;
     let source = "github.com/super-tts/kokoro";
     let mut backend = fixture_backend_local("kokoro", source, "Kokoro", "kokoro-82m");
-    backend.models[0].voice_kinds = vec![super_tts_registry_types::manifest::VoiceKind::Cloned];
+    backend.models[0].product.voice_kinds =
+        vec![super_tts_registry_types::manifest::VoiceKind::Cloned];
     *daemon.backends.write().await = vec![backend];
 
     let response = daemon

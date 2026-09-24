@@ -11,50 +11,28 @@
 //! cargo test -p super-tts-daemon --test widget_smoke -- --nocapture
 //! ```
 
+mod common;
+
+use common::TestDaemon;
+
 use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use super_tts_shared::daemon::http_client;
 use super_tts_shared::daemon::session::{self, AppId};
 use super_tts_shared::daemon::widget_subscription::{
     DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF, WidgetSubscriptionConfig,
     WidgetSubscriptionUpdate, run_widget_subscription,
 };
-use tokio::time::sleep;
-
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 
 /// Stable `AppId` used across the test run. We don't need a per-run
 /// unique id here: the daemon-side persisted token survives restart by
 /// design, and that's exactly what we want to verify. We do
 /// `session::forget` in the test's drop guard so we don't leak entries
 /// on the developer's keyring.
-const TEST_APP_ID: AppId = AppId("widget-smoke-test");
+const TEST_APP_ID: AppId = session::app_id("widget-smoke-test");
 const TEST_APP_NAME: &str = "widget-smoke-test";
 const TEST_SCOPES: &[&str] = &["playback_events", "audio_visualization"];
 const TEST_TOPICS: &[&str] = &["speaking_state", "frequency_bands"];
-
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-}
-
-impl DaemonGuard {
-    fn pid(&self) -> u32 {
-        self.child.id()
-    }
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-}
 
 /// Forget the test's keyring entry on test exit so we don't leak.
 struct KeyringCleanupGuard;
@@ -64,63 +42,20 @@ impl Drop for KeyringCleanupGuard {
     }
 }
 
-/// Monotonic per-call counter so concurrent tests in the same test
-/// binary get unique paths. `Instant::now().elapsed().as_nanos()`
-/// returns 0 immediately after construction and would collide.
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
+/// A socket path in a directory of the test's own, removed with it. Outside
+/// any daemon's home, so a daemon restarted onto it outlives the one before.
+fn socket_in_temp_dir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("create a socket dir");
+    let socket = dir.path().join("http.sock");
+    (dir, socket)
 }
 
-fn unique_socket_paths(label: &str) -> (PathBuf, PathBuf) {
-    let unique = format!("tts-{label}-{}-{}", std::process::id(), next_test_uniq());
-    let tmp = std::env::temp_dir();
-    (
-        tmp.join(format!("{unique}-legacy.sock")),
-        tmp.join(format!("{unique}-http.sock")),
-    )
-}
-
-fn spawn_daemon(_legacy_socket: &Path, http_socket: &Path) -> Child {
-    // Isolate XDG_CONFIG_HOME so the test daemon doesn't overwrite
-    // the developer's real config when applying `--audio-theme` /
-    // `--device` CLI overrides.
-    let config_home = std::env::temp_dir().join(format!(
-        "tts-widget-cfg-{}-{}",
-        std::process::id(),
-        next_test_uniq()
-    ));
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-
-    Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .env("SUPER_TTS_HTTP_SOCKET", http_socket)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon")
-}
-
-async fn wait_for_daemon_ready(http_socket: &Path) {
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if http_socket.exists()
-            && http_client::auth_request(http_socket.to_path_buf(), TEST_APP_NAME, TEST_SCOPES)
-                .await
-                .is_ok()
-        {
-            return;
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!(
-        "daemon HTTP listener did not become ready within 120s (socket: {})",
-        http_socket.display()
-    );
+/// Start a hermetic daemon on `http_socket`. See `super_engine_test_daemon`.
+async fn start_daemon(http_socket: &Path) -> TestDaemon {
+    common::daemon("widget")
+        .socket_at(http_socket)
+        .start()
+        .await
 }
 
 /// Pull updates from the subscription stream until either we hit the
@@ -175,16 +110,12 @@ where
 #[ignore = "spawns real daemon; requires a responsive system keyring"]
 async fn subscription_recovers_from_daemon_restart() {
     let _keyring_guard = KeyringCleanupGuard;
-    let (legacy_socket, http_socket) = unique_socket_paths("widget-restart");
+    let (_socket_dir, http_socket) = socket_in_temp_dir();
 
     // 1. Boot the daemon and confirm /auth/request works under
     //    SUPER_TTS_AUTO_APPROVE so the subscription's session::obtain
     //    will succeed silently.
-    let mut guard = DaemonGuard {
-        child: spawn_daemon(&legacy_socket, &http_socket),
-        cleanup_paths: vec![legacy_socket.clone(), http_socket.clone()],
-    };
-    wait_for_daemon_ready(&http_socket).await;
+    let mut guard = start_daemon(&http_socket).await;
 
     // 2. Drive the subscription with tight timings so the test doesn't
     //    sit on the default backoff for tens of seconds.
@@ -211,10 +142,10 @@ async fn subscription_recovers_from_daemon_restart() {
 
     // 4. Kill the daemon mid-stream. The shared helper must observe
     //    the drop (via stream EOF or read error) and emit Disconnected.
-    let pid = guard.pid();
+    let pid = guard.child().id();
     eprintln!("[smoke] killing daemon pid={pid}");
-    let _ = guard.child.kill();
-    let _ = guard.child.wait();
+    let _ = guard.child().kill();
+    let _ = guard.child().wait();
 
     let mid = drain_until(&mut stream, Duration::from_secs(15), |u| {
         matches!(u, WidgetSubscriptionUpdate::Disconnected { .. })
@@ -232,11 +163,7 @@ async fn subscription_recovers_from_daemon_restart() {
     // 5. Restart the daemon. The subscription should reconnect within
     //    a backoff window without external intervention.
     eprintln!("[smoke] restarting daemon");
-    guard = DaemonGuard {
-        child: spawn_daemon(&legacy_socket, &http_socket),
-        cleanup_paths: vec![legacy_socket.clone(), http_socket.clone()],
-    };
-    wait_for_daemon_ready(&http_socket).await;
+    guard = start_daemon(&http_socket).await;
 
     // 6. Wait for the SECOND Connected — this is the actual "no stale
     //    widget" assertion. If `run_widget_subscription` had given up,
@@ -264,13 +191,9 @@ async fn subscription_recovers_from_daemon_restart() {
 #[ignore = "spawns real daemon; requires a responsive system keyring"]
 async fn subscription_emits_idle_timeout_when_daemon_goes_quiet() {
     let _keyring_guard = KeyringCleanupGuard;
-    let (legacy_socket, http_socket) = unique_socket_paths("widget-idle");
+    let (_socket_dir, http_socket) = socket_in_temp_dir();
 
-    let _guard = DaemonGuard {
-        child: spawn_daemon(&legacy_socket, &http_socket),
-        cleanup_paths: vec![legacy_socket.clone(), http_socket.clone()],
-    };
-    wait_for_daemon_ready(&http_socket).await;
+    let _guard = start_daemon(&http_socket).await;
 
     // Tight idle timeout — the daemon's first keepalive is 30 s out
     // and there are no recordings in flight, so a 2 s deadline will
@@ -318,13 +241,9 @@ async fn subscription_emits_idle_timeout_when_daemon_goes_quiet() {
 #[ignore = "spawns real daemon + writes to system keyring; requires responsive secret-service"]
 async fn subscription_recovers_from_invalid_session() {
     let _keyring_guard = KeyringCleanupGuard;
-    let (legacy_socket, http_socket) = unique_socket_paths("widget-invalid");
+    let (_socket_dir, http_socket) = socket_in_temp_dir();
 
-    let _guard = DaemonGuard {
-        child: spawn_daemon(&legacy_socket, &http_socket),
-        cleanup_paths: vec![legacy_socket.clone(), http_socket.clone()],
-    };
-    wait_for_daemon_ready(&http_socket).await;
+    let _guard = start_daemon(&http_socket).await;
 
     // Plant a token the daemon has never seen. The first
     // `events_stream` call will get 401 invalid_session; the helper

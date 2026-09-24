@@ -8,7 +8,7 @@ impl SuperTTSDaemon {
     /// Handle cancel download command
     #[must_use]
     pub fn handle_cancel_download(&self) -> DaemonResponse {
-        match self.download_manager.cancel_current_download() {
+        match self.download_manager.cancel_download(()) {
             Ok(()) => {
                 info!("Download cancellation requested");
                 DaemonResponse::success()
@@ -26,8 +26,8 @@ impl SuperTTSDaemon {
     /// Handle get download status command
     #[must_use]
     pub fn handle_get_download_status(&self) -> DaemonResponse {
-        if let Some(tracker) = self.download_manager.get_current_download() {
-            let progress = tracker.get_progress();
+        if let Some(tracker) = self.download_manager.get_download(()) {
+            let progress = crate::download_progress::report(tracker.get_progress());
             DaemonResponse::success().with_download_progress(progress)
         } else {
             DaemonResponse::success().with_message("No download in progress".to_string())

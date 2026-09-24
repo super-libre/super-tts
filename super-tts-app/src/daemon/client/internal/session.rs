@@ -30,7 +30,7 @@ pub(crate) const SETTINGS_SCOPES: &[&str] = &[
     "daemon_status",
 ];
 pub(crate) const APP_NAME: &str = "Super TTS Settings App";
-pub(crate) const APP_ID_NAME: AppId = AppId("super-tts-app");
+pub(crate) const APP_ID_NAME: AppId = session::app_id("super-tts-app");
 
 /// Run an HTTP-protocol operation with the cached settings-scope token.
 /// On `invalid_session` the cache is invalidated and the operation

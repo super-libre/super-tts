@@ -29,6 +29,7 @@ pub(crate) fn openai_backend(
         source: source.to_string(),
         id: None,
         name: "OpenAI".to_string(),
+        description: String::new(),
         version: "1.0.0".to_string(),
         kind: "wasm".to_string(),
         entrypoint: "openai.wasm".to_string(),
@@ -51,6 +52,7 @@ pub(crate) fn openai_backend(
             step: None,
             required: false,
         }],
+        capabilities: Default::default(),
         models,
     }
 }

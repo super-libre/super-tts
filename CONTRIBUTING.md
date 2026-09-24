@@ -55,9 +55,14 @@ Super TTS is a Rust workspace:
 | `super-tts-cosmic-applet`  | COSMIC panel applet with visualizations                          |
 | `super-tts-consent`        | Consent-popup helper for the auth handshake                      |
 | `super-tts-shared`         | Common types, protocol definitions, validation                   |
-| `super-tts-registry-types` | Shared backend registry / manifest types                         |
-| `super-tts-forge`          | Git-forge release sourcing for the registry                      |
+| `super-tts-registry-types` | Super TTS's backend contract, on `super-engine-spec`             |
 | `super-tts-indexer`        | CI tool that builds the published registry `index.json`          |
+
+The code Super TTS shares with Super STT lives in
+[super-engine](https://github.com/super-libre/super-engine), pinned by rev in
+the root `Cargo.toml`. A fix to the backend manifest types, for example, goes
+there, and reaches this workspace when the pin is bumped. So does a fix to the
+daemon's session tokens, consent checks or route guards.
 
 The protocol and backend contract that clients and backend authors build
 against live in [`docs/protocol/`](./docs/protocol/).

@@ -28,13 +28,15 @@
 //! cargo test -p super-tts --test http_smoke_full -- --ignored --nocapture
 //! ```
 
+mod common;
+
+use common::TestDaemon;
+
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 use super_tts_shared::daemon::http_client;
-use tokio::time::sleep;
 
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
 const APP_NAME: &str = "super-tts full smoke test";
 const SCOPES: &[&str] = &["speak", "status"];
 const AUTO_APPROVE_MS: u64 = 5_000;
@@ -60,7 +62,7 @@ fn ensure_consent_helper_built() -> PathBuf {
         .expect("invoke cargo to build super-tts-consent");
     assert!(status.success(), "cargo build -p super-tts-consent failed");
 
-    let daemon_dir = Path::new(DAEMON_BIN)
+    let daemon_dir = Path::new(common::DAEMON_BIN)
         .parent()
         .expect("daemon binary parent dir");
     let helper = daemon_dir.join("super-tts-consent");
@@ -73,96 +75,27 @@ fn ensure_consent_helper_built() -> PathBuf {
     helper
 }
 
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-}
-
-/// Monotonic per-call counter so concurrent tests in the same test
-/// binary get unique paths. `Instant::now().elapsed().as_nanos()`
-/// returns 0 immediately after construction and would collide.
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
-
-async fn start_daemon_with_auto_approve_timer() -> (DaemonGuard, PathBuf) {
-    // Use the user's real $XDG_RUNTIME_DIR so the consent helper can
-    // still find the Wayland socket. We isolate by using unique daemon
-    // socket paths (legacy via --socket, HTTP via SUPER_TTS_HTTP_SOCKET)
-    // rather than redirecting XDG_RUNTIME_DIR.
-    let unique = format!("tts-full-{}-{}", std::process::id(), next_test_uniq());
-    let tmp = std::env::temp_dir();
-    let legacy_socket = tmp.join(format!("{unique}-legacy.sock"));
-    let http_socket = tmp.join(format!("{unique}-http.sock"));
-    // Isolate XDG_CONFIG_HOME so the test daemon doesn't overwrite
-    // the developer's real config via `apply_cli_overrides_to_config`.
-    let config_home = tmp.join(format!("{unique}-config"));
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-
-    // Capture daemon stderr so we can diagnose hangs during dev.
-    // Set SUPER_TTS_TEST_LOG=1 to also surface it on the test runner's
-    // stderr.
-    let stderr_target = if std::env::var("SUPER_TTS_TEST_LOG").is_ok() {
-        Stdio::inherit()
-    } else {
-        Stdio::null()
-    };
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
-        // No SUPER_TTS_AUTO_APPROVE — the daemon will spawn the popup.
-        // The timer below makes the helper auto-approve so the test
-        // doesn't hang waiting for human input.
-        .env_remove("SUPER_TTS_AUTO_APPROVE")
-        .env("SUPER_TTS_MUTE_CUES", "1") // never beep on the runner's speakers
+/// A daemon that shows the real consent dialog, told to approve it by itself
+/// after [`AUTO_APPROVE_MS`] so the test does not wait for a person.
+///
+/// `XDG_RUNTIME_DIR` is left as the user's, so the consent helper can still
+/// find the Wayland socket. Set `SUPER_ENGINE_TEST_DAEMON_LOG=1` to see the
+/// daemon's output when diagnosing a hang.
+async fn start_daemon_with_auto_approve_timer() -> (TestDaemon, PathBuf) {
+    let daemon = common::daemon("full")
+        .without("SUPER_TTS_AUTO_APPROVE")
         .env(
             "SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS",
             AUTO_APPROVE_MS.to_string(),
         )
-        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
-        .env("XDG_CONFIG_HOME", &config_home)
         .env(
             "RUST_LOG",
             "info,super_tts_daemon::daemon::http_server=debug",
         )
-        .stdout(Stdio::null())
-        .stderr(stderr_target)
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    // Without auto-approve we can't probe by issuing /auth/request,
-    // so just wait for the socket file to exist plus a short settle.
-    // Hand the child to the guard before the readiness loop: the timeout
-    // panic below must still kill and reap the daemon, not leak it.
-    let guard = DaemonGuard {
-        child,
-        cleanup_paths: vec![legacy_socket.clone(), http_socket.clone()],
-    };
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists() {
-            sleep(Duration::from_millis(200)).await;
-            return (guard, http_socket);
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!(
-        "daemon HTTP listener did not become ready within 120s (socket: {})",
-        http_socket.display()
-    );
+        .start()
+        .await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

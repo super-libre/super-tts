@@ -64,11 +64,22 @@ impl AppModel {
         target_model: String,
         status_message: String,
     ) {
+        self.set_model_loading_with(target_model, status_message, None);
+    }
+
+    /// [`Self::set_model_loading`], with what the backend reports of its load.
+    fn set_model_loading_with(
+        &mut self,
+        target_model: String,
+        status_message: String,
+        load: Option<super_tts_shared::models::protocol::LoadProgress>,
+    ) {
         // Entering a switch starts the stall watchdog clock (see PingTimeout).
         self.last_switch_progress_at = Some(std::time::Instant::now());
         self.model_operation_state = ModelOperationState::Loading {
             target_model,
             status_message,
+            load,
         };
     }
 
@@ -108,7 +119,11 @@ impl AppModel {
         let target_model = progress.model_name.clone();
         match progress.status.as_str() {
             "loading_model" => {
-                self.set_model_loading(target_model, "Loading model into memory...".to_string());
+                self.set_model_loading_with(
+                    target_model,
+                    "Loading model into memory...".to_string(),
+                    progress.load.clone(),
+                );
             }
             "error" => {
                 // The daemon broadcasts a terminal `error` for any switch

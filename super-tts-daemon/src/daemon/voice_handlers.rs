@@ -63,7 +63,7 @@ impl crate::daemon::types::SuperTTSDaemon {
             .await
             .model_voice(source, model)
             .map(str::to_owned);
-        let default = def.default_voice.clone();
+        let default = def.product.default_voice.clone();
         // `effective` is what an utterance naming no voice will actually be
         // spoken in, which is the stored voice if there is one and the
         // manifest's default otherwise. Both can be absent: a model whose
@@ -76,7 +76,7 @@ impl crate::daemon::types::SuperTTSDaemon {
             "source": if stored.is_some() { "override" } else { "default" },
             "override": stored,
             "default": default,
-            "kinds": def.voice_kinds.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "kinds": def.product.voice_kinds.iter().map(ToString::to_string).collect::<Vec<_>>(),
         }))
     }
 
@@ -97,14 +97,12 @@ impl crate::daemon::types::SuperTTSDaemon {
             return DaemonResponse::error_with_code(ErrorCode::InvalidModel, "unknown_model");
         };
         let mut voices: Vec<serde_json::Value> = Vec::new();
-        if def.voice_kinds.contains(&VoiceKind::Preset) {
-            voices.extend(
-                def.voices
-                    .iter()
-                    .map(|v| serde_json::json!({ "id": v.id, "label": v.label, "kind": "preset" })),
-            );
+        if def.product.voice_kinds.contains(&VoiceKind::Preset) {
+            voices.extend(def.product.voices.iter().map(
+                |v| serde_json::json!({ "id": v.id, "label": v.display_name(), "kind": "preset" }),
+            ));
         }
-        if def.voice_kinds.contains(&VoiceKind::Cloned) {
+        if def.product.voice_kinds.contains(&VoiceKind::Cloned) {
             match self.voices.list() {
                 Ok(stored) => voices.extend(stored.into_iter().map(|v| {
                     serde_json::json!({

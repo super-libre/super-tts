@@ -61,54 +61,9 @@ pub(crate) struct ErrorEnvelope {
     pub(crate) message: Option<String>,
 }
 
-/// The auth-failure envelope: `message` names the failure and `data.reason`
-/// says which of its cases occurred.
-///
-/// Distinct from [`ErrorEnvelope`] because the auth surface predates
-/// `error_code` and clients read `data.reason` there. Both are documented
-/// rather than reconciled, since changing either is a breaking wire change.
-#[derive(Serialize, ToSchema)]
-pub(crate) struct ReasonEnvelope {
-    /// Always `error`.
-    #[schema(example = "error")]
-    pub(crate) status: &'static str,
-    /// The failure identifier, e.g. `invalid_session` or `auth_denied`.
-    pub(crate) message: String,
-    pub(crate) data: Reason,
-}
+/// The auth-failure envelope the guards answer with, shared with Super STT.
+pub(crate) use super_engine_daemon::http::wire::ReasonEnvelope;
 
-/// The `data` object of a [`ReasonEnvelope`].
-#[derive(Serialize, ToSchema)]
-pub(crate) struct Reason {
-    /// Which case of `message` occurred — e.g. `expired`, `exe_changed`,
-    /// `user_denied`.
-    pub(crate) reason: String,
-}
-
-/// The registry surface's error envelope, which carries one extra key.
-///
-/// These endpoints shipped before `error_code` existed, spelling the failure
-/// identity as `error`. That key is still sent, because clients read it; the
-/// standard `error_code` was added alongside rather than in place of it, so the
-/// whole surface honors the "`error_code` on every error" rule without breaking
-/// anyone. Both name the same failure and always agree.
-///
-/// Documented as its own shape rather than folded into [`ErrorEnvelope`]:
-/// `error` appears *only* here, and putting it on the shared envelope would
-/// tell every other endpoint's reader to expect a key they will never receive.
-#[derive(Serialize, ToSchema)]
-pub(crate) struct RegistryError {
-    /// Always `error`.
-    #[schema(example = "error")]
-    pub(crate) status: &'static str,
-    /// The stable identifier for this failure.
-    #[schema(example = "not_found")]
-    pub(crate) error_code: String,
-    /// The same identifier under the key this surface has always used. Retained
-    /// for clients written against it; prefer `error_code`.
-    #[schema(example = "not_found")]
-    pub(crate) error: String,
-    /// Human-readable detail, when there is any to add.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) message: Option<String>,
-}
+/// The registry surface's error envelope, shared with Super STT. See
+/// `super_engine_daemon::registry::endpoints::RegistryError`.
+pub(crate) use super_engine_daemon::registry::endpoints::RegistryError;

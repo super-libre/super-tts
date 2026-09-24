@@ -2,12 +2,14 @@
 //! Super TTS consent dialog — a small floating libcosmic window that the
 //! daemon spawns when an app asks to authenticate.
 //!
-//! The daemon spawns this binary with env vars carrying the request details:
+//! The daemon spawns this binary with env vars carrying the request details
+//! (the names are [`contract`]'s, shared with Super STT):
 //!
 //! - `SUPER_TTS_AUTH_APP_NAME` — declared (untrusted) app name from the request.
 //!   Shown for a native caller, never for a web one — see [`Caller`].
 //! - `SUPER_TTS_AUTH_SCOPES`   — space-separated scope set (e.g. `speak status`)
 //! - `SUPER_TTS_AUTH_EXE_PATH` — peer `/proc/<pid>/exe` (trusted, kernel-resolved)
+//! - `SUPER_TTS_AUTH_FLATPAK_APP_ID` — set only when the caller is inside a flatpak
 //! - `SUPER_TTS_AUTH_WEB_ORIGIN` — set only when the caller reached the daemon
 //!   over its TCP listener, carrying the browser-reported origin. The daemon
 //!   sets this *or* `SUPER_TTS_AUTH_EXE_PATH`, never both, and this one wins.
@@ -29,8 +31,6 @@
 //! to a regular window. On X11 tiling WMs you'd add a per-class float
 //! rule using the `WM_CLASS` `super-tts-consent`.
 
-mod constants;
-
 use cosmic::iced::event::{self, listen_with};
 use cosmic::iced::platform_specific::shell::commands::corner_radius::corner_radius;
 use cosmic::iced::platform_specific::shell::commands::layer_surface::{
@@ -46,6 +46,10 @@ use cosmic::widget::{button, dialog, icon, text};
 use std::io::Write;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use super_tts_shared::SUPER_TTS;
+use super_tts_shared::consent::contract;
+// The decision payloads written to stdout right before exit.
+use contract::{ALLOW, DENY, DISMISSED};
 
 const APP_ID: &str = "ai.menjivar.super-tts-consent";
 
@@ -70,15 +74,27 @@ const SQUARE_CORNERS: CornerRadius = CornerRadius {
 static AUTOSIZE_ID: LazyLock<cosmic::widget::Id> =
     LazyLock::new(|| cosmic::widget::Id::new("super-tts-consent-autosize"));
 
-/// Decision payload written to stdout right before exit.
-const ALLOW: &str = "allow";
-const DENY: &str = "deny";
-const DISMISSED: &str = "dismissed";
+/// The value of the request variable `name` (one of [`contract`]'s), under
+/// Super TTS's prefix.
+fn request_var(name: &str) -> Result<String, std::env::VarError> {
+    std::env::var(SUPER_TTS.env(name))
+}
 
 /// Set the moment the user picks Allow or Deny. Used by the
 /// signal handler to skip an extra "dismissed" line if the user
 /// already decided.
 static DECIDED: AtomicBool = AtomicBool::new(false);
+
+/// How long the dialog stays up before dismissing itself.
+///
+/// Deliberately longer than the daemon's own one-minute wait, so this
+/// never truncates a decision the daemon would still have accepted —
+/// it is a backstop for a dialog that outlived whoever asked for it,
+/// not a second deadline. The daemon reaps the helper itself, but only
+/// while the request that spawned it is alive; nothing can kill a
+/// dialog whose daemon has since exited. Left to wait forever such a
+/// dialog holds an exclusive-keyboard layer surface and ~40 MB.
+const DISMISS_AFTER: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Clone, Debug)]
 enum Message {
@@ -222,7 +238,7 @@ impl cosmic::Application for ConsentApp {
             Caller::Web { origin } => format!("{origin} wants access to Super TTS."),
         };
 
-        let permission_lines = permissions_for_scopes(&self.scopes);
+        let permission_lines = super_tts_shared::consent::permissions_for_scopes(&self.scopes);
 
         let mut bullet_column =
             cosmic::widget::column::with_capacity(permission_lines.len()).spacing(6);
@@ -236,8 +252,17 @@ impl cosmic::Application for ConsentApp {
         // native caller gets one: for a web caller the sentence already *is*
         // the verified identity, and repeating the origin underneath would
         // read as a second, corroborating fact when there is only one.
-        if let Caller::Native { exe_path } = &self.caller {
-            control = control.push(text::body(format!("Executable:  {exe_path}")));
+        if let Caller::Native {
+            exe_path,
+            flatpak_app_id,
+        } = &self.caller
+        {
+            control = control.push(text::body(match flatpak_app_id {
+                // Name the app the user installed. Its executable path lives
+                // inside its sandbox, so it identifies nothing here.
+                Some(id) => format!("Flatpak app:  {id}"),
+                None => format!("Executable:  {exe_path}"),
+            }));
         }
 
         control = control.push(
@@ -355,39 +380,6 @@ impl ConsentApp {
     }
 }
 
-fn permissions_for_scope(scope: &str) -> &'static [&'static str] {
-    match scope {
-        "speak" => constants::SPEAK_PERMISSIONS,
-        "playback_events" => constants::PLAYBACK_EVENTS_PERMISSIONS,
-        "status" => constants::STATUS_PERMISSIONS,
-        "settings" => constants::SETTINGS_PERMISSIONS,
-        "audio_visualization" => constants::AUDIO_VISUALIZATION_PERMISSIONS,
-        "daemon_status" => constants::DAEMON_STATUS_PERMISSIONS,
-        "secrets" => constants::SECRETS_PERMISSIONS,
-        "voices" => constants::VOICES_PERMISSIONS,
-        _ => constants::UNKNOWN_SCOPE_PERMISSIONS,
-    }
-}
-
-/// Union of the per-scope bullet lists for every scope the app asked
-/// for, de-duplicated and order-preserving. Falls back to the unknown
-/// bullet if the set is empty.
-fn permissions_for_scopes(scopes: &[String]) -> Vec<&'static str> {
-    let mut lines: Vec<&'static str> = Vec::new();
-    if scopes.is_empty() {
-        lines.extend_from_slice(constants::UNKNOWN_SCOPE_PERMISSIONS);
-        return lines;
-    }
-    for scope in scopes {
-        for &line in permissions_for_scope(scope) {
-            if !lines.contains(&line) {
-                lines.push(line);
-            }
-        }
-    }
-    lines
-}
-
 /// Render one bullet line. Uses a Row so wrapped text hangs under
 /// itself instead of slipping behind the bullet character.
 fn bullet_row(line: &str) -> Element<'_, Message> {
@@ -443,6 +435,36 @@ fn install_termination_handlers() {
     }
 }
 
+/// Dismiss the dialog if nobody has decided within [`DISMISS_AFTER`].
+///
+/// Unlike the auto-approve timer below this is compiled into release
+/// builds: it only ever denies, so it cannot be used to wave a consent
+/// prompt through. Fail-closed is also the right answer when it does
+/// fire — reaching the deadline means no human answered.
+fn spawn_dismiss_timer() {
+    std::thread::spawn(|| {
+        std::thread::sleep(DISMISS_AFTER);
+        // Claim the decision. If someone else got there first, their
+        // verdict is already on stdout and must not be followed by
+        // ours — the daemon reads one line and we would be racing to
+        // define it.
+        if DECIDED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            unsafe { libc::_exit(0) }
+        }
+        // Same async-signal-safe write + `_exit` as the SIGTERM handler,
+        // rather than trying to unwind the iced event loop from a thread
+        // that does not own it.
+        let msg = b"dismissed\n";
+        unsafe {
+            libc::write(1, msg.as_ptr().cast::<libc::c_void>(), msg.len());
+            libc::_exit(0);
+        }
+    });
+}
+
 /// If `SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS` is set to a parseable u64,
 /// spawn a background thread that sleeps for that many milliseconds
 /// and then writes "allow\n" to stdout + `_exit(0)`. Lets you (or a
@@ -456,14 +478,15 @@ fn install_termination_handlers() {
 /// builds with `debug_assertions` on, so the smoke tests keep working.
 #[cfg(debug_assertions)]
 fn maybe_spawn_auto_approve_timer() {
-    let Ok(raw) = std::env::var("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS") else {
+    let var = SUPER_TTS.env(contract::AUTO_APPROVE_AFTER_MS);
+    let Ok(raw) = std::env::var(&var) else {
         return;
     };
     let Ok(ms) = raw.parse::<u64>() else {
-        log::warn!("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS={raw:?} is not a valid u64; ignoring");
+        log::warn!("{var}={raw:?} is not a valid u64; ignoring");
         return;
     };
-    log::info!("SUPER_TTS_AUTH_AUTO_APPROVE_AFTER_MS={ms}; auto-approving after {ms}ms");
+    log::info!("{var}={ms}; auto-approving after {ms}ms");
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(ms));
         // Mark decided so the SIGTERM/atexit paths don't also write
@@ -492,7 +515,14 @@ fn maybe_spawn_auto_approve_timer() {}
 /// rather than infer it from an empty field.
 enum Caller {
     /// A program on this machine, named by the path the kernel resolved.
-    Native { exe_path: String },
+    Native {
+        exe_path: String,
+        /// Set only for a sandboxed caller. Its `exe_path` is resolved inside
+        /// its own sandbox, so showing that path would name a file the user
+        /// cannot go and look at, and one that every other flatpak could
+        /// equally present.
+        flatpak_app_id: Option<String>,
+    },
     /// A web page, named by the origin its browser reported.
     Web { origin: String },
 }
@@ -505,9 +535,8 @@ struct AuthRequestPayload {
 
 fn read_env() -> AuthRequestPayload {
     AuthRequestPayload {
-        app_name: std::env::var("SUPER_TTS_AUTH_APP_NAME")
-            .unwrap_or_else(|_| "<unknown app>".to_string()),
-        scopes: std::env::var("SUPER_TTS_AUTH_SCOPES")
+        app_name: request_var(contract::APP_NAME).unwrap_or_else(|_| "<unknown app>".to_string()),
+        scopes: request_var(contract::SCOPES)
             .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
@@ -523,14 +552,16 @@ fn read_env() -> AuthRequestPayload {
 /// means a stale `SUPER_TTS_AUTH_EXE_PATH` inherited from the environment can
 /// never turn a website into an executable in the sentence the user reads.
 fn read_caller() -> Caller {
-    if let Ok(origin) = std::env::var("SUPER_TTS_AUTH_WEB_ORIGIN")
+    if let Ok(origin) = request_var(contract::WEB_ORIGIN)
         && !origin.is_empty()
     {
         return Caller::Web { origin };
     }
     Caller::Native {
-        exe_path: std::env::var("SUPER_TTS_AUTH_EXE_PATH")
-            .unwrap_or_else(|_| "<unknown path>".to_string()),
+        exe_path: request_var(contract::EXE_PATH).unwrap_or_else(|_| "<unknown path>".to_string()),
+        flatpak_app_id: request_var(contract::FLATPAK_APP_ID)
+            .ok()
+            .filter(|id| !id.is_empty()),
     }
 }
 
@@ -538,6 +569,7 @@ fn main() -> cosmic::iced::Result {
     super_tts_shared::logging::init();
 
     install_termination_handlers();
+    spawn_dismiss_timer();
     maybe_spawn_auto_approve_timer();
 
     let payload = read_env();
@@ -559,26 +591,4 @@ fn main() -> cosmic::iced::Result {
     }
 
     result
-}
-
-#[cfg(test)]
-mod scope_conformance {
-    use super::{constants, permissions_for_scope};
-
-    /// Every scope the daemon accepts must have a specific consent description.
-    /// A daemon scope that falls through to `UNKNOWN_SCOPE_PERMISSIONS` would
-    /// render the "unknown scope — deny is safe" warning on a legitimate prompt,
-    /// so this pins the two lists together (Tier 2 #8).
-    #[test]
-    fn every_known_scope_has_specific_permissions() {
-        for scope in super_tts_shared::daemon::scopes::KNOWN_SCOPES {
-            assert!(
-                !std::ptr::eq(
-                    permissions_for_scope(scope),
-                    constants::UNKNOWN_SCOPE_PERMISSIONS
-                ),
-                "scope `{scope}` has no specific consent description; add an arm to permissions_for_scope"
-            );
-        }
-    }
 }

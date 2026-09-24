@@ -805,3 +805,14 @@ fn the_default_port_sits_in_the_reserved_super_block() {
 fn super_tts_owns_the_second_port_in_the_block() {
     assert_eq!(crate::config::DEFAULT_TCP_PORT, 7301);
 }
+
+/// The listener's default port is the one `SUPER_TTS` names. The two are
+/// written apart, a const parameter and a static, so this is what keeps them
+/// the same number.
+#[test]
+fn the_default_tcp_port_is_super_ttss() {
+    assert_eq!(
+        crate::config::DEFAULT_TCP_PORT,
+        super_tts_shared::product::SUPER_TTS.tcp_port
+    );
+}

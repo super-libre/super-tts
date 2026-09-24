@@ -249,7 +249,7 @@ message and the old instance keeps running rather than leaving the stage empty."
     security(("session_token" = ["settings"])),
     responses(
         (status = 200, description = "Stored; this is the new effective value.", body = OptionValue),
-        (status = 400, description = "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, or it is `base_url` and names no host. Use `DELETE` to clear an override.", body = ErrorEnvelope),
+        (status = 400, description = "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, it is `base_url` and names no host, or it is longer than 4000 characters or carries a control character. An option value is sent as an `x-tts-option-<name>` request header, which can hold neither a line break nor an unbounded number of bytes, so a value that cannot be delivered is refused rather than stored. Use `DELETE` to clear an override.", body = ErrorEnvelope),
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such backend (`unknown_backend`) or no such option (`unknown_option`).", body = ErrorEnvelope),
@@ -397,25 +397,14 @@ fn canonical_base_url(value: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
-/// Returns an error `Response` when `value` is not one the option accepts —
-/// wrong type, or outside the closed set it declares — `None` when the write
+/// Returns an error `Response` when `value` is not one the option takes — its
+/// type, its bounds or its choices, see
+/// `super_engine_spec::manifest::Opt::permits_value` — `None` when the write
 /// can proceed.
 ///
 /// Runs after [`guard_missing`], so a missing backend or option is already
 /// reported and this only ever looks at an option that exists — which is why
 /// both `None` arms here mean "nothing to object to" rather than "not found".
-///
-/// The two refusals are told apart in the message because they are different
-/// mistakes: a value of the wrong type is one the backend cannot read, and a
-/// value off the dropdown is one it never offered, and one outside a declared
-/// range is neither. Saying "accepts one of:" to someone who typed `warm` into
-/// a numeric field would list the numbers and leave them to infer why, and an
-/// option with no `choices` has no list to offer at all.
-///
-/// A `step` is not checked. It is the grid a slider lands on, not a bound the
-/// contract makes: a value between two notches is still inside the range the
-/// option declared it could take, and refusing it would make the option
-/// narrower than its own bounds say.
 async fn guard_not_a_choice(
     s: &AppState,
     source: &str,
@@ -424,42 +413,11 @@ async fn guard_not_a_choice(
 ) -> Option<Response> {
     let backend = find_backend(s, source).await?;
     let opt = backend.options.iter().find(|o| o.name == name)?;
-    if !opt.accepts_the_type(value) {
-        return Some(json_error_msg(
-            StatusCode::BAD_REQUEST,
-            "invalid_value",
-            &format!(
-                "option `{name}` takes a {}, and {value:?} is not one",
-                opt.declared_type()
-            ),
-        ));
-    }
-    if !opt.is_in_range(value) {
-        let bound = match (opt.min, opt.max) {
-            (Some(low), Some(high)) => format!("between {low} and {high}"),
-            (Some(low), None) => format!("{low} or more"),
-            (None, Some(high)) => format!("{high} or less"),
-            (None, None) => unreachable!("a value only falls outside a declared bound"),
-        };
-        return Some(json_error_msg(
-            StatusCode::BAD_REQUEST,
-            "invalid_value",
-            &format!("option `{name}` takes a value {bound}, and {value:?} is not one"),
-        ));
-    }
-    if opt.is_a_choice(value) {
-        return None;
-    }
-    let offered = opt
-        .choices
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
+    let refusal = opt.permits_value(value).err()?;
     Some(json_error_msg(
         StatusCode::BAD_REQUEST,
         "invalid_value",
-        &format!("option `{name}` accepts one of: {offered}"),
+        &refusal,
     ))
 }
 

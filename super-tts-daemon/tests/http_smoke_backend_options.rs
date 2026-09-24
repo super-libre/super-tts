@@ -15,47 +15,15 @@
 //! open-ended, and `styling` offers a closed set, so both sides of the
 //! `choices` gate are exercisable.
 
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper::client::conn::http1::handshake;
-use hyper::{Method, Request, StatusCode};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-use super_tts_shared::daemon::http_client;
-use tokio::net::UnixStream;
-use tokio::time::sleep;
+mod common;
 
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
+use common::{Method, StatusCode, TestDaemon};
+
+use std::path::{Path, PathBuf};
 
 /// URL-encoded `{source}` path segment for the fixture backend.
 /// The raw source id is `github.com/super-tts/openai`; slashes become `%2F`.
 const FIXTURE_SOURCE_ENC: &str = "github.com%2Fsuper-tts%2Fopenai";
-
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-    /// Where the fixture backend was seeded, so a test can change it on disk
-    /// under the running daemon.
-    data_home: PathBuf,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-            let _ = std::fs::remove_dir_all(p);
-        }
-    }
-}
-
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
 
 /// Seed the fixture backend into `<data_home>/super-tts/backends/fixture-openai/`.
 /// The manifest declares `base_url` as an option with a default value.
@@ -133,56 +101,13 @@ supported_devices = ["none"]
     std::fs::write(backend_dir.join("openai.wasm"), b"").expect("write placeholder entrypoint");
 }
 
-async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
-    let unique = format!("tts-options-{}-{}", std::process::id(), next_test_uniq());
-    let tmp = std::env::temp_dir();
-    let http_socket = tmp.join(format!("{unique}-http.sock"));
-    let config_home = tmp.join(format!("{unique}-config"));
-    let data_home = tmp.join(format!("{unique}-data"));
-
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-    std::fs::create_dir_all(&data_home).expect("create test data dir");
-
-    // Seed the fixture backend so the daemon has something with declared options.
-    seed_fixture_backend(&data_home);
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1")
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    // Hand the child to the guard before the readiness loop: the timeout
-    // panic below must still kill and reap the daemon, not leak it.
-    let guard = DaemonGuard {
-        child,
-        cleanup_paths: vec![http_socket.clone(), config_home, data_home.clone()],
-        data_home,
-    };
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists()
-            && http_client::auth_request(http_socket.clone(), "options-smoke-probe", &["status"])
-                .await
-                .is_ok()
-        {
-            // Mint the token with the caller-specified scopes.
-            let auth = http_client::auth_request(http_socket.clone(), "options-smoke", scopes)
-                .await
-                .expect("auth_request for test scopes");
-            let token = auth.session_token;
-            return (guard, http_socket, token);
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!("daemon HTTP listener not ready within 120s");
+async fn start_daemon(scopes: &[&str]) -> (TestDaemon, PathBuf, String) {
+    let daemon = common::daemon("options");
+    seed_fixture_backend(&daemon.home().data);
+    let daemon = daemon.start().await;
+    let token = daemon.token("options-smoke", scopes).await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket, token)
 }
 
 /// Issue an HTTP request and return `(status, json_body)`.
@@ -193,41 +118,7 @@ async fn raw_request(
     token: &str,
     body: Option<serde_json::Value>,
 ) -> (StatusCode, serde_json::Value) {
-    let stream = UnixStream::connect(socket_path).await.expect("connect");
-    let io = hyper_util::rt::TokioIo::new(stream);
-    let (mut sender, conn) = handshake::<_, Full<Bytes>>(io).await.expect("handshake");
-    tokio::spawn(async move {
-        let _ = conn.await;
-    });
-
-    let body_bytes = body
-        .map(|b| serde_json::to_vec(&b).expect("encode body"))
-        .unwrap_or_default();
-
-    let mut builder = Request::builder()
-        .method(method)
-        .uri(format!("http://tts.local/v1{path}"))
-        .header("host", "tts.local")
-        .header("authorization", format!("Bearer {token}"));
-    if !body_bytes.is_empty() {
-        builder = builder
-            .header("content-type", "application/json")
-            .header("content-length", body_bytes.len().to_string());
-    }
-    let req = builder
-        .body(Full::new(Bytes::from(body_bytes)))
-        .expect("build req");
-
-    let resp = sender.send_request(req).await.expect("send req");
-    let status = resp.status();
-    let bytes = resp
-        .into_body()
-        .collect()
-        .await
-        .expect("collect")
-        .to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    (status, json)
+    common::request(socket_path, method, path, Some(token), body.as_ref()).await
 }
 
 async fn get(p: &PathBuf, path: &str, token: &str) -> (StatusCode, serde_json::Value) {
@@ -509,7 +400,7 @@ async fn a_value_of_the_wrong_type_is_refused() {
         body["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("float"),
+            .contains("takes a number"),
         "the refusal names the type rather than a list of choices: {body}"
     );
 
@@ -711,7 +602,8 @@ async fn unknown_backend_is_404() {
 async fn backend_version_is_read_from_disk_per_request() {
     let (guard, sock, token) = start_daemon(&["settings"]).await;
     let manifest = guard
-        .data_home
+        .home()
+        .data
         .join("super-tts")
         .join("backends")
         .join("fixture-openai")
@@ -745,7 +637,8 @@ async fn backend_version_is_read_from_disk_per_request() {
 async fn backend_version_falls_back_to_the_scan_when_the_manifest_is_gone() {
     let (guard, sock, token) = start_daemon(&["settings"]).await;
     let manifest = guard
-        .data_home
+        .home()
+        .data
         .join("super-tts")
         .join("backends")
         .join("fixture-openai")

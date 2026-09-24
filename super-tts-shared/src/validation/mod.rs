@@ -4,13 +4,27 @@ use anyhow::Result;
 
 mod inputs;
 pub mod limits;
-mod paths;
 
 pub use inputs::{
     validate_command, validate_event_types, validate_json_value, validate_limit,
     validate_optional_string, validate_required_string, validate_string,
 };
-pub use paths::{get_http_socket_path, secure_runtime_path};
+pub use super_engine_protocol::runtime::SUN_PATH_MAX;
+
+/// Super TTS's runtime path `<runtime dir>/tts/<relative>`, validated as
+/// [`super_engine_protocol::runtime::secure_runtime_path`] describes.
+#[must_use]
+pub fn secure_runtime_path(relative: &str) -> std::path::PathBuf {
+    super_engine_protocol::runtime::secure_runtime_path(&crate::SUPER_TTS, relative)
+}
+
+/// The daemon's HTTP socket, `super-tts-http.sock`, or
+/// `SUPER_TTS_HTTP_SOCKET` when set. See
+/// [`super_engine_protocol::runtime::get_http_socket_path`].
+#[must_use]
+pub fn get_http_socket_path() -> std::path::PathBuf {
+    super_engine_protocol::runtime::get_http_socket_path(&crate::SUPER_TTS)
+}
 
 /// Validation errors for better error reporting
 #[derive(Debug, thiserror::Error)]

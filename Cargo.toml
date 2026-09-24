@@ -6,7 +6,6 @@
         "super-tts-consent",
         "super-tts-cosmic-applet",
         "super-tts-daemon",
-        "super-tts-forge",
         "super-tts-indexer",
         "super-tts-install",
         "super-tts-registry-types",
@@ -29,7 +28,6 @@
         "super-tts-consent",
         "super-tts-cosmic-applet",
         "super-tts-daemon",
-        "super-tts-forge",
         "super-tts-install",
         "super-tts-registry-types",
         "super-tts-shared",
@@ -105,9 +103,45 @@
         rust-embed = "8.11.0"
         serde = { version = "1.0.219", features = ["derive"] }
         serde_json = "1.0.149"
-        spectrum-analyzer = "1.7.0"
         strum = { version = "0.28.0", features = ["derive"] }
         strum_macros = "0.28"
+        # The code Super TTS shares with Super STT. Pinned by rev, like
+        # libcosmic, so a change there reaches this workspace only when the rev
+        # is bumped here. Every super-engine crate names the same rev, and so do
+        # the shared CI jobs in .github/workflows: bump them all with
+        # `just pin-engine <rev>`.
+        super-engine-client = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+        super-engine-daemon = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+        super-engine-forge = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+        super-engine-indexer = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+        super-engine-installer = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+        super-engine-protocol = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+        super-engine-spec = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
+    super-engine-test-daemon = {
+            git = "https://github.com/super-libre/super-engine",
+            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+        }
         thiserror = "2.0"
         tokio = {
             version = "1.49.0",
@@ -119,7 +153,6 @@
                 "time",
             ]
         }
-        tokio-util = "0.7"
         # Filesystem utilities
         toml = "1.0.6"
         # OpenAPI: the daemon protocol spec is generated from the router and the

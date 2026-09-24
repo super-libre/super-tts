@@ -26,40 +26,11 @@
 //! daemon comes up idle (no model auto-loaded) — the per-model language
 //! endpoint resolves against the discovered backend, so it works regardless.
 
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper::client::conn::http1::handshake;
-use hyper::{Method, Request, StatusCode};
+mod common;
+
+use common::{Method, StatusCode, TestDaemon};
+
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
-use super_tts_shared::daemon::http_client;
-use tokio::net::UnixStream;
-use tokio::time::sleep;
-
-const DAEMON_BIN: &str = env!("CARGO_BIN_EXE_super-tts-daemon");
-
-struct DaemonGuard {
-    child: Child,
-    cleanup_paths: Vec<PathBuf>,
-}
-
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        for p in &self.cleanup_paths {
-            let _ = std::fs::remove_file(p);
-            let _ = std::fs::remove_dir_all(p);
-        }
-    }
-}
-
-fn next_test_uniq() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static UNIQ: AtomicU64 = AtomicU64::new(0);
-    UNIQ.fetch_add(1, Ordering::Relaxed)
-}
 
 /// Seed a multilingual fixture backend into `<data_home>/super-tts/backends/fixture-openai/`.
 /// The model is multilingual and requires a secret, so the daemon starts idle.
@@ -101,54 +72,13 @@ supported_devices = ["none"]
     std::fs::write(backend_dir.join("openai.wasm"), b"").expect("write placeholder entrypoint");
 }
 
-async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
-    let unique = format!("tts-language-{}-{}", std::process::id(), next_test_uniq());
-    let tmp = std::env::temp_dir();
-    let http_socket = tmp.join(format!("{unique}-http.sock"));
-    let config_home = tmp.join(format!("{unique}-config"));
-    let data_home = tmp.join(format!("{unique}-data"));
-
-    std::fs::create_dir_all(&config_home).expect("create test config dir");
-    std::fs::create_dir_all(&data_home).expect("create test data dir");
-
-    seed_fixture_backend(&data_home);
-
-    let child = Command::new(DAEMON_BIN)
-        .env("SUPER_TTS_KEYRING_MOCK", "1")
-        .env("SUPER_TTS_AUTO_APPROVE", "1")
-        .env("SUPER_TTS_MUTE_CUES", "1")
-        .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("XDG_DATA_HOME", &data_home)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn super-tts-daemon");
-
-    // Hand the child to the guard before the readiness loop: the timeout
-    // panic below must still kill and reap the daemon, not leak it.
-    let guard = DaemonGuard {
-        child,
-        cleanup_paths: vec![http_socket.clone(), config_home, data_home],
-    };
-
-    let deadline = Instant::now() + Duration::from_mins(2);
-    while Instant::now() < deadline {
-        if Path::new(&http_socket).exists()
-            && http_client::auth_request(http_socket.clone(), "language-smoke-probe", &["status"])
-                .await
-                .is_ok()
-        {
-            // Mint the token with the caller-specified scopes.
-            let auth = http_client::auth_request(http_socket.clone(), "language-smoke", scopes)
-                .await
-                .expect("auth_request for test scopes");
-            let token = auth.session_token;
-            return (guard, http_socket, token);
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-    panic!("daemon HTTP listener not ready within 120s");
+async fn start_daemon(scopes: &[&str]) -> (TestDaemon, PathBuf, String) {
+    let daemon = common::daemon("language");
+    seed_fixture_backend(&daemon.home().data);
+    let daemon = daemon.start().await;
+    let token = daemon.token("language-smoke", scopes).await;
+    let socket = daemon.socket().to_path_buf();
+    (daemon, socket, token)
 }
 
 /// Issue an HTTP request and return `(status, json_body)`.
@@ -159,41 +89,7 @@ async fn raw_request(
     token: &str,
     body: Option<serde_json::Value>,
 ) -> (StatusCode, serde_json::Value) {
-    let stream = UnixStream::connect(socket_path).await.expect("connect");
-    let io = hyper_util::rt::TokioIo::new(stream);
-    let (mut sender, conn) = handshake::<_, Full<Bytes>>(io).await.expect("handshake");
-    tokio::spawn(async move {
-        let _ = conn.await;
-    });
-
-    let body_bytes = body
-        .map(|b| serde_json::to_vec(&b).expect("encode body"))
-        .unwrap_or_default();
-
-    let mut builder = Request::builder()
-        .method(method)
-        .uri(format!("http://tts.local/v1{path}"))
-        .header("host", "tts.local")
-        .header("authorization", format!("Bearer {token}"));
-    if !body_bytes.is_empty() {
-        builder = builder
-            .header("content-type", "application/json")
-            .header("content-length", body_bytes.len().to_string());
-    }
-    let req = builder
-        .body(Full::new(Bytes::from(body_bytes)))
-        .expect("build req");
-
-    let resp = sender.send_request(req).await.expect("send req");
-    let status = resp.status();
-    let bytes = resp
-        .into_body()
-        .collect()
-        .await
-        .expect("collect")
-        .to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    (status, json)
+    common::request(socket_path, method, path, Some(token), body.as_ref()).await
 }
 
 async fn get(p: &PathBuf, path: &str, token: &str) -> (StatusCode, serde_json::Value) {
@@ -535,7 +431,7 @@ async fn the_global_language_setting_lists_what_it_accepts() {
         "a regional tag the setter takes: {offered:?}"
     );
 
-    // The list is the promise: a tag off it round-trips through the setting.
+    // The list is the promise: a tag on it round-trips through the setting.
     let (st, body) = post_req(
         &sock,
         "/settings/language",
@@ -545,6 +441,21 @@ async fn the_global_language_setting_lists_what_it_accepts() {
     .await;
     assert_eq!(st, StatusCode::OK, "offered es-MX but refused it: {body}");
     assert_eq!(body["language"], "es-MX", "{body}");
+
+    // And a tag off it is refused, so the list is the whole truth.
+    let (st, body) = post_req(
+        &sock,
+        "/settings/language",
+        &token,
+        serde_json::json!({ "language": "zz" }),
+    )
+    .await;
+    assert_eq!(
+        st,
+        StatusCode::BAD_REQUEST,
+        "a tag off the list must be refused: {body}"
+    );
+    assert_eq!(body["error_code"], "unsupported_language", "{body}");
 }
 
 /// Case 5 — A `status`-scoped token must be denied (403) on the global and

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Generic mock REALTIME WASM backend: a `wit-bindgen` component targeting the
 //! `realtime-backend` world. It serves canned `/v1` over `wasi:http`
-//! (incoming-handler) AND a canned `super-tts:realtime/ws-server` session — read
+//! (incoming-handler) AND a canned `super-engine:realtime/ws-server` session — read
 //! the consumer's `start` frame, emit one `preview` and one `done` frame, then
 //! close. It contacts NO upstream (never calls the `ws` import or
 //! `wasi:http/outgoing-handler`), so it needs no network and runs in hosted CI.
@@ -23,9 +23,9 @@ wit_bindgen::generate!({
     ],
 });
 
-use exports::super_tts::realtime::ws_server::Guest as WsServerGuest;
+use exports::super_engine::realtime::ws_server::Guest as WsServerGuest;
 use exports::wasi::http::incoming_handler::Guest as HttpGuest;
-use super_tts::realtime::ws::{ConsumerStream, WsError, WsFrame};
+use super_engine::realtime::ws::{ConsumerStream, WsError, WsFrame};
 use wasi::http::types::{
     Fields, IncomingRequest, Method, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };

@@ -4,7 +4,7 @@
 use super::{SpeakError, check_voice};
 use crate::tts_models::ModelDefinition;
 use std::time::Duration;
-use super_tts_registry_types::manifest::{Device, VoiceKind};
+use super_tts_registry_types::manifest::{Device, TtsModel, VoiceEntry, VoiceKind};
 
 /// A model declaring `kinds` and the preset ids in `voices`.
 fn model(kinds: Vec<VoiceKind>, voices: &[&str]) -> ModelDefinition {
@@ -15,22 +15,23 @@ fn model(kinds: Vec<VoiceKind>, voices: &[&str]) -> ModelDefinition {
         primary_language: "en".into(),
         supported_languages: vec!["en".into(), "ja".into()],
         estimated_vram_bytes: 0,
-        max_input_chars: None,
         processing_interval: Duration::from_millis(0),
         supported_devices: vec![Device::Cpu],
-        voice_kinds: kinds,
-        clone_ref_seconds: None,
-        clone_needs_transcript: false,
-        voices: voices
-            .iter()
-            .map(|v| crate::tts_models::model_definition::PresetVoice {
-                id: (*v).to_string(),
-                label: (*v).to_string(),
-            })
-            .collect(),
-        default_voice: None,
         realtime: false,
         provider: None,
+        product: TtsModel {
+            voice_kinds: kinds,
+            voices: voices
+                .iter()
+                .map(|v| VoiceEntry {
+                    id: (*v).to_string(),
+                    label: Some((*v).to_string()),
+                    language: None,
+                    tags: Vec::new(),
+                })
+                .collect(),
+            ..TtsModel::default()
+        },
     }
 }
 
@@ -188,8 +189,8 @@ fn clip(seconds: f32) -> Vec<u8> {
 /// optional transcript requirement.
 fn cloning_model(budget: f32, needs_transcript: bool) -> ModelDefinition {
     let mut def = model(vec![VoiceKind::Preset, VoiceKind::Cloned], &["af_heart"]);
-    def.clone_ref_seconds = Some(budget);
-    def.clone_needs_transcript = needs_transcript;
+    def.product.clone_ref_seconds = Some(budget);
+    def.product.clone_needs_transcript = needs_transcript;
     def
 }
 

@@ -116,6 +116,7 @@ impl AppModel {
             model_operation_state: ModelOperationState::Loading {
                 target_model: String::new(),
                 status_message: "Loading initial model state...".to_string(),
+                load: None,
             },
 
             // Device state. Every one of these starts empty rather than

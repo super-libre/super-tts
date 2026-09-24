@@ -11,9 +11,11 @@ This document is part of the [backend protocol](./contract.md); see also
 [wasm.md](./wasm.md) and [subprocess.md](./subprocess.md) for how the
 configuration's fields are honored per transport.
 
-A JSON Schema for this file is generated from the canonical manifest types in
-`super-tts-registry-types` and published to GitHub Pages by CI (it is not
-committed to the repo). Backends in other repositories reference it at
+A JSON Schema for this file is generated from the manifest types Super TTS
+shares with Super STT in
+[`super-engine-spec`](https://github.com/super-libre/super-engine), plus Super
+TTS's own fields in `super-tts-registry-types`, and published to GitHub Pages
+by CI (it is not committed to the repo). Backends in other repositories reference it at
 `https://jorge-menjivar.github.io/super-tts/backend.schema.json`.
 Add that URL as a `#:schema` comment line at the top of a `backend.toml` to get
 autocomplete and validation in taplo-based editors. Generate it locally with
@@ -141,7 +143,7 @@ released — this one included — with no `min_version` field anyone had to thi
 to add first.
 
 Which generation introduced, or began requiring, each manifest field lives in
-one table (`CONTRACT_FIELDS`, in `super-tts-registry-types`). It is empty while
+one table (`Tts::CONTRACT_FIELDS`, in `super-tts-registry-types`). It is empty while
 `v1` is the only generation: there is no earlier contract for a field to be
 withheld from. It is the extension point rather than dead weight — adding a
 field to a `v2` means adding a row, and both the manifest parser and the
@@ -613,7 +615,7 @@ websocket = true
 
 | Field       | Type | Required | Notes                                                                              |
 |-------------|------|----------|------------------------------------------------------------------------------------|
-| `websocket` | bool | no       | Opt into the `super-tts:realtime/ws` import and the `super-tts:realtime/ws-server` export (see [wasm.md — Realtime](./wasm.md#realtime-websocket)). When `true`, the daemon wires those interfaces into the WASM component for every session on a realtime model. **wasm-only** — a `subprocess` backend declaring `websocket = true` is rejected at discovery. Default `false`. |
+| `websocket` | bool | no       | Opt into the `super-engine:realtime/ws` import and the `super-engine:realtime/ws-server` export (see [wasm.md — Realtime](./wasm.md#realtime-websocket)). When `true`, the daemon wires those interfaces into the WASM component for every session on a realtime model. **wasm-only** — a `subprocess` backend declaring `websocket = true` is rejected at discovery. Default `false`. |
 
 ## `[[models]]`
 

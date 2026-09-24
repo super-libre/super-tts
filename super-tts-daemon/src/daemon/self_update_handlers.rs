@@ -19,7 +19,8 @@ impl SuperTTSDaemon {
     pub async fn run_self_update_check_and_notify(&self) -> SelfUpdateStatus {
         let optin = self.config.read().await.update.beta_optin;
         let before = self.self_update.status().await;
-        let client = super_tts_forge::client(Forge::Github);
+        let client =
+            super_engine_forge::client(Forge::Github, super_tts_registry_types::Tts::USER_AGENT);
         let (status, did_check) = self.self_update.run_check(client.as_ref(), optin).await;
 
         // A coalesced call (`did_check == false`) didn't perform the check

@@ -41,7 +41,7 @@ Content-Type: application/json
 
 | Field      | Type   | Required | Notes                                          |
 |------------|--------|----------|------------------------------------------------|
-| `language` | string | yes      | A BCP-47 tag or `auto`. To clear, use `DELETE`. |
+| `language` | string | yes      | A tag [`/settings/language/list`](./language/list.md) offers, or `auto`. Any other is refused. To clear, use `DELETE`. |
 
 **Response (200):**
 
@@ -100,3 +100,9 @@ Content-Type: application/json
 |------|-------------------|-----------------------------------------|
 | 401  | `invalid_session` | Token unknown / expired / `exe_changed` |
 | 403  | `scope_denied`    | Token lacks the `settings` scope        |
+
+**Errors (`POST`):**
+
+| HTTP | `error_code`           | Meaning                                                  |
+|------|------------------------|----------------------------------------------------------|
+| 400  | `unsupported_language` | `language` is not one `/settings/language/list` offers |
