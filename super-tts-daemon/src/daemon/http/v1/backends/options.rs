@@ -397,25 +397,14 @@ fn canonical_base_url(value: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
-/// Returns an error `Response` when `value` is not one the option accepts —
-/// wrong type, or outside the closed set it declares — `None` when the write
+/// Returns an error `Response` when `value` is not one the option takes — its
+/// type, its bounds or its choices, see
+/// `super_engine_spec::manifest::Opt::permits_value` — `None` when the write
 /// can proceed.
 ///
 /// Runs after [`guard_missing`], so a missing backend or option is already
 /// reported and this only ever looks at an option that exists — which is why
 /// both `None` arms here mean "nothing to object to" rather than "not found".
-///
-/// The two refusals are told apart in the message because they are different
-/// mistakes: a value of the wrong type is one the backend cannot read, and a
-/// value off the dropdown is one it never offered, and one outside a declared
-/// range is neither. Saying "accepts one of:" to someone who typed `warm` into
-/// a numeric field would list the numbers and leave them to infer why, and an
-/// option with no `choices` has no list to offer at all.
-///
-/// A `step` is not checked. It is the grid a slider lands on, not a bound the
-/// contract makes: a value between two notches is still inside the range the
-/// option declared it could take, and refusing it would make the option
-/// narrower than its own bounds say.
 async fn guard_not_a_choice(
     s: &AppState,
     source: &str,
@@ -424,43 +413,12 @@ async fn guard_not_a_choice(
 ) -> Option<Response> {
     let backend = find_backend(s, source).await?;
     let opt = backend.options.iter().find(|o| o.name == name)?;
-    refusal(opt, value)
-        .map(|message| json_error_msg(StatusCode::BAD_REQUEST, "invalid_value", &message))
-}
-
-/// Why `opt` will not take `value`, or `None` when it will.
-fn refusal(opt: &crate::tts_models::backends::manifest::Opt, value: &str) -> Option<String> {
-    let name = &opt.name;
-    if !opt.accepts_the_type(value) {
-        let wanted = match opt.declared_type() {
-            OptionType::Integer => "an integer",
-            OptionType::Float => "a number",
-            OptionType::Bool => "`true` or `false`",
-            OptionType::String => "text",
-        };
-        return Some(format!("option `{name}` takes {wanted}, not {value:?}"));
-    }
-    if !opt.is_in_range(value) {
-        let bound = match (opt.min, opt.max) {
-            (Some(low), Some(high)) => format!("between {low} and {high}"),
-            (Some(low), None) => format!("{low} or more"),
-            (None, Some(high)) => format!("{high} or less"),
-            (None, None) => unreachable!("a value only falls outside a declared bound"),
-        };
-        return Some(format!(
-            "option `{name}` takes a value {bound}, not {value:?}"
-        ));
-    }
-    if opt.is_a_choice(value) {
-        return None;
-    }
-    let offered = opt
-        .choices
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!("option `{name}` accepts one of: {offered}"))
+    let refusal = opt.permits_value(value).err()?;
+    Some(json_error_msg(
+        StatusCode::BAD_REQUEST,
+        "invalid_value",
+        &refusal,
+    ))
 }
 
 /// Returns an error `Response` when the backend or the named option is missing,
@@ -470,56 +428,5 @@ async fn guard_missing(s: &AppState, source: &str, name: &str) -> Option<Respons
         None => Some(json_error(StatusCode::NOT_FOUND, "unknown_backend")),
         Some(b) if b.options.iter().any(|o| o.name == name) => None,
         Some(_) => Some(json_error(StatusCode::NOT_FOUND, "unknown_option")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::refusal;
-    use crate::tts_models::backends::manifest::{Opt, OptionType};
-
-    fn opt(r#type: OptionType) -> Opt {
-        Opt {
-            name: "speed".to_string(),
-            label: None,
-            description: "an option".to_string(),
-            r#type: Some(r#type),
-            default: None,
-            choices: Vec::new(),
-            min: None,
-            max: None,
-            step: None,
-            required: false,
-        }
-    }
-
-    /// Each refusal names the type in words a user reads, not the manifest's
-    /// type token: "a integer" was the manifest token dropped into a sentence.
-    #[test]
-    fn a_wrong_type_is_named_in_words() {
-        assert_eq!(
-            refusal(&opt(OptionType::Integer), "fast").as_deref(),
-            Some("option `speed` takes an integer, not \"fast\"")
-        );
-        assert_eq!(
-            refusal(&opt(OptionType::Float), "fast").as_deref(),
-            Some("option `speed` takes a number, not \"fast\"")
-        );
-        assert_eq!(
-            refusal(&opt(OptionType::Bool), "yes").as_deref(),
-            Some("option `speed` takes `true` or `false`, not \"yes\"")
-        );
-    }
-
-    #[test]
-    fn a_value_out_of_range_names_the_range() {
-        let mut o = opt(OptionType::Float);
-        o.min = Some(0.5);
-        o.max = Some(2.0);
-        assert_eq!(
-            refusal(&o, "3").as_deref(),
-            Some("option `speed` takes a value between 0.5 and 2, not \"3\"")
-        );
-        assert_eq!(refusal(&o, "1.5"), None);
     }
 }
