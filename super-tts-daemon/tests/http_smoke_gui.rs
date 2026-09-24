@@ -103,6 +103,11 @@ async fn start_daemon_no_auto_approve() -> (DaemonGuard, PathBuf) {
     // the developer's real config via `apply_cli_overrides_to_config`.
     let config_home = xdg.join("config");
     std::fs::create_dir_all(&config_home).expect("create xdg/config dir");
+    // Isolate the cache too: the registry client persists its index under
+    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
+    // running side by side overwrite each other's.
+    let cache_home = xdg.join("cache");
+    std::fs::create_dir_all(&cache_home).expect("create xdg/cache dir");
 
     let http_socket = xdg.join("tts").join("super-tts-http.sock");
 
@@ -110,6 +115,7 @@ async fn start_daemon_no_auto_approve() -> (DaemonGuard, PathBuf) {
         .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
         .env("XDG_RUNTIME_DIR", &xdg)
         .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
         .env_remove("SUPER_TTS_AUTO_APPROVE") // ensure the popup path runs
         .env("SUPER_TTS_MUTE_CUES", "1") // never beep on the runner's speakers
         .stdout(Stdio::null())

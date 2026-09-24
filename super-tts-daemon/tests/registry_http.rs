@@ -66,6 +66,11 @@ async fn start_daemon_with_registry(registry_url: &str) -> (DaemonGuard, PathBuf
     let data_home = tmp.join(format!("{unique}-data"));
     std::fs::create_dir_all(&config_home).expect("create test config dir");
     std::fs::create_dir_all(&data_home).expect("create test data dir");
+    // Isolate the cache too: the registry client persists its index under
+    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
+    // running side by side overwrite each other's.
+    let cache_home = data_home.join("cache");
+    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
 
     let child = Command::new(DAEMON_BIN)
         .env("SUPER_TTS_KEYRING_MOCK", "1") // in-memory keyring (no secret-service prompt in tests/CI)
@@ -75,6 +80,7 @@ async fn start_daemon_with_registry(registry_url: &str) -> (DaemonGuard, PathBuf
         .env("SUPER_TTS_REGISTRY_URL", registry_url)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
+        .env("XDG_CACHE_HOME", &cache_home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

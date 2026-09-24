@@ -80,6 +80,11 @@ fn spawn_daemon() -> (DaemonGuard, PathBuf) {
     // Empty, isolated data dir → the daemon discovers no backends and comes
     // up idle and fast, which is exactly what these commands need.
     std::fs::create_dir_all(&data_home).expect("create data dir");
+    // Isolate the cache too: the registry client persists its index under
+    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
+    // running side by side overwrite each other's.
+    let cache_home = data_home.join("cache");
+    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
 
     let child = Command::new(locate_daemon_bin())
         .env("SUPER_TTS_KEYRING_MOCK", "1")
@@ -88,6 +93,7 @@ fn spawn_daemon() -> (DaemonGuard, PathBuf) {
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
+        .env("XDG_CACHE_HOME", &cache_home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

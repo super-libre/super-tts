@@ -110,6 +110,11 @@ async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
 
     std::fs::create_dir_all(&config_home).expect("create test config dir");
     std::fs::create_dir_all(&data_home).expect("create test data dir");
+    // Isolate the cache too: the registry client persists its index under
+    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
+    // running side by side overwrite each other's.
+    let cache_home = data_home.join("cache");
+    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
 
     seed_fixture_backend(&data_home);
 
@@ -120,6 +125,7 @@ async fn start_daemon(scopes: &[&str]) -> (DaemonGuard, PathBuf, String) {
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
+        .env("XDG_CACHE_HOME", &cache_home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

@@ -110,6 +110,11 @@ async fn start_daemon_with_auto_approve_timer() -> (DaemonGuard, PathBuf) {
     // the developer's real config via `apply_cli_overrides_to_config`.
     let config_home = tmp.join(format!("{unique}-config"));
     std::fs::create_dir_all(&config_home).expect("create test config dir");
+    // Isolate the cache too: the registry client persists its index under
+    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
+    // running side by side overwrite each other's.
+    let cache_home = tmp.join(format!("{unique}-cache"));
+    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
 
     // Capture daemon stderr so we can diagnose hangs during dev.
     // Set SUPER_TTS_TEST_LOG=1 to also surface it on the test runner's
@@ -133,6 +138,7 @@ async fn start_daemon_with_auto_approve_timer() -> (DaemonGuard, PathBuf) {
         )
         .env("SUPER_TTS_HTTP_SOCKET", &http_socket)
         .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
         .env(
             "RUST_LOG",
             "info,super_tts_daemon::daemon::http_server=debug",

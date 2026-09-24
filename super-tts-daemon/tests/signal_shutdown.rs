@@ -57,6 +57,11 @@ async fn start_daemon() -> (DaemonGuard, PathBuf) {
     std::fs::create_dir_all(&config_home).expect("create xdg/config dir");
     let data_home = xdg.join("data");
     std::fs::create_dir_all(&data_home).expect("create xdg/data dir");
+    // Isolate the cache too: the registry client persists its index under
+    // XDG_CACHE_HOME, so a shared one is the developer's own, and test daemons
+    // running side by side overwrite each other's.
+    let cache_home = xdg.join("cache");
+    std::fs::create_dir_all(&cache_home).expect("create test cache dir");
 
     let http_socket = xdg.join("tts").join("super-tts-http.sock");
 
@@ -65,6 +70,7 @@ async fn start_daemon() -> (DaemonGuard, PathBuf) {
         .env("XDG_RUNTIME_DIR", &xdg)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
+        .env("XDG_CACHE_HOME", &cache_home)
         .env("SUPER_TTS_AUTO_APPROVE", "1")
         .env("SUPER_TTS_MUTE_CUES", "1")
         .stdout(Stdio::null())
