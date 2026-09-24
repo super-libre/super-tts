@@ -128,7 +128,7 @@
               "$ref": "#/definitions/Contract"
             }
           ],
-          "description": "The backend-protocol contract version implemented."
+          "description": "The backend-protocol contract generation implemented. See\n[`Generation`]."
         },
         "description": {
           "description": "One-line, human-readable summary shown in the registry/Browse listing.\nRequired for every backend.",
@@ -140,7 +140,7 @@
         },
         "id": {
           "default": null,
-          "description": "Globally unique reverse-DNS identifier, e.g. `app.super-tts.piper`.\nNames the directory this backend installs into. Optional on disk so a\nbackend installed before the field existed keeps loading; required for\nregistry listing, which the indexer enforces.",
+          "description": "Globally unique reverse-DNS identifier, e.g. `com.example.backend`.\nNames the directory this backend installs into. Optional on disk so a\nbackend installed before the field existed keeps loading; required for\nregistry listing, which the indexer enforces.",
           "type": [
             "string",
             "null"
@@ -389,7 +389,7 @@
       "type": "object"
     },
     "Contract": {
-      "description": "Backend-protocol contract version: the one thing a manifest declares about\nwhat it implements.\n\nA contract generation names a set of manifest fields and backend routes.\nEach generation is additive over the one before, so a backend declares the\n*lowest* generation whose fields it uses, and a daemon supports every\ngeneration up to the one it was built with.\n\nThis is a closed enum on purpose. A daemon that predates a generation\ncannot parse a manifest declaring it, which is what stops such a daemon\nfrom installing a backend it cannot drive: the refusal needs no field the\nold daemon would have to know about, because it is the *absence* of\nknowledge that refuses. Every generation added here therefore also gates\nitself against every daemon released before it.\n\nVariant order is generation order; the derived `Ord` relies on it.",
+      "description": "Backend-protocol contract version: the one thing a manifest declares about\nwhat it implements.\n\nA contract generation names a set of manifest fields and backend routes.\nEach generation is additive over the one before, so a backend declares the\n*lowest* generation whose fields it uses, and a daemon supports every\ngeneration up to the one it was built with.\n\nClosed on purpose; see [`Generation`].\n\nVariant order is generation order; the derived `Ord` relies on it.",
       "oneOf": [
         {
           "const": "v1",
@@ -541,7 +541,7 @@
           ]
         },
         "destination": {
-          "description": "Relative file path (including filename) under the backend directory to\nwrite the download to, e.g. `models/kokoro-tiny/config.json`.\nValidated as a safe relative path so it cannot escape the backend dir.\n\nAlso the variant key: every entry writing to one `destination` is a\ncandidate for it, and exactly one of them is downloaded. The backend\ntherefore reads a fixed path and never learns which variant it got.",
+          "description": "Relative file path (including filename) under the backend directory to\nwrite the download to, e.g. `models/model/config.json`.\nValidated as a safe relative path so it cannot escape the backend dir.\n\nAlso the variant key: every entry writing to one `destination` is a\ncandidate for it, and exactly one of them is downloaded. The backend\ntherefore reads a fixed path and never learns which variant it got.",
           "type": "string"
         },
         "gfx": {
@@ -566,7 +566,7 @@
           ]
         },
         "url": {
-          "description": "Full download URL for this file, e.g.\n`https://huggingface.co/openai/kokoro-tiny/resolve/main/config.json`.",
+          "description": "Full download URL for this file, e.g.\n`https://huggingface.co/example/model/resolve/main/config.json`.",
           "type": "string"
         },
         "vulkan_api": {
@@ -700,7 +700,7 @@
         },
         "realtime": {
           "default": false,
-          "description": "When `true`, the model is driven over the realtime WebSocket transport\nrather than batch `POST /v1/synthesize`. Requires\n`[capabilities] websocket = true`. Default `false`.",
+          "description": "When `true`, the model is driven over the realtime WebSocket transport\nrather than batch requests. Requires `[capabilities] websocket = true`.\nDefault `false`.",
           "type": "boolean"
         },
         "supported_devices": {
@@ -780,7 +780,7 @@
           }
         }
       ],
-      "description": "One `[[options]]` declaration — non-secret configuration the backend reads\nas an `x-tts-option-<name>` request header.",
+      "description": "One `[[options]]` declaration — non-secret configuration the backend reads\nas the product's option request header (`x-<short name>-option-<name>`).",
       "properties": {
         "choices": {
           "default": [],
@@ -901,7 +901,7 @@
     },
     "Secret": {
       "additionalProperties": false,
-      "description": "One `[[secrets]]` declaration — an encrypted credential the backend reads\nas an `x-tts-secret-<name>` request header.",
+      "description": "One `[[secrets]]` declaration — an encrypted credential the backend reads\nas the product's secret request header (`x-<short name>-secret-<name>`).",
       "properties": {
         "description": {
           "description": "Help text shown beside the input in the settings UI.",
