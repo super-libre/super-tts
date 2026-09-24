@@ -284,9 +284,13 @@ fn select_install_compat(
     let host = host_detect::detect();
     let sel = compat::select(&host, entry);
     let Some(asset) = compat::to_selected_asset(entry, &sel) else {
-        return Err(Box::new(super::registry_error(
+        // `select` already worked out why; dropping it here is what made this
+        // a bare `incompatible` the caller had to guess at — and the reason is
+        // the whole value of the check when the remedy is "update Super TTS".
+        return Err(Box::new(super::registry_error_msg(
             StatusCode::UNPROCESSABLE_ENTITY,
             "incompatible",
+            sel.reason().unwrap_or("no compatible asset for this host"),
         )));
     };
     Ok((sel, asset))
@@ -454,5 +458,52 @@ mod tests {
         let (status, error, _) =
             install_forge(None, "owner/backend").expect_err("not <host>/<owner>/<repo>");
         assert_eq!((status, error), (StatusCode::BAD_REQUEST, "bad_repo_url"));
+    }
+}
+
+#[cfg(test)]
+pub(super) mod incompatible_tests {
+    use super::select_install_compat;
+    use axum::http::StatusCode;
+
+    /// A `wasm` entry that ships no `.wasm`: `compat::select` refuses it on any
+    /// host, with a reason of its own.
+    pub(in super::super) fn entry_without_an_asset() -> crate::registry::index_schema::IndexBackend
+    {
+        serde_json::from_value(serde_json::json!({
+            "id": "piper",
+            "source": "github.com/x/piper",
+            "version": "0.2.0",
+            "tag": "v0.2.0",
+            "name": "Piper",
+            "kind": "wasm",
+            "contract": "v1",
+            "entrypoint": "piper",
+            "online": false,
+            "supports_gpu": false,
+            "supports_cpu": true,
+            "models": [],
+            "secrets": [],
+            "options": [],
+            "assets": {},
+        }))
+        .expect("a valid index entry")
+    }
+
+    /// The `422` says why, in the `message` beside `incompatible`. When the
+    /// block is the contract generation, that sentence names the Super TTS
+    /// version to update to, which a bare `incompatible` never could.
+    #[tokio::test]
+    async fn an_incompatible_install_says_why() {
+        let Err(resp) = select_install_compat(&entry_without_an_asset(), None) else {
+            panic!("an entry with no asset has nothing to install");
+        };
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error_code"], "incompatible");
+        assert_eq!(body["message"], "wasm backend missing wasm asset");
     }
 }

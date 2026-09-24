@@ -103,6 +103,8 @@ Per-entry fields beyond what `index.json` carries:
   for one carrying several — the same two spellings
   [`backend.toml`](../../../backend/config.md#assets) accepts.
 - `compatibility.reason` — present only when `compatible = false`. Human-readable.
+  `POST .../install` and `POST .../update` return the same sentence as their
+  `422 incompatible` `message`, so the cause is stated wherever the block is met.
 - `installed_version` — present if the backend is already installed on this
   host, regardless of its registry status. Read from the installed
   `backend.toml` on every request, so it reflects what is on disk now rather

@@ -113,9 +113,12 @@ fn select_update_compat(
     let sel = compat::select(&host, entry);
 
     if compat::to_selected_asset(entry, &sel).is_none() {
-        return Err(Box::new(super::registry_error(
+        // Same as the install path: say why, rather than making the client
+        // re-derive it from a listing it may not have refreshed.
+        return Err(Box::new(super::registry_error_msg(
             StatusCode::UNPROCESSABLE_ENTITY,
             "incompatible",
+            sel.reason().unwrap_or("no compatible asset for this host"),
         )));
     }
 
@@ -244,4 +247,27 @@ pub(crate) async fn update_registry_backend(
         serde_json::to_string(&resp).unwrap_or_default(),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_update_compat;
+    use axum::http::StatusCode;
+
+    /// The update path answers an incompatible release the way install does:
+    /// `incompatible`, with the reason as the `message`.
+    #[tokio::test]
+    async fn an_incompatible_update_says_why() {
+        let entry = super::super::install::incompatible_tests::entry_without_an_asset();
+        let Err(resp) = select_update_compat(&entry) else {
+            panic!("an entry with no asset has nothing to update to");
+        };
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error_code"], "incompatible");
+        assert_eq!(body["message"], "wasm backend missing wasm asset");
+    }
 }
