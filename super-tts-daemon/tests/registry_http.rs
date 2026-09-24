@@ -414,10 +414,16 @@ async fn install_pipeline_rejects_hash_mismatch() {
     let registry_url = format!("{}/index.json", index_server.url());
     let (_guard, http_socket) = start_daemon_with_registry(&registry_url).await;
 
-    // Mint a settings-scope token.
-    let auth = http_client::auth_request(http_socket.clone(), "registry-test", &["settings"])
-        .await
-        .expect("auth_request should succeed");
+    // `settings` for the install POST, `daemon_status` for the SSE topic:
+    // `/events` scopes per *topic*, and `registry_install` sits under
+    // `daemon_status`. A settings-only token opens the stream with a `403`.
+    let auth = http_client::auth_request(
+        http_socket.clone(),
+        "registry-test",
+        &["settings", "daemon_status"],
+    )
+    .await
+    .expect("auth_request should succeed");
     let token = auth.session_token;
 
     // Open SSE subscription BEFORE posting the install so no events are
@@ -448,32 +454,47 @@ async fn install_pipeline_rejects_hash_mismatch() {
         .to_owned();
     assert!(!install_id.is_empty(), "install_id must not be empty");
 
-    // Collect SSE bytes until the failed event arrives (timeout 30 s).
-    let sse_bytes = tokio::time::timeout(Duration::from_secs(30), async {
-        sse_resp
-            .into_body()
-            .collect()
-            .await
-            .expect("collect sse body")
-            .to_bytes()
-    })
-    .await
-    .unwrap_or_default(); // On timeout we work with whatever arrived.
+    // Read the stream frame by frame until the failed event shows up.
+    //
+    // Not `collect()`: an SSE stream does not end, so collecting the whole
+    // body never resolves, and a `timeout` around it drops the future along
+    // with every byte it had buffered, leaving nothing to match on.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut sse_bytes: Vec<u8> = Vec::new();
+    let mut body = sse_resp.into_body();
 
-    let frames = extract_sse_data_for_event(&sse_bytes, "registry_install");
-    let failed_frame = frames.iter().find(|data| {
-        let v: serde_json::Value = serde_json::from_str(data).unwrap_or_default();
-        v["type"] == "registry.install.failed" && v["install_id"] == install_id.as_str()
-    });
+    let failed = loop {
+        if let Some(found) = extract_sse_data_for_event(&sse_bytes, "registry_install")
+            .into_iter()
+            .find(|data| {
+                let v: serde_json::Value = serde_json::from_str(data).unwrap_or_default();
+                v["type"] == "registry.install.failed" && v["install_id"] == install_id.as_str()
+            })
+        {
+            break found;
+        }
 
-    let failed = failed_frame.unwrap_or_else(|| {
-        panic!(
-            "no registry.install.failed event for install_id={install_id} within 30 s; \
-             frames seen: {frames:?}"
-        )
-    });
+        match tokio::time::timeout_at(deadline, body.frame()).await {
+            Ok(Some(Ok(frame))) => {
+                if let Some(chunk) = frame.data_ref() {
+                    sse_bytes.extend_from_slice(chunk);
+                }
+            }
+            Ok(Some(Err(e))) => panic!("SSE stream errored while waiting: {e}"),
+            Ok(None) => panic!(
+                "SSE stream closed before registry.install.failed for \
+                 install_id={install_id}; saw: {:?}",
+                String::from_utf8_lossy(&sse_bytes)
+            ),
+            Err(_) => panic!(
+                "no registry.install.failed event for install_id={install_id} within 30 s; \
+                 saw: {:?}",
+                String::from_utf8_lossy(&sse_bytes)
+            ),
+        }
+    };
 
-    let v: serde_json::Value = serde_json::from_str(failed).expect("parse failed frame");
+    let v: serde_json::Value = serde_json::from_str(&failed).expect("parse failed frame");
     assert_eq!(
         v["error"], "asset_hash_mismatch",
         "wrong error variant: {v}"
