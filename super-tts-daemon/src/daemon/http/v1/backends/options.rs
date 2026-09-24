@@ -249,7 +249,7 @@ message and the old instance keeps running rather than leaving the stage empty."
     security(("session_token" = ["settings"])),
     responses(
         (status = 200, description = "Stored; this is the new effective value.", body = OptionValue),
-        (status = 400, description = "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, or it is `base_url` and names no host. Use `DELETE` to clear an override.", body = ErrorEnvelope),
+        (status = 400, description = "The value was empty (`invalid_request`), or it is not one the option accepts (`invalid_value`): not of the declared `type`, outside a declared `min`/`max`, the option declares `choices` and the value is not one of them, it is `base_url` and names no host, or it is longer than 4000 characters or carries a control character. An option value is sent as an `x-tts-option-<name>` request header, which can hold neither a line break nor an unbounded number of bytes, so a value that cannot be delivered is refused rather than stored. Use `DELETE` to clear an override.", body = ErrorEnvelope),
         (status = 401, description = "Token unknown, expired, or its binary changed.", body = ReasonEnvelope),
         (status = 403, description = "The token lacks the `settings` scope.", body = ErrorEnvelope),
         (status = 404, description = "No such backend (`unknown_backend`) or no such option (`unknown_option`).", body = ErrorEnvelope),
