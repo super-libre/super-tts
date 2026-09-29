@@ -8,7 +8,7 @@
   border is deliberate: it marks this as unfinished at a glance.
 
   Replace all copies together — .github/assets/, super-tts-app/resources/ (x2),
-  and super-tts-cosmic-applet/resources/ (x2) — they are meant to be identical.
+  and super-cosmic-applet's resources/ (x2) — they are meant to be identical.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"
      viewBox="0 0 128 128" role="img" aria-label="Super TTS (placeholder icon)">

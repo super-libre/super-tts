@@ -6943,23 +6943,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "super-tts-cosmic-applet"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clap",
- "futures-util",
- "libc",
- "libcosmic",
- "log",
- "serde",
- "serde_json",
- "super-tts-shared",
- "tokio",
- "toml 1.1.0+spec-1.1.0",
-]
-
-[[package]]
 name = "super-tts-daemon"
 version = "0.1.0"
 dependencies = [

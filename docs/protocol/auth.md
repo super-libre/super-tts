@@ -200,8 +200,10 @@ can read it and impersonate the app.
 
 ## First-party clients
 
-Super TTS's own client binaries — `super-tts-app`, `super-tts-cli`,
-and `super-tts-cosmic-applet` — skip the consent popup. When one of
+Super TTS's own client binaries (`super-tts-app` and `super-tts-cli`)
+and the COSMIC panel applet it shares with Super STT (`super-cosmic-applet`)
+skip the consent popup. Super TTS's former applet, `super-tts-cosmic-applet`,
+is still on the list for installs that have not been updated yet. When one of
 them calls `POST /auth/request`, the daemon mints the session token
 immediately; the response is indistinguishable from a user-approved
 grant.

@@ -86,6 +86,26 @@ remove_path() {
     rm -f "$target" 2>/dev/null || $SUDO rm -f "$target"
 }
 
+# The COSMIC applet Super TTS shares with Super STT. It goes with Super TTS
+# unless Super STT, which uses it too, is still installed.
+SHARED_APPLET=super-cosmic-applet
+SHARED_APPLET_STAYS=false
+if [ -e "$SYSTEM_BIN_DIR/super-stt-daemon" ]; then
+    SHARED_APPLET_STAYS=true
+fi
+SHARED_APPLET_BINS=()
+SHARED_APPLET_DESKTOPS=()
+SHARED_APPLET_ICONS=()
+if [ "$SHARED_APPLET_STAYS" = false ]; then
+    SHARED_APPLET_BINS=("$SHARED_APPLET")
+    SHARED_APPLET_DESKTOPS=(
+        "$SHARED_APPLET-full.desktop"
+        "$SHARED_APPLET-left.desktop"
+        "$SHARED_APPLET-right.desktop"
+    )
+    SHARED_APPLET_ICONS=("$SHARED_APPLET.svg")
+fi
+
 # Detect whether a system install is present at all, so legacy-only
 # setups never see a sudo prompt.
 SYSTEM_INSTALL_PRESENT=false
@@ -94,7 +114,8 @@ for probe in \
     "$SYSTEM_BIN_DIR/super-tts-app" \
     "$SYSTEM_BIN_DIR/super-tts-cosmic-applet" \
     "$SYSTEM_BIN_DIR/tts" \
-    "$SYSTEM_SYSTEMD_DIR/$SERVICE_NAME.service"
+    "$SYSTEM_SYSTEMD_DIR/$SERVICE_NAME.service" \
+    "${SHARED_APPLET_BINS[@]/#/$SYSTEM_BIN_DIR/}"
 do
     [ -e "$probe" ] && SYSTEM_INSTALL_PRESENT=true
 done
@@ -109,7 +130,9 @@ for probe in \
     "$SYSTEM_BIN_DIR/super-tts-cosmic-applet" \
     "$LEGACY_BIN_DIR/super-tts-cosmic-applet" \
     "$SYSTEM_DESKTOP_DIR/super-tts-cosmic-applet-full.desktop" \
-    "$DESKTOP_DIR/super-tts-cosmic-applet-full.desktop"
+    "$DESKTOP_DIR/super-tts-cosmic-applet-full.desktop" \
+    "${SHARED_APPLET_BINS[@]/#/$SYSTEM_BIN_DIR/}" \
+    "${SHARED_APPLET_DESKTOPS[@]/#/$SYSTEM_DESKTOP_DIR/}"
 do
     [ -e "$probe" ] && APPLET_INSTALLED=true
 done
@@ -140,7 +163,8 @@ for bin in \
     super-tts-applet-full \
     super-tts-applet-left \
     super-tts-applet-right \
-    tts
+    tts \
+    "${SHARED_APPLET_BINS[@]}"
 do
     for dir in "$SYSTEM_BIN_DIR" "$LEGACY_BIN_DIR"; do
         remove_path "$dir/$bin" && print_info "  removed $dir/$bin"
@@ -153,7 +177,8 @@ for name in \
     super-tts-app.desktop \
     super-tts-cosmic-applet-full.desktop \
     super-tts-cosmic-applet-left.desktop \
-    super-tts-cosmic-applet-right.desktop
+    super-tts-cosmic-applet-right.desktop \
+    "${SHARED_APPLET_DESKTOPS[@]}"
 do
     for dir in "$SYSTEM_DESKTOP_DIR" "$DESKTOP_DIR"; do
         remove_path "$dir/$name" && print_info "  removed $dir/$name"
@@ -163,7 +188,7 @@ done
 # 4. Icons (system hicolor, legacy hicolor-scalable, and the flat
 #    layout some old versions of the script used).
 print_info "Removing icons..."
-for name in super-tts-app.svg super-tts-cosmic-applet.svg; do
+for name in super-tts-app.svg super-tts-cosmic-applet.svg "${SHARED_APPLET_ICONS[@]}"; do
     for dir in "$SYSTEM_ICON_DIR" "$ICON_DIR_HICOLOR" "$ICON_DIR_FLAT"; do
         remove_path "$dir/$name" && print_info "  removed $dir/$name"
     done
@@ -196,6 +221,10 @@ fi
 if [ "$APPLET_INSTALLED" = true ] && pgrep -f cosmic-panel > /dev/null 2>&1; then
     print_info "Restarting cosmic-panel to drop the removed applet..."
     pkill -f cosmic-panel 2>/dev/null || true
+fi
+
+if [ "$SHARED_APPLET_STAYS" = true ]; then
+    print_info "Super STT is installed and uses the shared COSMIC applet, so it stays."
 fi
 
 # Nudge COSMIC's launcher caches so the removed entries disappear without
