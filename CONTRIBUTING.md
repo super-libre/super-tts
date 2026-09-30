@@ -52,7 +52,6 @@ Super TTS is a Rust workspace:
 | `super-tts-daemon`         | The engine: installs backends, loads models, serves the protocol |
 | `super-tts-app`            | Desktop settings & management app                                |
 | `super-tts-cli`            | The `tts` command-line client                                    |
-| `super-tts-cosmic-applet`  | COSMIC panel applet with visualizations                          |
 | `super-tts-consent`        | Consent-popup helper for the auth handshake                      |
 | `super-tts-shared`         | Common types, protocol definitions, validation                   |
 | `super-tts-registry-types` | Super TTS's backend contract, on `super-engine-spec`             |
@@ -63,6 +62,11 @@ The code Super TTS shares with Super STT lives in
 the root `Cargo.toml`. A fix to the backend manifest types, for example, goes
 there, and reaches this workspace when the pin is bumped. So does a fix to the
 daemon's session tokens, consent checks or route guards.
+
+The COSMIC panel applet is shared with Super STT too, and lives in
+[super-cosmic-applet](https://github.com/super-libre/super-cosmic-applet). The
+release builds it at the commit `shared-applet.rev` pins; `just install-applet`
+does the same locally, or builds the checkout `SHARED_APPLET_DIR` names.
 
 The protocol and backend contract that clients and backend authors build
 against live in [`docs/protocol/`](./docs/protocol/).

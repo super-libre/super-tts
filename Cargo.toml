@@ -4,7 +4,6 @@
         "super-tts-app",
         "super-tts-cli",
         "super-tts-consent",
-        "super-tts-cosmic-applet",
         "super-tts-daemon",
         "super-tts-indexer",
         "super-tts-install",
@@ -26,7 +25,6 @@
         "super-tts-app",
         "super-tts-cli",
         "super-tts-consent",
-        "super-tts-cosmic-applet",
         "super-tts-daemon",
         "super-tts-install",
         "super-tts-registry-types",
@@ -112,35 +110,35 @@
         # `just pin-engine <rev>`.
         super-engine-client = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         super-engine-daemon = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         super-engine-forge = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         super-engine-indexer = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         super-engine-installer = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         super-engine-protocol = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         super-engine-spec = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
     super-engine-test-daemon = {
             git = "https://github.com/super-libre/super-engine",
-            rev = "7010eed104753005ef402c7fa5af24b2b9c47a8f",
+            rev = "c6618904f4130fc93c87ef1abbab57df31fa072d",
         }
         thiserror = "2.0"
         tokio = {
