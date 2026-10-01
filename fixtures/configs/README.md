@@ -1,13 +1,13 @@
 # Old-config compatibility fixtures
 
-Each `vX.Y.Z/` directory holds the configuration file(s) that release persisted,
-hand-derived from that tag's source. They are loaded by the applet config tests
+Each `vX.Y.Z/` directory will hold the configuration file(s) a release
+persisted, hand-derived from that tag's source, for the daemon's config tests
 (`just config-compat`) to prove the current code still loads configs written by
 older releases — it must load, migrate, or reset, never crash.
 
-**On every release, add a `vX.Y.Z/` directory** with the configs that version
-wrote (`applet-full.toml`, and `daemon.toml` once one exists — see below). Do
-not reformat existing files — they represent real on-disk user configs.
+**On every release, add a `vX.Y.Z/` directory** with the `daemon.toml` that
+version wrote. Do not reformat existing files — they represent real on-disk
+user configs.
 
 ## No daemon corpus yet
 
@@ -19,6 +19,8 @@ migration path that no user can be on. They were removed rather than rewritten,
 because a hand-edited fixture claiming to be "what v0.1.3 wrote" is worse than
 no fixture at all.
 
-The applet's config did not change shape in the conversion, so its corpus is
-intact and still covers every release. Add `daemon.toml` back starting with
-Super TTS's first release.
+Add `daemon.toml` starting with Super TTS's first release.
+
+The applet's configs moved with the applet to
+[super-cosmic-applet](https://github.com/super-libre/super-cosmic-applet),
+which imports the ones the Super TTS applet wrote and tests them there.

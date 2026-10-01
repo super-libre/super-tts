@@ -6627,9 +6627,9 @@ dependencies = [
 
 [[package]]
 name = "spdx"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8da593e30beb790fc9424502eb898320b44e5eb30367dbda1c1edde8e2f32d7"
+checksum = "081670c233dfbed55690cc0cd38424e0e24ac1b2673d0b408b3f7b684738dfa9"
 dependencies = [
  "smallvec",
 ]
@@ -6718,7 +6718,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "super-engine-client"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "async-stream",
  "futures-util",
@@ -6737,7 +6737,7 @@ dependencies = [
 [[package]]
 name = "super-engine-daemon"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6783,7 +6783,7 @@ dependencies = [
 [[package]]
 name = "super-engine-forge"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "async-trait",
  "log",
@@ -6797,7 +6797,7 @@ dependencies = [
 [[package]]
 name = "super-engine-indexer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6822,7 +6822,7 @@ dependencies = [
 [[package]]
 name = "super-engine-installer"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "clap",
  "dirs",
@@ -6843,7 +6843,7 @@ dependencies = [
 [[package]]
 name = "super-engine-protocol"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "dirs",
  "env_logger",
@@ -6860,7 +6860,7 @@ dependencies = [
 [[package]]
 name = "super-engine-spec"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "hex",
  "ring",
@@ -6877,7 +6877,7 @@ dependencies = [
 [[package]]
 name = "super-engine-test-daemon"
 version = "0.1.0"
-source = "git+https://github.com/super-libre/super-engine?rev=7010eed104753005ef402c7fa5af24b2b9c47a8f#7010eed104753005ef402c7fa5af24b2b9c47a8f"
+source = "git+https://github.com/super-libre/super-engine?rev=c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91#c7d5e0b2fcc7eb3f635f1c144640340ebfd13a91"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -6940,23 +6940,6 @@ dependencies = [
  "libcosmic",
  "log",
  "super-tts-shared",
-]
-
-[[package]]
-name = "super-tts-cosmic-applet"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clap",
- "futures-util",
- "libc",
- "libcosmic",
- "log",
- "serde",
- "serde_json",
- "super-tts-shared",
- "tokio",
- "toml 1.1.0+spec-1.1.0",
 ]
 
 [[package]]

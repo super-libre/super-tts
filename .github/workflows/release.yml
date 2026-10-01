@@ -1,10 +1,13 @@
 name: Release
 
 # Stable release workflow. Builds the daemon/CLI/consent-helper split
-# plus the app and applet, and publishes a non-prerelease
+# plus the app, and publishes a non-prerelease
 # GitHub release. Tags containing the word "beta" go to
 # release-beta.yml instead, which ships the same layout as a prerelease
 # with a `-beta` tarball suffix.
+#
+# The COSMIC applet isn't in the tarball: it has releases of its own, in
+# super-libre/super-cosmic-applet, which the installer installs from.
 
 on:
   push:
@@ -120,7 +123,6 @@ jobs:
             --bin super-tts-cli \
             --bin super-tts-consent \
             --bin super-tts-app \
-            --bin super-tts-cosmic-applet \
             --bin super-tts-install
 
       - name: Create tarball
@@ -133,7 +135,6 @@ jobs:
           cp target/${{ matrix.target }}/release/super-tts-cli dist/
           cp target/${{ matrix.target }}/release/super-tts-consent dist/
           cp target/${{ matrix.target }}/release/super-tts-app dist/
-          cp target/${{ matrix.target }}/release/super-tts-cosmic-applet dist/
 
           # Include systemd service files
           mkdir -p dist/systemd
@@ -143,9 +144,6 @@ jobs:
 
           # Include desktop app resources
           cp -r super-tts-app/resources/* dist/resources
-
-          # Include COSMIC applet resources
-          cp -r super-tts-cosmic-applet/resources/* dist/resources
 
           # Remove any extra assets
           rm -rf dist/resources/assets

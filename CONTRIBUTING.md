@@ -31,7 +31,7 @@ just install            # build and install everything, wired to systemd
 # …or one piece at a time:
 just install-daemon
 just install-app
-just install-applet     # COSMIC only
+just install-applet     # COSMIC only, from a super-cosmic-applet checkout
 ```
 
 ### Development commands
@@ -39,7 +39,6 @@ just install-applet     # COSMIC only
 ```bash
 just run-daemon         # run the daemon in the foreground
 just run-app            # run the settings app
-just run-applet         # run the COSMIC applet
 just audit              # security audit (cargo audit)
 ```
 
@@ -52,7 +51,6 @@ Super TTS is a Rust workspace:
 | `super-tts-daemon`         | The engine: installs backends, loads models, serves the protocol |
 | `super-tts-app`            | Desktop settings & management app                                |
 | `super-tts-cli`            | The `tts` command-line client                                    |
-| `super-tts-cosmic-applet`  | COSMIC panel applet with visualizations                          |
 | `super-tts-consent`        | Consent-popup helper for the auth handshake                      |
 | `super-tts-shared`         | Common types, protocol definitions, validation                   |
 | `super-tts-registry-types` | Super TTS's backend contract, on `super-engine-spec`             |
@@ -63,6 +61,13 @@ The code Super TTS shares with Super STT lives in
 the root `Cargo.toml`. A fix to the backend manifest types, for example, goes
 there, and reaches this workspace when the pin is bumped. So does a fix to the
 daemon's session tokens, consent checks or route guards.
+
+The COSMIC panel applet is shared with Super STT too, and lives in
+[super-cosmic-applet](https://github.com/super-libre/super-cosmic-applet),
+which publishes its own releases. Super TTS's releases don't carry it: the
+installer installs the applet's newest release for the channel. `just
+install-applet` builds and installs it from a checkout of that repo instead,
+`SHARED_APPLET_DIR` or else `../super-cosmic-applet`.
 
 The protocol and backend contract that clients and backend authors build
 against live in [`docs/protocol/`](./docs/protocol/).
