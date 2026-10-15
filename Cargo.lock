@@ -6914,6 +6914,7 @@ dependencies = [
  "super-engine-forge",
  "super-tts-registry-types",
  "super-tts-shared",
+ "tempfile",
  "tokio",
  "toml 1.1.0+spec-1.1.0",
  "urlencoding",
