@@ -260,6 +260,9 @@ pub struct TtsIndexModel {}
 /// [`ManifestError::Product`].
 #[derive(Debug, thiserror::Error)]
 pub enum TtsManifestError {
+    /// `[backend].description` is empty or only whitespace.
+    #[error("`[backend] description` is empty; say in one line what the backend is")]
+    EmptyDescription,
     /// Two `[[models.voices]]` under one model share an `id`.
     #[error("model `{model}` declares voice id `{id}` more than once")]
     DuplicateVoiceId {
@@ -370,6 +373,14 @@ impl Product for Tts {
     };
 
     fn validate(manifest: &Manifest<Self>) -> Result<(), ManifestError> {
+        // The shared parser requires the key but takes any string, and `""`
+        // satisfies it. The Library and the manual-install preview put this
+        // line under the backend's name, and for a backend the registry does
+        // not list it is the only description there is, so an empty one leaves
+        // the card saying nothing about what it installs.
+        if manifest.backend.description.trim().is_empty() {
+            return Err(TtsManifestError::EmptyDescription.into());
+        }
         // Reserved capability: refuse rather than ignore, so an author who
         // declares it learns the path does not exist instead of shipping a
         // backend that silently never receives incremental text.
@@ -511,6 +522,19 @@ mod tests {
             {body}
             "
         )
+    }
+
+    /// The shared parser already refuses a manifest without the key; this is
+    /// the half it lets through, a key holding nothing to show.
+    #[test]
+    fn an_empty_description_is_refused() {
+        for blank in ["\"\"", "\"   \""] {
+            let text = VALID.replace("\"Test backend.\"", blank);
+            assert!(
+                matches!(refusal(&text), TtsManifestError::EmptyDescription),
+                "description = {blank} must be refused"
+            );
+        }
     }
 
     #[test]

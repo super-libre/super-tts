@@ -209,32 +209,89 @@ pub(super) fn inert_chip(
     fg: cosmic::iced::Color,
 ) -> Element<'static, Message> {
     let spacing = cosmic::theme::spacing();
+    chip_shell(
+        row![
+            icons::phosphor_tinted(icon, 14.0, fg),
+            text::caption(label).class(cosmic::theme::Text::Color(fg)),
+        ]
+        .spacing(spacing.space_xxxs)
+        .align_y(Alignment::Center),
+        fg,
+        spacing.space_xs,
+    )
+}
+
+/// The pill itself: soft same-hue fill, hairline border, pill radius. Shared so
+/// a chip with a glyph alone cannot drift from one carrying a label.
+fn chip_shell<'a>(
+    content: impl Into<Element<'a, Message>>,
+    fg: cosmic::iced::Color,
+    h_padding: u16,
+) -> Element<'a, Message> {
+    let spacing = cosmic::theme::spacing();
     let radius = cosmic::theme::active().cosmic().corner_radii.radius_xl;
     let mut fill = fg;
     fill.a = 0.14;
     let mut edge = fg;
     edge.a = 0.32;
 
-    row![
-        icons::phosphor_tinted(icon, 14.0, fg),
-        text::caption(label).class(cosmic::theme::Text::Color(fg)),
+    content
+        .into()
+        .apply(widget::container)
+        .padding([spacing.space_xxxs, h_padding])
+        .class(cosmic::theme::Container::custom(move |_| {
+            cosmic::iced::widget::container::Style {
+                background: Some(cosmic::iced::Background::Color(fill)),
+                border: cosmic::iced::Border {
+                    radius: radius.into(),
+                    width: 1.0,
+                    color: edge,
+                },
+                ..Default::default()
+            }
+        }))
+        .into()
+}
+
+/// One chip per device a model runs on, glyph only, in the order the
+/// backend-level [`capability_chips`] use.
+///
+/// Every device the model declares, not the first one that matches: a Whisper
+/// model runs on GPU *and* CPU, and collapsing that to one badge told the
+/// reader the wrong thing about where it can run.
+///
+/// The glyph carries it without a word. A model list is read down the names,
+/// and nine rows each repeating "GPU" beside a graphics-card icon is nine
+/// copies of what the icon already said. The tooltip keeps the word reachable.
+pub(super) fn model_device_chips(devices: &[String]) -> Vec<Element<'static, Message>> {
+    use super::surface::rounded_tooltip;
+    let spacing = cosmic::theme::spacing();
+    let fg: cosmic::iced::Color = cosmic::theme::active()
+        .current_container()
+        .component
+        .on
+        .into();
+    let has = |want: &str| devices.iter().any(|d| d == want);
+
+    [
+        (has("gpu"), icons::GRAPHICS_CARD, "Accelerated on GPU"),
+        (has("cpu"), icons::CPU, "Runs on the CPU"),
+        (has("none"), icons::CLOUD, "Runs in the cloud"),
     ]
-    .spacing(spacing.space_xxxs)
-    .align_y(Alignment::Center)
-    .apply(widget::container)
-    .padding([spacing.space_xxxs, spacing.space_xs])
-    .class(cosmic::theme::Container::custom(move |_| {
-        cosmic::iced::widget::container::Style {
-            background: Some(cosmic::iced::Background::Color(fill)),
-            border: cosmic::iced::Border {
-                radius: radius.into(),
-                width: 1.0,
-                color: edge,
-            },
-            ..Default::default()
-        }
-    }))
-    .into()
+    .into_iter()
+    .filter(|(present, _, _)| *present)
+    .map(|(_, glyph, tip)| {
+        rounded_tooltip(
+            chip_shell(
+                icons::phosphor_tinted(glyph, 14.0, fg),
+                fg,
+                spacing.space_xxs,
+            ),
+            text::body(tip),
+            widget::tooltip::Position::Top,
+        )
+    })
+    .collect()
 }
 
 /// A neutral, text-only pill — same shape/tone as [`capability_chip`] but
@@ -308,19 +365,36 @@ pub(super) fn model_tag(name: String) -> Element<'static, Message> {
         .into()
 }
 
-/// A backend's model inventory: a muted "Models" label, the first
+/// What every model a TTS backend serves is, as a card names it: the label
+/// the installed card's inventory row and the Browse card's models line lead
+/// with.
+///
+/// The kind rather than a bare "Models", so a card answers "what does this
+/// ship?" without being opened — the same wording Super STT's cards use for
+/// theirs. A TTS backend only ever ships this one kind.
+pub(super) const MODELS_KIND_LABEL: &str = "Text to speech";
+
+/// A backend's model inventory: a muted [`MODELS_KIND_LABEL`], the first
 /// [`MAX_MODEL_TAGS`] model names as outline [`model_tag`]s, then a filled
 /// "+N" [`count_chip`] summarizing the rest. `None` when the backend serves no
 /// models, so the caller skips the row.
+///
+/// The row wraps rather than squeezes. It shares its line with the capability
+/// chips, and three long names (`qwen3-tts-1.7b-voice-design`) beside a GPU
+/// *and* a CPU chip are wider than a card at the default window size: a plain
+/// row then breaks a tag's name across two lines inside its pill and crushes
+/// the "+N" chip to a sliver. Wrapping moves the tags that do not fit to a
+/// second line, whole.
 pub(super) fn models_inventory(names: &[String]) -> Option<Element<'static, Message>> {
     if names.is_empty() {
         return None;
     }
     let spacing = cosmic::theme::spacing();
     let muted = muted_text_color();
-    let mut inventory = row![text::caption("Models").class(cosmic::theme::Text::Color(muted))]
-        .spacing(spacing.space_xxs)
-        .align_y(Alignment::Center);
+    let mut inventory =
+        row![text::caption(MODELS_KIND_LABEL).class(cosmic::theme::Text::Color(muted))]
+            .spacing(spacing.space_xxs)
+            .align_y(Alignment::Center);
     for name in names.iter().take(MAX_MODEL_TAGS) {
         inventory = inventory.push(model_tag(name.clone()));
     }
@@ -328,7 +402,7 @@ pub(super) fn models_inventory(names: &[String]) -> Option<Element<'static, Mess
     if rest > 0 {
         inventory = inventory.push(count_chip(format!("+{rest}")));
     }
-    Some(inventory.into())
+    Some(inventory.wrap().vertical_spacing(spacing.space_xxs).into())
 }
 
 /// Where an online backend sends audio, as a card can describe it: the hosts
@@ -492,10 +566,34 @@ pub(super) fn chip_group(
     .into()
 }
 
-/// The "{shown} backends found" result-count caption above the filter chips.
+/// The "Runs on" segmented filter: local models, cloud models, or both.
+///
+/// Both Library tabs render it from here — the Installed tab gained this filter
+/// after Browse had it, and two copies would drift.
+pub(super) fn runs_on_chips(
+    current: Option<bool>,
+    on_pick: fn(Option<bool>) -> Message,
+) -> Element<'static, Message> {
+    chip_group(
+        "Runs on",
+        false,
+        vec![
+            ("All", current.is_none(), on_pick(None)),
+            ("Local", current == Some(false), on_pick(Some(false))),
+            ("Cloud", current == Some(true), on_pick(Some(true))),
+        ],
+    )
+}
+
+/// The "{shown} backends found" result-count caption above the filter chips,
+/// singular at one.
 pub(super) fn result_count<'a>(shown: usize) -> Element<'a, Message> {
     let muted = muted_text_color();
-    let label = format!("{shown} backends found");
+    let label = if shown == 1 {
+        "1 backend found".to_string()
+    } else {
+        format!("{shown} backends found")
+    };
     text::caption(label)
         .class(cosmic::theme::Text::Color(muted))
         .into()
@@ -535,6 +633,7 @@ mod capability_tests {
         BackendInfo {
             source: "github.com/super-tts/test".to_string(),
             name: "Test".to_string(),
+            description: String::new(),
             version: "1.0.0".to_string(),
             kind: "subprocess".to_string(),
             allowed_hosts: Vec::new(),

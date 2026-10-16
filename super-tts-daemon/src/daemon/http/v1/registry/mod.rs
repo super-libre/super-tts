@@ -16,6 +16,7 @@
 
 pub(crate) mod install;
 pub(crate) mod list;
+pub(crate) mod preview;
 pub(crate) mod refresh;
 pub(crate) mod update;
 
@@ -47,6 +48,7 @@ pub(crate) fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list::list_registry_backends))
         .routes(routes!(refresh::refresh_registry))
         .routes(routes!(install::install_registry_backend))
+        .routes(routes!(preview::preview_registry_backend))
         .routes(routes!(update::update_registry_backend))
 }
 

@@ -69,6 +69,7 @@ scope and asked for `daemon_status_changed` or `download_progress`.
 | [`/gpu_info`](../endpoints/v1/gpu_info.md)                  | GET        | GPU / VRAM information                                                                                 |
 | [`/registry/backend/list`](../endpoints/v1/registry/backends.md) | GET   | List backends available in the registry                                                               |
 | [`/registry/backend/refresh`](../endpoints/v1/registry/refresh.md) | POST | Refresh the registry index                                                                            |
+| [`/registry/backend/preview`](../endpoints/v1/registry/preview.md) | POST | Describe what a source would install, without installing it                                           |
 | [`/registry/backend/install`](../endpoints/v1/registry/install.md) | POST | Install a backend from the registry                                                                   |
 | [`/registry/backend/update`](../endpoints/v1/registry/update.md) | POST | Update an installed registry backend                                                                  |
 | [`/update`](../endpoints/v1/update.md) | GET | Self-update availability (daemon version vs latest release) |

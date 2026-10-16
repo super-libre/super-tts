@@ -418,6 +418,16 @@ impl cosmic::Application for AppModel {
                     .map(|_| Message::Voices(crate::ui::messages::VoicesMessage::RecordingTick)),
             );
         }
+        // The Add-a-backend drawer's spinner is a still SVG per angle, so it
+        // needs a tick to step through them. Only while a check is actually in
+        // flight: outside that the drawer draws no spinner, and a timer left
+        // running would wake the app for nothing.
+        if self.registry.add_preview.is_checking() {
+            subscriptions.push(
+                cosmic::iced::time::every(crate::ui::icons::SPINNER_FRAME)
+                    .map(|_| Message::ModelsPage(ModelsPageMessage::AddPreviewSpin)),
+            );
+        }
         Subscription::batch(subscriptions)
     }
 
@@ -438,6 +448,7 @@ impl cosmic::Application for AppModel {
         // any open per-card overflow menu.
         self.core.window.show_context = false;
         self.models_page.installed_menu_open = None;
+        self.models_page.browse_menu_open = false;
 
         // Opening a page that draws backend cards refetches both catalogs. The
         // daemon reads `installed_version` off disk on every request, so it is

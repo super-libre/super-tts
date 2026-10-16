@@ -141,6 +141,7 @@ stops being one.
 | `/v1/backend/{backend_id}/secret/list` | `GET` | `secrets` | [backends/secrets.md](./endpoints/v1/backends/secrets.md) |
 | `/v1/backend/{backend_id}/secret/{name}` | `GET`, `POST`, `DELETE` | `secrets` | [backends/secrets.md](./endpoints/v1/backends/secrets.md) |
 | `/v1/registry/backend/list` | `GET` | `settings` | [registry/backends.md](./endpoints/v1/registry/backends.md) |
+| `/v1/registry/backend/preview` | `POST` | `settings` | [registry/preview.md](./endpoints/v1/registry/preview.md) |
 | `/v1/registry/backend/install` | `POST` | `settings` | [registry/install.md](./endpoints/v1/registry/install.md) |
 | `/v1/registry/backend/refresh` | `POST` | `settings` | [registry/refresh.md](./endpoints/v1/registry/refresh.md) |
 | `/v1/registry/backend/update` | `POST` | `settings` | [registry/update.md](./endpoints/v1/registry/update.md) |

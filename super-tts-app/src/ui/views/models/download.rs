@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use cosmic::Element;
 use cosmic::iced::widget::{column, row};
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{self, button, space::horizontal as horizontal_space, text};
-use cosmic::{Apply, Element};
 
 use crate::core::app::AppModel;
 use crate::state::ContextPage;
@@ -40,7 +40,14 @@ pub(super) fn download_split(app: &AppModel) -> (Element<'_, Message>, Element<'
         if installed_sources.contains(entry.source.as_str()) {
             continue;
         }
-        if !filters.include_incompatible && !entry.compatibility.compatible {
+        // "Show incompatible" is about hardware this machine will never
+        // satisfy. A backend that needs a newer Super TTS is a different thing
+        // — the user can act on it — so it is listed either way, with the
+        // version to update to in its footer.
+        if !filters.include_incompatible
+            && !entry.compatibility.compatible
+            && !entry.compatibility.needs_client_update
+        {
             continue;
         }
         if let Some(o) = filters.online
@@ -81,15 +88,15 @@ pub(super) fn download_split(app: &AppModel) -> (Element<'_, Message>, Element<'
     (toolbar, list)
 }
 
-/// Search + filter toolbar for the Browse tab. Top row: a prominent search
-/// field (with a built-in clear button) plus the Add-backend and Refresh
-/// actions. Bottom row: the "Runs on" segmented filter, the incompatible
-/// toggle, and — pushed to the right — the live result count.
+/// Search + filter toolbar for the Browse tab. Top to bottom: the live result
+/// count; a prominent search field (with a built-in clear button) beside the
+/// overflow menu that holds Refresh and Install manually; then the "Runs on"
+/// segmented filter and the incompatible toggle, which wrap onto a second line
+/// when they do not fit.
 pub(super) fn download_toolbar<'a>(
     app: &'a AppModel,
     count: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    use super::chips::chip_group;
     let spacing = cosmic::theme::spacing();
     let filters = &app.registry.filters;
 
@@ -100,70 +107,57 @@ pub(super) fn download_toolbar<'a>(
         ))
         .width(Length::Fill);
 
-    let add_btn = button::suggested("+ Add backend").on_press(Message::Shell(
-        ShellMessage::ToggleContextPage(ContextPage::AddBackend),
-    ));
-    // Refresh shows as an icon-only button (a refresh glyph) with a tooltip
-    // rather than a text label. A `Standard`-classed custom button gives it the
-    // surface fill + hairline border that matches the neighbouring text buttons.
-    // Fixed height (`space_l`) squares it off so it lines up with "Add backend"
-    // instead of shrinking to its icon.
-    let btn_height = spacing.space_l;
-    let refresh_btn = widget::tooltip(
-        button::custom(
-            icons::phosphor(icons::ARROWS_CLOCKWISE)
-                .size(16)
-                .apply(widget::container)
-                .center_x(Length::Fixed(f32::from(btn_height)))
-                .center_y(Length::Fill),
-        )
-        .class(cosmic::theme::Button::Standard)
-        .padding(0)
-        .height(Length::Fixed(f32::from(btn_height)))
-        .on_press(Message::ModelsPage(ModelsPageMessage::RefreshRegistry)),
-        widget::container(text::body("Refresh registry")).padding(spacing.space_xxs),
-        widget::tooltip::Position::Bottom,
-    );
-    let search_row = row![search, add_btn, refresh_btn]
+    // One overflow menu rather than two competing buttons. Browse is how a
+    // backend is meant to be added, so refreshing the catalog and installing
+    // from outside it are both secondary to the search field they were
+    // crowding. Mirrors the installed card's own "⋯" menu.
+    let menu_open = app.models_page.browse_menu_open;
+    let trigger = button::icon(icons::phosphor_handle(icons::DOTS_THREE_VERTICAL))
+        .on_press(Message::ModelsPage(ModelsPageMessage::ToggleBrowseMenu));
+    let mut overflow = widget::popover(trigger).position(widget::popover::Position::Bottom);
+    if menu_open {
+        overflow = overflow
+            .popup(browse_overflow_menu())
+            .on_close(Message::ModelsPage(ModelsPageMessage::CloseBrowseMenu));
+    }
+
+    let search_row = row![search, overflow]
         .spacing(spacing.space_xs)
         .align_y(Alignment::Center)
         .width(Length::Fill);
 
     // Low-cardinality filters as one-tap chips (active = accent-filled).
-    let runs_on = chip_group(
-        "Runs on",
-        false,
-        vec![
-            (
-                "All",
-                filters.online.is_none(),
-                Message::ModelsPage(ModelsPageMessage::RegistryOnlineFilter(None)),
-            ),
-            (
-                "Local",
-                filters.online == Some(false),
-                Message::ModelsPage(ModelsPageMessage::RegistryOnlineFilter(Some(false))),
-            ),
-            (
-                "Cloud",
-                filters.online == Some(true),
-                Message::ModelsPage(ModelsPageMessage::RegistryOnlineFilter(Some(true))),
-            ),
-        ],
-    );
+    let runs_on = super::chips::runs_on_chips(filters.online, |o| {
+        Message::ModelsPage(ModelsPageMessage::RegistryOnlineFilter(o))
+    });
     let show_incompat = cosmic::widget::toggler(filters.include_incompatible)
         .label("Show incompatible".to_string())
         .spacing(spacing.space_xs)
         .on_toggle(|x| Message::ModelsPage(ModelsPageMessage::RegistryIncludeIncompatible(x)));
 
-    // RUNS ON chips on the left; the incompatible toggle pushed to the right edge.
-    let filter_row = row![runs_on, horizontal_space(), show_incompat]
+    // Runs-on chips, then the incompatible toggle, wrapping onto a second line
+    // when both will not fit.
+    //
+    // `.wrap()` rather than a plain row: a row squeezes its children when the
+    // window is too narrow for their natural width, and these children have
+    // nothing to give — the labels clip mid-word instead (a chip's label
+    // breaking inside it, the toggle sliding off the edge). How
+    // narrow "too narrow" is depends on the platform's font metrics, so this
+    // is not a fixed breakpoint to tune: macOS renders the same labels wider
+    // than Linux does and hit it at a window size Linux was fine at.
+    //
+    // The toggle used to be pushed to the right edge with a `horizontal_space`
+    // spacer. A wrapping row cannot do that — a fill-width spacer would eat
+    // the rest of the line and force a wrap at every width — so the toggle now
+    // follows the chips directly.
+    let filter_row = row![runs_on, show_incompat]
         .spacing(spacing.space_m)
         .align_y(Alignment::Center)
-        .width(Length::Fill);
+        .wrap()
+        .vertical_spacing(spacing.space_xs);
 
     // The result count gets its own short, left-aligned row sitting tight above
-    // the filter chips; the search row keeps the normal gap below it.
+    // the search row; the filter chips keep the normal gap below that.
     column![
         column![count, search_row]
             .spacing(spacing.space_xxxs)
@@ -279,6 +273,8 @@ pub(super) fn download_card<'a>(
                 entry.source.clone(),
             )))
             .into()
+    } else if entry.compatibility.needs_client_update {
+        button::standard("Update Super TTS").into()
     } else {
         button::standard("Not compatible").into()
     };
@@ -305,14 +301,18 @@ pub(super) fn download_card<'a>(
         .align_y(Alignment::Center)
         .into()
     } else if !entry.compatibility.compatible {
-        let reason = entry
-            .compatibility
-            .reason
-            .as_deref()
-            .unwrap_or("incompatible hardware or OS");
+        let (lead, fallback) = if entry.compatibility.needs_client_update {
+            (
+                "Needs a newer Super TTS",
+                "this backend needs a newer Super TTS",
+            )
+        } else {
+            ("Not compatible", "incompatible hardware or OS")
+        };
+        let reason = entry.compatibility.reason.as_deref().unwrap_or(fallback);
         row![
             icons::phosphor_destructive(icons::WARNING, 14.0),
-            text::caption(format!("Not compatible: {reason}")),
+            text::caption(format!("{lead}: {reason}")),
         ]
         .spacing(spacing.space_xxs)
         .align_y(Alignment::Center)
@@ -331,6 +331,34 @@ pub(super) fn download_card<'a>(
     card = card.push(card_divider()).push(footer);
 
     card_surface(card, false)
+}
+
+/// The popup body for the Browse toolbar's "⋯" menu: refresh the catalog, or
+/// open the manual-install drawer.
+///
+/// Both are catalog-level actions rather than actions on any one backend, which
+/// is why they share a menu and why neither needs to hold a place in the search
+/// row. "Install manually" is the name the drawer carries too, so the item and
+/// what it opens read as one thing.
+fn browse_overflow_menu() -> Element<'static, Message> {
+    let spacing = cosmic::theme::spacing();
+    let col = widget::column::with_capacity(2)
+        .spacing(spacing.space_xxxs)
+        .push(super::surface::menu_item(
+            icons::ARROWS_CLOCKWISE,
+            "Refresh catalog",
+            Message::ModelsPage(ModelsPageMessage::RefreshRegistry),
+        ))
+        // Git-branch rather than a download glyph: the drawer's default source
+        // is a repository, and it is the mark this app already uses for one on
+        // every backend card.
+        .push(super::surface::menu_item(
+            icons::GIT_BRANCH,
+            "Install manually\u{2026}",
+            Message::Shell(ShellMessage::ToggleContextPage(ContextPage::AddBackend)),
+        ));
+
+    super::surface::menu_surface(col, 200.0)
 }
 
 /// Human-readable label for an [`InstallPhase`], shown inside the "Installing…"

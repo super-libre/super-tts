@@ -69,7 +69,7 @@ description = "Local Kokoro text-to-speech."
 | `entrypoint` | string | yes             | Path, relative to the backend directory, to the executable (`subprocess`) or the `.wasm` component (`wasm`). |
 | `contract`   | string | yes             | The [contract generation](#contract-generations) the backend implements. `v1` is the only one so far. Declare the lowest generation whose fields you use; a generation this build does not know is rejected. |
 | `license`    | string | for publication | SPDX identifier of a current OSI-approved or FSF Free/Libre license (e.g. `Apache-2.0`, `MIT`, `GPL-3.0-only`), or the literal `other` for a license outside that set. Required for registry publication; optional for locally installed backends. |
-| `description`| string | yes             | One-line, human-readable summary shown in the registry/Browse listing. |
+| `description`| string | yes             | One-line, human-readable summary, shown under the backend's name in the Library, the Browse listing and the manual-install preview. Must not be empty or only whitespace: for a backend the registry does not list it is the only description the app has. |
 
 `license` is checked against the SPDX license list embedded in the registry
 indexer — no network access — and must be a single, current (non-deprecated)
