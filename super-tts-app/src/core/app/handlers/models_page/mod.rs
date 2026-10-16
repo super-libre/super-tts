@@ -490,6 +490,7 @@ mod tests {
         BackendInfo {
             source: source.to_string(),
             name: "Test".to_string(),
+            description: String::new(),
             version: "1.0.0".to_string(),
             kind: "wasm".to_string(),
             allowed_hosts: Vec::new(),

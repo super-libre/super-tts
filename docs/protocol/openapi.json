@@ -6442,6 +6442,10 @@
             },
             "description": "Hosts the backend is permitted to reach (`[network].allowed_hosts` from\nits `backend.toml`). Empty for subprocess/local backends. Feeds the\n\"Online model\" badge so the user sees where a cloud backend's audio goes."
           },
+          "description": {
+            "type": "string",
+            "description": "The installed `backend.toml`'s `[backend].description`, which the\nmanifest parser requires to be non-empty.\n\nA registry entry carries one too, but only for backends the registry\nlists: a sideloaded or imported-from-dir backend has no entry, and its\ndescription would otherwise be invisible everywhere in the UI. `default`\nso a payload written before the field existed still deserializes."
+          },
           "installed_accel": {
             "type": "array",
             "items": {

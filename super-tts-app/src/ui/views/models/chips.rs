@@ -535,6 +535,7 @@ mod capability_tests {
         BackendInfo {
             source: "github.com/super-tts/test".to_string(),
             name: "Test".to_string(),
+            description: String::new(),
             version: "1.0.0".to_string(),
             kind: "subprocess".to_string(),
             allowed_hosts: Vec::new(),
