@@ -107,6 +107,7 @@ mod tests {
     version    = "{version}"
     kind       = "subprocess"
     entrypoint = "y"
+    product    = "super-tts"
     contract   = "v1"
     description = "Test backend."
 

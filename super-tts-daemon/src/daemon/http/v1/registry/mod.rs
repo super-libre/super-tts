@@ -101,6 +101,7 @@ name = "Piper"
 version = "1.0.0"
 kind = "subprocess"
 entrypoint = "piper"
+product = "super-tts"
 contract = "v1"
 description = "Test backend."
 "#,
