@@ -151,6 +151,77 @@ pub(super) fn card_surface<'a>(
         .into()
 }
 
+/// The surface a "\u{22ef}" overflow menu's popup sits on.
+///
+/// Explicitly opaque. The component base it takes its hue from carries the
+/// system theme's frosted alpha, which is right for a window and wrong for a
+/// popup: a menu floating over a list of cards has to be readable against
+/// whatever it happens to land on, and at the theme's alpha the card titles
+/// behind it showed straight through the item labels.
+///
+/// Shared by the Browse toolbar's menu and the installed-card menu so the two
+/// cannot drift apart.
+pub(super) fn menu_surface<'a>(
+    content: impl Into<Element<'a, Message>>,
+    width: f32,
+) -> Element<'a, Message> {
+    widget::container(content.into())
+        .padding(cosmic::theme::spacing().space_xxs)
+        .width(Length::Fixed(width))
+        .class(cosmic::theme::Container::custom(|theme| {
+            let cosmic = theme.cosmic();
+            let component = &theme.current_container().component;
+            let mut background: cosmic::iced::Color = component.base.into();
+            background.a = 1.0;
+            cosmic::iced::widget::container::Style {
+                background: Some(cosmic::iced::Background::Color(background)),
+                border: cosmic::iced::Border {
+                    radius: cosmic.corner_radii.radius_s.into(),
+                    width: 1.0,
+                    color: component.divider.into(),
+                },
+                shadow: cosmic::iced::Shadow {
+                    color: cosmic::iced::Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.25,
+                    },
+                    offset: cosmic::iced::Vector::new(0.0, 4.0),
+                    blur_radius: 12.0,
+                },
+                snap: true,
+                ..Default::default()
+            }
+        }))
+        .into()
+}
+
+/// One row of an overflow menu: an icon, then its label.
+///
+/// The icon is what makes the two items tell themselves apart at a glance;
+/// without one, a menu of short verbs reads as a wall of text.
+pub(super) fn menu_item(
+    glyph: &'static [u8],
+    label: &'static str,
+    message: Message,
+) -> Element<'static, Message> {
+    let spacing = cosmic::theme::spacing();
+    widget::button::custom(
+        cosmic::iced::widget::row![
+            crate::ui::icons::phosphor(glyph).size(16),
+            widget::text::body(label),
+        ]
+        .spacing(spacing.space_xs)
+        .align_y(cosmic::iced::Alignment::Center),
+    )
+    .class(cosmic::theme::Button::Text)
+    .padding([spacing.space_xxs, spacing.space_xs])
+    .width(Length::Fill)
+    .on_press(message)
+    .into()
+}
+
 /// A faint full-width rule used inside cards to separate the header/body from a
 /// footer action row.
 pub(super) fn card_divider<'a>() -> Element<'a, Message> {
@@ -170,18 +241,26 @@ pub(super) fn muted_text_color() -> cosmic::iced::Color {
     c
 }
 
-/// One-line caption listing the model names a backend serves, joined by " · "
-/// (e.g. `"kokoro-82m · piper-en-us"`). De-emphasized so it reads as a
-/// secondary detail under the card's description. `None` when there are none.
+/// One caption naming the kind of model a backend serves, then its models
+/// joined by " · " (e.g. `"Text to speech: kokoro-82m · piper-en-us"`).
+/// De-emphasized so it reads as a secondary detail under the card's
+/// description. `None` when the backend serves no models.
+///
+/// The kind leads, as the installed card's inventory row does, so the card
+/// says what it ships in the same words wherever it appears.
 pub(super) fn models_line<'a>(names: &[String]) -> Option<Element<'a, Message>> {
     if names.is_empty() {
         return None;
     }
     let muted = muted_text_color();
     Some(
-        text::caption(names.join(" \u{00b7} "))
-            .class(cosmic::theme::Text::Color(muted))
-            .into(),
+        text::caption(format!(
+            "{}: {}",
+            super::chips::MODELS_KIND_LABEL,
+            names.join(" \u{00b7} ")
+        ))
+        .class(cosmic::theme::Text::Color(muted))
+        .into(),
     )
 }
 
@@ -234,15 +313,23 @@ pub(super) fn card_title_block<'a>(
     col.into()
 }
 
-/// A backend's one-line description, looked up on its registry entry by
-/// `source`. The installed `/backends` payload carries no description, so the
-/// registry index is the source; `None` when it isn't loaded or has no
-/// (non-empty) description for this backend.
+/// A backend's one-line description, resolved by `source`; `None` when neither
+/// source has a non-empty one.
 pub(super) fn backend_description(app: &AppModel, source: &str) -> Option<String> {
+    // The registry's copy wins: it tracks the published release, which may be
+    // newer than the manifest sitting on disk. The installed manifest is the
+    // fallback, and the only source for a backend the registry does not list —
+    // sideloaded, or imported from a directory.
     app.registry
         .by_source()
         .get(source)
         .and_then(|e| e.description.clone())
+        .or_else(|| {
+            app.backends
+                .iter()
+                .find(|b| b.source == source)
+                .map(|b| b.description.clone())
+        })
         .filter(|d| !d.is_empty())
 }
 

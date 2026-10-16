@@ -29,7 +29,7 @@ use crate::state::ModelsTab;
 use crate::ui::icons;
 use crate::ui::messages::Message;
 
-pub use add_sheet::add_backend_sheet;
+pub use add_sheet::{add_backend_footer, add_backend_sheet};
 pub use configure::configure_sheet;
 pub use load_sheet::load_backend_sheet;
 

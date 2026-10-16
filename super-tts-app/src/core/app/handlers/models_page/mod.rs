@@ -44,7 +44,6 @@ impl AppModel {
             | ModelsPageMessage::CloseInstalledMenu => self.handle_models_backend_config(message),
 
             ModelsPageMessage::InstallBackend(_)
-            | ModelsPageMessage::InstallBackendFromRepoUrl(_)
             | ModelsPageMessage::InstallAccepted { .. }
             | ModelsPageMessage::InstallFailedToStart { .. }
             | ModelsPageMessage::UpdateBackend(_) => self.handle_models_install_lifecycle(message),
@@ -65,11 +64,20 @@ impl AppModel {
             | ModelsPageMessage::RegistrySearchChanged(_)
             | ModelsPageMessage::RegistryIncludeIncompatible(_)
             | ModelsPageMessage::RegistryOnlineFilter(_)
+            | ModelsPageMessage::InstalledOnlineFilter(_)
             | ModelsPageMessage::ImportBackendFromDir
             | ModelsPageMessage::ImportBackendFromDirPicked(_)
-            | ModelsPageMessage::RegistryCustomRepoInputChanged(_) => {
-                self.handle_models_registry(message)
-            }
+            | ModelsPageMessage::RegistryCustomRepoInputChanged(_)
+            | ModelsPageMessage::ToggleBrowseMenu
+            | ModelsPageMessage::CloseBrowseMenu => self.handle_models_registry(message),
+
+            ModelsPageMessage::AddSourceChanged(_)
+            | ModelsPageMessage::AddFolderInputChanged(_)
+            | ModelsPageMessage::CheckAddSource
+            | ModelsPageMessage::AddPreviewLoaded(_)
+            | ModelsPageMessage::AddPreviewFailed(_)
+            | ModelsPageMessage::AddPreviewSpin
+            | ModelsPageMessage::InstallPreviewed => self.handle_add_sheet(message),
         }
     }
 

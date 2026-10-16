@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `/registry/backend/*` — the published catalog and the acts that change what
-//! is installed from it: list, install, refresh, update.
+//! is installed from it: list, preview, install, refresh, update.
 //!
 //! Removing an installed backend is not here. It is served at
 //! `DELETE /backend/{source}` and lives in
@@ -10,11 +10,13 @@
 
 mod install;
 mod list;
+mod preview;
 mod refresh;
 mod update;
 
 pub use install::{install_by_local_path, install_by_repo_url, install_by_source};
 pub use list::list;
+pub use preview::{preview_by_local_path, preview_by_repo_url};
 pub use refresh::refresh;
 pub use update::update;
 

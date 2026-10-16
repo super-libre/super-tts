@@ -6,6 +6,7 @@ use cosmic::widget::{self, button, text};
 
 use crate::core::app::AppModel;
 use crate::daemon::backends::BackendInfo;
+use crate::state::registry::InstalledFilters;
 use crate::ui::icons;
 use crate::ui::messages::{Message, ModelsPageMessage};
 
@@ -17,23 +18,87 @@ use super::chips::{
 };
 use super::surface::{card_divider, card_surface, card_title_block, repo_button};
 
-/// The Library's Installed tab: every backend the daemon discovered on disk,
-/// one card each. The active backend is included too — activation lives on the
-/// Models page, so the Library is a flat catalog of what's installed.
+/// The Library's Installed tab: a filter toolbar over every backend the daemon
+/// discovered on disk, one card each. The active backend is included too —
+/// activation lives on the Models page, so the Library is a flat catalog of
+/// what's installed.
 pub(super) fn installed_tab(app: &AppModel) -> Element<'_, Message> {
+    let spacing = cosmic::theme::spacing();
+    let filters = &app.models_page.installed_filters;
+
     let cards: Vec<Element<'_, Message>> = app
         .backends
         .iter()
+        .filter(|b| installed_matches(b, filters))
         .map(|backend| installed_card(backend, app))
         .collect();
 
-    if cards.is_empty() {
-        return text::body("No backends installed. Open the Browse tab to install one.").into();
-    }
+    // "Nothing installed" and "nothing matches" are different problems with
+    // different fixes, so they get different sentences.
+    let body: Element<'_, Message> = if cards.is_empty() {
+        if app.backends.is_empty() {
+            text::body("No backends installed. Open the Browse tab to install one.").into()
+        } else {
+            text::body("No installed backends match these filters.").into()
+        }
+    } else {
+        column(cards)
+            .spacing(spacing.space_s)
+            .width(Length::Fill)
+            .into()
+    };
 
-    column(cards)
-        .spacing(cosmic::theme::spacing().space_s)
+    widget::column::with_capacity(2)
+        .spacing(spacing.space_s)
         .width(Length::Fill)
+        .push(installed_toolbar(filters, cards_shown(app, filters)))
+        .push(body)
+        .into()
+}
+
+/// Whether an installed backend survives the Installed tab's filters.
+///
+/// Kept free of [`AppModel`] so the rule is directly unit-testable.
+fn installed_matches(backend: &BackendInfo, filters: &InstalledFilters) -> bool {
+    filters
+        .online
+        .is_none_or(|online| backend_is_online(backend) == online)
+}
+
+/// "{shown} of {total}", matching the Browse tab's count.
+fn cards_shown(app: &AppModel, filters: &InstalledFilters) -> (usize, usize) {
+    let shown = app
+        .backends
+        .iter()
+        .filter(|b| installed_matches(b, filters))
+        .count();
+    (shown, app.backends.len())
+}
+
+/// The Installed tab's filter bar: the same "Runs on" chips the Browse tab
+/// carries, over its own state so narrowing one list leaves the other alone.
+fn installed_toolbar<'a>(
+    filters: &InstalledFilters,
+    (shown, total): (usize, usize),
+) -> Element<'a, Message> {
+    let spacing = cosmic::theme::spacing();
+    let runs_on = super::chips::runs_on_chips(filters.online, |o| {
+        Message::ModelsPage(ModelsPageMessage::InstalledOnlineFilter(o))
+    });
+    let count = text::caption(format!("{shown} of {total}")).class(cosmic::theme::Text::Color(
+        super::surface::muted_text_color(),
+    ));
+
+    // Wraps rather than squeezes, for the reason given on the Browse tab's
+    // toolbar (`download_toolbar`): a plain row that runs out of width clips
+    // its chips mid-word. The count follows the chips instead of being pushed
+    // to the right edge, because a fill-width spacer in a wrapping row would
+    // take a whole line to itself.
+    row![runs_on, count]
+        .spacing(spacing.space_m)
+        .align_y(Alignment::Center)
+        .wrap()
+        .vertical_spacing(spacing.space_xs)
         .into()
 }
 
@@ -49,9 +114,9 @@ pub(super) fn installed_card<'a>(
     let online = backend_is_online(backend);
     let source = backend.source.clone();
 
-    // Registry entry (by source) supplies the description shown under the name
-    // and the latest version that drives the optional Update item. Compared as
-    // semver so a stale/older index never prompts a downgrade.
+    // Registry entry (by source) supplies the latest version that drives the
+    // optional Update item. Compared as semver so a stale/older index never
+    // prompts a downgrade.
     let registry_map = app.registry.by_source();
     let registry_entry = registry_map.get(source.as_str());
     // An update this card started is the same install pipeline Browse drives,
@@ -60,9 +125,9 @@ pub(super) fn installed_card<'a>(
     // that reads to the user.
     let in_flight = app.registry.installs.get(source.as_str());
     let update_version = update_offer(registry_entry.copied(), in_flight.is_some());
-    let description = registry_entry
-        .and_then(|e| e.description.clone())
-        .filter(|d| !d.is_empty());
+    // Registry first, installed manifest second — the same resolution the
+    // Models page uses, so a sideloaded backend still describes itself here.
+    let description = super::surface::backend_description(app, &source);
 
     // Overflow ("⋯") menu: the optional Update, then Uninstall. Configure left
     // the menu to become a visible button beside it.
@@ -157,44 +222,11 @@ pub(super) fn installed_card<'a>(
 /// update offered in two places is one more than the card needs, and the chip
 /// is the one a settled card gives a reason to look at.
 pub(super) fn installed_overflow_menu(source: &str) -> Element<'static, Message> {
-    let spacing = cosmic::theme::spacing();
-    let item = |label: String, msg: Message| -> Element<'static, Message> {
-        button::text(label).width(Length::Fill).on_press(msg).into()
-    };
+    let col = widget::column::with_capacity(1).push(super::surface::menu_item(
+        icons::X,
+        "Uninstall",
+        Message::ModelsPage(ModelsPageMessage::UninstallBackend(source.to_string())),
+    ));
 
-    let col = widget::column::with_capacity(1)
-        .spacing(spacing.space_xxxs)
-        .push(item(
-            "Uninstall".to_string(),
-            Message::ModelsPage(ModelsPageMessage::UninstallBackend(source.to_string())),
-        ));
-
-    widget::container(col)
-        .padding(spacing.space_xxs)
-        .width(Length::Fixed(190.0))
-        .class(cosmic::theme::Container::custom(|theme| {
-            let cosmic = theme.cosmic();
-            let component = &theme.current_container().component;
-            cosmic::iced::widget::container::Style {
-                background: Some(cosmic::iced::Background::Color(component.base.into())),
-                border: cosmic::iced::Border {
-                    radius: cosmic.corner_radii.radius_s.into(),
-                    width: 1.0,
-                    color: component.divider.into(),
-                },
-                shadow: cosmic::iced::Shadow {
-                    color: cosmic::iced::Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.25,
-                    },
-                    offset: cosmic::iced::Vector::new(0.0, 4.0),
-                    blur_radius: 12.0,
-                },
-                snap: true,
-                ..Default::default()
-            }
-        }))
-        .into()
+    super::surface::menu_surface(col, 190.0)
 }
