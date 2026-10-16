@@ -82,6 +82,34 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "backend": {
+            "properties": {
+              "contract": {
+                "const": "v1"
+              }
+            },
+            "required": [
+              "contract"
+            ]
+          }
+        },
+        "required": [
+          "backend"
+        ]
+      },
+      "then": {
+        "properties": {
+          "backend": {
+            "required": [
+              "product"
+            ]
+          }
+        }
+      }
     }
   ],
   "definitions": {
@@ -128,7 +156,7 @@
               "$ref": "#/definitions/Contract"
             }
           ],
-          "description": "The backend-protocol contract generation implemented. See\n[`Generation`]."
+          "description": "The backend-protocol contract generation implemented, as\n[`product`](Self::product) numbers them. See [`Generation`]."
         },
         "description": {
           "description": "One-line, human-readable summary shown in the registry/Browse listing.\nRequired for every backend.",
@@ -350,6 +378,15 @@
         "name": {
           "description": "Human-readable display name.",
           "type": "string"
+        },
+        "product": {
+          "const": "super-tts",
+          "default": null,
+          "description": "The product this backend is built for, by its slug, e.g. `super-stt`.\nA manifest naming any product other than the one parsing it is\nrefused. Optional on the type so manifests written before the field\nkeep loading; a product's contract makes it required.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "source": {
           "description": "Canonical repository id, e.g. `github.com/<owner>/<repo>`. Becomes the\n`source` of every model this backend provides and must be unique\nacross installed backends. For a monorepo, namespace it under the repo\n(e.g. `github.com/<owner>/<repo>/openai`).",
