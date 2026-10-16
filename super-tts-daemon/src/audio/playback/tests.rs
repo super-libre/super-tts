@@ -380,6 +380,36 @@ async fn an_empty_chunk_is_a_no_op() {
     assert_eq!(p.buffered(), 0);
 }
 
+/// The visualizer stamps each window with where its audio will be heard, and
+/// the fade tail `push` holds back sits ahead of the next chunk even though it
+/// is not in the ring yet.
+#[tokio::test]
+async fn the_queue_position_counts_the_held_tail() {
+    let p = Playback::detached(DEVICE);
+    let fade = SeamFade::new(DEFAULT_FADE_MS, DEVICE).samples() as u64;
+
+    p.push(&vec![0.1_f32; 4800], params(48000, 1), &LIVE)
+        .await
+        .unwrap();
+    assert_eq!(p.stats().written_samples, 4800 - fade);
+    assert_eq!(
+        p.queue_position(),
+        4800,
+        "the next chunk lands after the tail"
+    );
+
+    p.end_chunk(&LIVE).await;
+    assert_eq!(
+        p.queue_position(),
+        4800,
+        "closing the chunk writes the tail out; it does not move the position"
+    );
+    p.push(&vec![0.1_f32; 4800], params(48000, 1), &LIVE)
+        .await
+        .unwrap();
+    assert_eq!(p.queue_position(), 9600);
+}
+
 /// A backend faster than realtime must not be able to buffer without bound —
 /// `push` blocks on a full ring instead of growing it.
 #[tokio::test]

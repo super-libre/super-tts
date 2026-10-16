@@ -387,6 +387,18 @@ impl Playback {
         self.shared.lock().ring.available()
     }
 
+    /// Where the first sample of the next [`push`](Self::push) will land, in
+    /// the interleaved device samples [`Stats::written_samples`] counts.
+    ///
+    /// Ahead of `written_samples` by the tail `push` holds back for the
+    /// closing fade: those samples are queued but not yet in the ring, and
+    /// the next chunk's audio is written after them.
+    #[must_use]
+    pub fn queue_position(&self) -> u64 {
+        let held = self.producer.lock().tail.len() as u64;
+        self.shared.lock().stats.written_samples + held
+    }
+
     /// Queue one synthesis chunk, waiting for ring space as needed.
     ///
     /// `params` describes the chunk as the backend produced it; the pipeline

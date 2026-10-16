@@ -996,6 +996,60 @@ async fn frequency_bands_are_published_from_playback() {
     assert!(bands["bands_b64"].is_string());
 }
 
+/// The daemon's FFT window, in samples at the backend's rate.
+const ANALYSIS_WINDOW: usize = 1024;
+
+/// One frame per analysis window, each released as playback reaches it. A
+/// frame per backend frame is what held the applet to 1.5 updates a second
+/// under Qwen, whose frames are 0.68 s long. The mock's frames are short
+/// instead, so here the count is what tells the two apart; a long frame cut
+/// into many windows is covered by the unit tests.
+#[tokio::test]
+async fn frequency_bands_follow_playback_window_by_window() {
+    let Some(model) = loaded_model_with_limit(40) else {
+        eprintln!("skipping: mock component not built");
+        return;
+    };
+    let bus = Arc::new(EventBus::new());
+    let mut rx = bus.subscribe(Topic::FrequencyBands);
+    let engine = SpeechEngine::detached(DEVICE).with_events(Arc::clone(&bus));
+
+    let text = "First sentence here. Second sentence follows. Third one arrives now. \
+                And a fourth to finish.";
+    let utterance = engine.speak(&model, text, None, None).await.expect("speak");
+    assert!(
+        utterance.chunks > 1,
+        "the text should span several responses"
+    );
+    // Windows run on across the mock's 960-sample responses rather than
+    // restarting in each, and the last, partial one is padded out.
+    // A frame per backend frame would be four per response: the mock splits
+    // each into four 240-sample frames.
+    let windows = (utterance.chunks * MOCK_SAMPLES).div_ceil(ANALYSIS_WINDOW);
+
+    // Half the audio heard is about half the frames, and no more.
+    let queued = engine
+        .playback_handle()
+        .await
+        .expect("pipeline opened")
+        .buffered();
+    drain(&engine, queued / 2).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let heard = drain_events(&mut rx).await.len();
+    assert!(
+        heard > 0 && heard < windows,
+        "{heard} of {windows} frames published with half the audio played"
+    );
+
+    play_out(&engine).await;
+    let rest = drain_events(&mut rx).await.len();
+    assert_eq!(
+        heard + rest,
+        windows,
+        "one frame per window, each published once"
+    );
+}
+
 #[tokio::test]
 async fn speech_progress_is_published_for_the_utterance() {
     let Some(model) = loaded_model() else {
