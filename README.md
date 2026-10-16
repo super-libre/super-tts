@@ -8,7 +8,7 @@
 
 *Speak text from anywhere • Any model from a growing library • An open protocol any app can build on • Built in Rust*
 
-[![coverage](https://img.shields.io/endpoint?url=https://jorge-menjivar.github.io/super-tts/coverage/coverage.json)](https://jorge-menjivar.github.io/super-tts/coverage/)
+[![coverage](https://img.shields.io/endpoint?url=https://super-libre.github.io/super-tts/coverage/coverage.json)](https://super-libre.github.io/super-tts/coverage/)
 
 </div>
 
