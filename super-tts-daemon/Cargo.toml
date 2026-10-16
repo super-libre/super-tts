@@ -21,7 +21,7 @@
         default-features = false,
         features = ["json", "query", "tokio", "ws"]
     }
-    base64 = "0.22.1"
+    base64 = "0.23.1"
     bytes = { version = "1.11.1", optional = true }
     chrono.workspace = true
     clap.workspace = true
