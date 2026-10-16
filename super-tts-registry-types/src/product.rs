@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use super_engine_protocol::ProductSpec;
-use super_engine_spec::manifest::{ContractField, Manifest, ManifestError, ModelEntry};
+use super_engine_spec::manifest::{ContractField, FieldRule, Manifest, ManifestError, ModelEntry};
 pub use super_engine_spec::product::{Generation, Product};
 use super_engine_spec::product::{SchemaNames, generation_from_str};
 
@@ -359,11 +359,23 @@ impl Product for Tts {
     type Model = TtsModel;
     type IndexModel = TtsIndexModel;
 
-    /// Empty while v1 is the only generation: there is no earlier contract
-    /// for a field to be withheld from. Adding a field to a v2 means adding a
-    /// row here, and both the parser and the published JSON Schema learn the
-    /// rule from it.
-    const CONTRACT_FIELDS: &'static [ContractField<Contract>] = &[];
+    const SLUG: &'static str = "super-tts";
+
+    /// Adding a field to a v2 means adding a row here, and both the parser
+    /// and the published JSON Schema learn the rule from it.
+    const CONTRACT_FIELDS: &'static [ContractField<Contract>] = &[
+        // From the first generation. Super STT reads the same manifest format
+        // and numbers its contracts from `v1` too, and its backends were
+        // published before the field existed, so it reads a manifest without
+        // one as its own. Requiring it here is what keeps a Super TTS backend
+        // out of Super STT. No Super TTS backend was published without it.
+        ContractField {
+            since: Contract::V1,
+            rule: FieldRule::RequiredFrom,
+            table: "backend",
+            key: "product",
+        },
+    ];
 
     const SCHEMA: SchemaNames = SchemaNames {
         backend_id: "https://jorge-menjivar.github.io/super-tts/backend.schema.json",
@@ -484,7 +496,7 @@ fn validate_voices(model: &ModelEntry<TtsModel>) -> Result<(), TtsManifestError>
 
 #[cfg(test)]
 mod tests {
-    use super::{TtsManifestError, VoiceKind};
+    use super::{Product, SUPER_TTS, Tts, TtsManifestError, VoiceKind};
     use crate::manifest::{Manifest, ManifestError};
 
     const VALID: &str = r#"
@@ -494,6 +506,7 @@ mod tests {
         version = "1.0.0"
         kind = "wasm"
         entrypoint = "y.wasm"
+        product = "super-tts"
         contract = "v1"
         description = "Test backend."
         "#;
@@ -705,6 +718,42 @@ mod tests {
             ));
         }
         assert!(Manifest::parse(&with_model("output_sample_rate = 48000")).is_ok());
+    }
+
+    /// A manifest names Super TTS by the slug it goes by everywhere else.
+    #[test]
+    fn a_manifest_names_super_tts_by_its_slug() {
+        assert_eq!(Tts::SLUG, SUPER_TTS.slug);
+    }
+
+    /// v1 requires `[backend].product`, and there is no older contract to
+    /// drop to.
+    #[test]
+    fn a_manifest_must_name_its_product() {
+        let without = VALID.replace("        product = \"super-tts\"\n", "");
+        let err = Manifest::parse(&without).expect_err("v1 requires the product");
+        assert_eq!(
+            err.to_string(),
+            "`contract = \"v1\"` requires `[backend].product`, which this manifest does \
+             not declare — add it"
+        );
+    }
+
+    /// A manifest naming any product but Super TTS is refused. Super STT's
+    /// backends name theirs from its `v4`, and before that leave it out, which
+    /// the rule above refuses too.
+    #[test]
+    fn a_manifest_for_another_product_is_refused() {
+        for product in ["super-stt", "super-ttss"] {
+            let other = VALID.replace("super-tts", product);
+            match Manifest::parse(&other) {
+                Err(ManifestError::OtherProduct { declared, expected }) => {
+                    assert_eq!(declared, product);
+                    assert_eq!(expected, "super-tts");
+                }
+                other => panic!("{product} must be refused, got {other:?}"),
+            }
+        }
     }
 
     #[test]

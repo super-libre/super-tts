@@ -41,6 +41,7 @@ name = "Mock"
 version = "0.0.0"
 kind = "subprocess"
 entrypoint = "mock-backend"
+product = "super-tts"
 contract = "v1"
 description = "Test backend."
 

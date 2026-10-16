@@ -54,6 +54,7 @@ name        = "Kokoro (local)"
 version     = "0.1.0"
 kind        = "subprocess"
 entrypoint  = "kokoro-backend"
+product     = "super-tts"
 contract    = "v1"
 license     = "Apache-2.0"
 description = "Local Kokoro text-to-speech."
@@ -67,6 +68,7 @@ description = "Local Kokoro text-to-speech."
 | `version`    | string | yes             | Backend version (semver).                                            |
 | `kind`       | string | yes             | `subprocess` or `wasm` — selects the transport.                       |
 | `entrypoint` | string | yes             | Path, relative to the backend directory, to the executable (`subprocess`) or the `.wasm` component (`wasm`). |
+| `product`    | string | yes             | The product the backend is built for: `super-tts`. A manifest naming any other product is refused. See [the product](#the-product). |
 | `contract`   | string | yes             | The [contract generation](#contract-generations) the backend implements. `v1` is the only one so far. Declare the lowest generation whose fields you use; a generation this build does not know is rejected. |
 | `license`    | string | for publication | SPDX identifier of a current OSI-approved or FSF Free/Libre license (e.g. `Apache-2.0`, `MIT`, `GPL-3.0-only`), or the literal `other` for a license outside that set. Required for registry publication; optional for locally installed backends. |
 | `description`| string | yes             | One-line, human-readable summary, shown under the backend's name in the Library, the Browse listing and the manual-install preview. Must not be empty or only whitespace: for a backend the registry does not list it is the only description the app has. |
@@ -93,6 +95,21 @@ controls, so two unrelated authors may both publish a backend named
 
 `id` names the install directory. It is not part of model identity, which is
 the `(name, source)` pair described in [contract.md](./contract.md).
+
+#### The product
+
+Super TTS and Super STT read the same manifest format, and both number their
+contracts from `v1`. Each ignores the keys only the other reads, so without
+`product` nothing in a manifest tells their backends apart. A manifest naming
+any product but `super-tts` is refused, including one already installed:
+
+```
+this backend is built for super-stt, not super-tts
+```
+
+Super STT published backends before the field existed, so it reads a manifest
+without one as its own. That is why Super TTS requires it: a manifest that
+leaves it out would install into Super STT.
 
 ### Contract generations
 
@@ -143,13 +160,12 @@ released — this one included — with no `min_version` field anyone had to thi
 to add first.
 
 Which generation introduced, or began requiring, each manifest field lives in
-one table (`Tts::CONTRACT_FIELDS`, in `super-tts-registry-types`). It is empty while
-`v1` is the only generation: there is no earlier contract for a field to be
-withheld from. It is the extension point rather than dead weight — adding a
-field to a `v2` means adding a row, and both the manifest parser and the
-published `backend.schema.json` learn the rule from that row without being
-taught separately, so an editor bound to the schema flags exactly what the
-parser would refuse, before anything is released.
+one table (`Tts::CONTRACT_FIELDS`, in `super-tts-registry-types`). Its one row
+so far is `v1` requiring [`[backend].product`](#the-product). Adding a field
+to a `v2` means adding a row, and both the manifest parser and the published
+`backend.schema.json` learn the rule from that row without being taught
+separately, so an editor bound to the schema flags exactly what the parser
+would refuse, before anything is released.
 
 A row expresses one of two rules. A field **added** in a generation may not be
 spelled under an older one:
@@ -833,6 +849,7 @@ name        = "Kokoro (local)"
 version     = "0.1.0"
 kind        = "subprocess"
 entrypoint  = "kokoro-backend"
+product     = "super-tts"
 contract    = "v1"
 license     = "Apache-2.0"
 description = "Local Kokoro text-to-speech."
@@ -912,6 +929,7 @@ name        = "OpenAI"
 version     = "0.1.0"
 kind        = "wasm"
 entrypoint  = "openai.wasm"
+product     = "super-tts"
 contract    = "v1"
 license     = "Apache-2.0"
 description = "OpenAI cloud text-to-speech API."
