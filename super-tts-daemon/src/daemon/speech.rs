@@ -36,7 +36,7 @@ use parking_lot::Mutex;
 use super_tts_shared::audio::frames::{AudioParams, Frame, FrameKind};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::audio::playback::{DeviceFormat, Playback};
+use crate::audio::playback::{DeviceFormat, Playback, mixer};
 use crate::daemon::types::SharedLoadedModel;
 use crate::text::chunk::{ChunkPolicy, Chunker};
 use crate::tts_models::v1::{SynthesisSink, SynthesizeRequest};
@@ -647,7 +647,7 @@ impl SpeechEngine {
                 // *publish*, because it runs up to a full ring ahead of the
                 // speakers — so each frame is stamped with the position it
                 // belongs to and handed to `publish_bands`.
-                let mut analyzer = None;
+                let mut windows = None;
                 while let Some(msg) = rx.recv().await {
                     // The sink runs ahead of the speakers by as much as a
                     // faster-than-realtime backend can produce, so this channel
@@ -661,22 +661,15 @@ impl SpeechEngine {
                     match msg {
                         PcmMsg::Samples(samples, params) => {
                             if analyze {
-                                let analyzer = analyzer.get_or_insert_with(|| {
-                                    super_tts_shared::audio::AudioAnalyzer::new(
-                                        params.sample_rate,
-                                        ANALYSIS_WINDOW,
-                                    )
+                                let windows = windows.get_or_insert_with(|| {
+                                    BandWindows::new(params.sample_rate, playback.format())
                                 });
-                                let data = analyzer.analyze(&samples);
-                                // Read before the push: this is where the
-                                // chunk about to be queued starts.
-                                let due = playback.stats().written_samples;
-                                let _ = bands_tx.send(BandFrame {
-                                    due,
-                                    bands: data.bands,
-                                    sample_rate: crate::num_cast::u32_to_f32(params.sample_rate),
-                                    energy: data.total_energy,
-                                });
+                                // Before the push: this is where the chunk
+                                // about to be queued starts.
+                                let at = playback.queue_position();
+                                for frame in windows.feed(&samples, params, at) {
+                                    let _ = bands_tx.send(frame);
+                                }
                             }
                             if let Err(e) = playback.push(&samples, params, &cancelled).await {
                                 warn!("playback push failed: {e}");
@@ -685,6 +678,13 @@ impl SpeechEngine {
                         }
                         PcmMsg::Boundary => playback.end_chunk(&cancelled).await,
                     }
+                }
+                // A stopped utterance's tail will never be heard, and
+                // `publish_bands` has already given up on it.
+                if !cancelled.load(Ordering::Relaxed)
+                    && let Some(frame) = windows.as_mut().and_then(BandWindows::flush)
+                {
+                    let _ = bands_tx.send(frame);
                 }
             }
         });
@@ -1103,12 +1103,129 @@ fn finish_utterance(
 
 /// One analyzed window of audio, waiting for its turn to be heard.
 struct BandFrame {
-    /// Interleaved device samples written to the ring before this chunk, so
-    /// the chunk is sounding once `rendered_samples` passes it.
+    /// Interleaved device samples queued ahead of this window, so the window
+    /// is sounding once `rendered_samples` passes it.
     due: u64,
     bands: Vec<f32>,
     sample_rate: f32,
     energy: f32,
+}
+
+/// Cuts the pump's audio into analysis windows, each stamped with the device
+/// position it will be heard at.
+///
+/// One frame per window, not one per chunk the pump is handed. A chunk is
+/// whatever the backend put in one frame — 0.68 s of audio from Qwen — and the
+/// analyzer keeps only the last window of what it is given, so a frame per
+/// chunk moved the visualizer one and a half times a second, each time drawing
+/// whichever 43 ms ended the chunk. Often that was the pause between two words.
+///
+/// Windows run on across chunks rather than restarting in each, so they are
+/// evenly spaced however the backend frames its audio, and every one is full:
+/// the FFT takes power-of-two lengths only, and a chunk's odd-sized remainder
+/// analyzed on its own came back flat.
+struct BandWindows {
+    analyzer: super_tts_shared::audio::AudioAnalyzer,
+    /// The backend's rate, which the analyzer was built for. Analysis runs
+    /// before `push` resamples.
+    rate: u32,
+    device: DeviceFormat,
+    /// Mono samples short of a full window, carried into the next chunk.
+    pending: Vec<f32>,
+    /// Device position of `pending[0]`.
+    pending_due: u64,
+}
+
+impl BandWindows {
+    fn new(rate: u32, device: DeviceFormat) -> Self {
+        Self {
+            analyzer: super_tts_shared::audio::AudioAnalyzer::new(rate, ANALYSIS_WINDOW),
+            rate,
+            device,
+            pending: Vec::with_capacity(ANALYSIS_WINDOW),
+            pending_due: 0,
+        }
+    }
+
+    /// Analyze every window `samples` completes.
+    ///
+    /// `at` is where the chunk's first sample lands in the ring —
+    /// [`Playback::queue_position`], read *before* the push. Read after, it
+    /// would come too late: `push` waits on ring backpressure, so the chunk
+    /// can already be playing by the time it returns, and its first windows
+    /// would reach the visualizer behind the voice.
+    fn feed(&mut self, samples: &[f32], params: AudioParams, at: u64) -> Vec<BandFrame> {
+        if params.sample_rate != self.rate {
+            // The analyzer's bins are laid out for one rate, and a remainder
+            // at the old rate is no part of a window at the new one.
+            *self = Self::new(params.sample_rate, self.device);
+        }
+        let carried = self.pending.len();
+        if carried == 0 {
+            self.pending_due = at;
+        }
+        if params.channels > 1 {
+            self.pending
+                .extend(mixer::map_channels(samples, params.channels, 1));
+        } else {
+            self.pending.extend_from_slice(samples);
+        }
+
+        let mut frames = Vec::new();
+        let mut start = 0;
+        while self.pending.len() - start >= ANALYSIS_WINDOW {
+            let due = self.due(start, carried, at);
+            frames.push(self.frame(&self.pending[start..start + ANALYSIS_WINDOW], due));
+            start += ANALYSIS_WINDOW;
+        }
+        if start > 0 {
+            self.pending_due = self.due(start, carried, at);
+            self.pending.drain(..start);
+        }
+        frames
+    }
+
+    /// The carried remainder, padded out with silence to a full window.
+    ///
+    /// For the end of the utterance. Without it the last fraction of a window
+    /// is never drawn, and an utterance shorter than a window draws nothing.
+    fn flush(&mut self) -> Option<BandFrame> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let mut window = std::mem::take(&mut self.pending);
+        window.resize(ANALYSIS_WINDOW, 0.0);
+        Some(self.frame(&window, self.pending_due))
+    }
+
+    /// Device position of `pending[i]`, for a chunk queued at `at` behind
+    /// `carried` samples of the one before.
+    ///
+    /// Only a window starting at 0 can begin in the carried samples, because
+    /// fewer than a window's worth are ever carried.
+    fn due(&self, i: usize, carried: usize, at: u64) -> u64 {
+        match i.checked_sub(carried) {
+            Some(into_chunk) => at + self.device_samples(into_chunk),
+            None => self.pending_due,
+        }
+    }
+
+    /// Interleaved device samples that `frames` mono frames at the backend's
+    /// rate become, once `push` has resampled and channel-mapped them.
+    fn device_samples(&self, frames: usize) -> u64 {
+        frames as u64 * u64::from(self.device.sample_rate) / u64::from(self.rate.max(1))
+            * u64::from(self.device.channels.max(1))
+    }
+
+    fn frame(&self, window: &[f32], due: u64) -> BandFrame {
+        let data = self.analyzer.analyze(window);
+        BandFrame {
+            due,
+            bands: data.bands,
+            sample_rate: crate::num_cast::u32_to_f32(self.rate),
+            energy: data.total_energy,
+        }
+    }
 }
 
 /// Publish `frequency_bands` in step with the speakers.
@@ -1122,10 +1239,10 @@ struct BandFrame {
 /// carries the ring position it belongs to, and this task holds it until the
 /// device has played that far.
 ///
-/// Ends when the pump's channel closes and the backlog is drained, or at once
-/// if the utterance is cancelled — a cancel flushes the ring and resets the
-/// position counters, so a held frame would otherwise wait for a point the
-/// device will never reach again.
+/// Ends when the pump's channel closes and the backlog is drained or the audio
+/// has played out, or at once if the utterance is cancelled — a cancel flushes
+/// the ring and resets the position counters, so a held frame would otherwise
+/// wait for a point the device will never reach again.
 async fn publish_bands(
     playback: Arc<Playback>,
     bus: Arc<crate::daemon::events::EventBus>,
@@ -1157,7 +1274,13 @@ async fn publish_bands(
             };
             bus.publish_frequency_bands(&frame.bands, frame.sample_rate, frame.energy);
         }
-        if closed && pending.is_empty() {
+        // Once the pump is gone and the device has played everything it
+        // queued, a frame still held was stamped past the end of the audio and
+        // will never come due. Window positions are worked out from the rate
+        // ratio, not read back from the resampler, so nothing but the ratio
+        // says the audio reaches them; without this, one stamped a sample too
+        // far would keep this task polling until the next cancel.
+        if closed && (pending.is_empty() || played >= playback.queue_position()) {
             return;
         }
         tokio::time::sleep(BAND_TICK).await;

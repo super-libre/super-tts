@@ -349,3 +349,169 @@ async fn an_engine_with_no_library_refuses_a_cloned_id() {
     assert!(matches!(err, SpeakError::UnknownVoice(_)), "got {err}");
     assert!(log.registered.lock().unwrap().is_empty());
 }
+
+// --- Visualizer windows ---
+
+use super::{ANALYSIS_WINDOW, BandWindows};
+use crate::audio::playback::DeviceFormat;
+use crate::audio::playback::mixer;
+use super_tts_shared::audio::frames::{AudioParams, SampleFormat};
+
+/// Qwen's rate, which is also Kokoro's.
+const BACKEND_RATE: u32 = 24_000;
+
+fn backend(channels: u16) -> AudioParams {
+    AudioParams {
+        sample_rate: BACKEND_RATE,
+        channels,
+        format: SampleFormat::S16Le,
+    }
+}
+
+/// `frames` of a 440 Hz tone, interleaved across `channels`.
+fn tone(frames: usize, channels: u16) -> Vec<f32> {
+    (0..frames)
+        .flat_map(|i| {
+            let t = crate::num_cast::usize_to_f32(i) / crate::num_cast::u32_to_f32(BACKEND_RATE);
+            let s = (std::f32::consts::TAU * 440.0 * t).sin() * 0.5;
+            std::iter::repeat_n(s, usize::from(channels))
+        })
+        .collect()
+}
+
+/// One 32 KiB s16le frame from Qwen: what the pump used to turn into a single
+/// visualizer frame, which is how the applet came to draw 1.5 times a second.
+#[test]
+fn one_long_chunk_is_analyzed_window_by_window() {
+    let device = DeviceFormat {
+        sample_rate: 48_000,
+        channels: 2,
+    };
+    let mut windows = BandWindows::new(BACKEND_RATE, device);
+
+    let frames = windows.feed(&tone(16_384, 1), backend(1), 1_000);
+
+    assert_eq!(frames.len(), 16_384 / ANALYSIS_WINDOW);
+    // Each window is 1024 frames at 24 kHz: 2048 at the device's rate, and
+    // two interleaved samples apiece.
+    let dues: Vec<u64> = frames.iter().map(|f| f.due).collect();
+    let expected: Vec<u64> = (0..16).map(|k| 1_000 + k * 4_096).collect();
+    assert_eq!(
+        dues, expected,
+        "stamped in device samples, from where the chunk lands"
+    );
+    assert!(
+        frames.iter().all(|f| f.energy > 0.0),
+        "every window is a full one, which the FFT can take"
+    );
+}
+
+/// Backends frame their audio however they like, so windows have to run on
+/// across frames or their spacing follows the backend instead of the clock.
+#[test]
+fn windows_run_on_across_chunks() {
+    let device = DeviceFormat {
+        sample_rate: BACKEND_RATE,
+        channels: 1,
+    };
+    let mut windows = BandWindows::new(BACKEND_RATE, device);
+
+    // The mock's 960-sample responses, queued back to back.
+    let mut dues = Vec::new();
+    for k in 0..4_u64 {
+        dues.extend(
+            windows
+                .feed(&tone(960, 1), backend(1), k * 960)
+                .iter()
+                .map(|f| f.due),
+        );
+    }
+    dues.extend(windows.flush().map(|f| f.due));
+
+    assert_eq!(dues, vec![0, 1_024, 2_048, 3_072]);
+}
+
+/// A remainder is padded out rather than dropped or handed to the FFT short:
+/// an utterance shorter than a window still moves the visualizer.
+#[test]
+fn the_remainder_is_flushed_as_a_full_window() {
+    let device = DeviceFormat {
+        sample_rate: 48_000,
+        channels: 1,
+    };
+    let mut windows = BandWindows::new(BACKEND_RATE, device);
+
+    assert!(windows.feed(&tone(960, 1), backend(1), 500).is_empty());
+    let last = windows.flush().expect("the remainder is analyzed");
+    assert_eq!(last.due, 500);
+    assert!(last.energy > 0.0, "a padded window still carries the tone");
+    assert!(windows.flush().is_none(), "and only once");
+}
+
+/// A stereo backend is a window per 1024 *frames*, so a window spans the same
+/// stretch of time whatever the channel count.
+#[test]
+fn a_stereo_backend_is_windowed_by_frame() {
+    let device = DeviceFormat {
+        sample_rate: BACKEND_RATE,
+        channels: 2,
+    };
+    let mut windows = BandWindows::new(BACKEND_RATE, device);
+
+    let frames = windows.feed(&tone(2_048, 2), backend(2), 0);
+
+    let dues: Vec<u64> = frames.iter().map(|f| f.due).collect();
+    assert_eq!(dues, vec![0, 2_048]);
+}
+
+/// A window's stamp is worked out from the rate ratio, before `push` has
+/// resampled anything. It must still land on audio that `push` will actually
+/// queue, or the publisher would hold that frame for a position never played.
+#[test]
+fn every_window_lands_inside_the_audio_push_will_queue() {
+    for device_rate in [48_000, 44_100, 22_050, 16_000] {
+        let device = DeviceFormat {
+            sample_rate: device_rate,
+            channels: 2,
+        };
+        // Qwen's full frame and its short last one, Kokoro-sized odd ones, and
+        // the mock's.
+        for len in [16_384, 15_232, 7_001, 2_047, 960, 240] {
+            let mut windows = BandWindows::new(BACKEND_RATE, device);
+            let samples = tone(len, 1);
+            let queued = mixer::prepare(&samples, backend(1), device).unwrap().len() as u64;
+            let mut dues: Vec<u64> = windows
+                .feed(&samples, backend(1), 0)
+                .iter()
+                .map(|f| f.due)
+                .collect();
+            dues.extend(windows.flush().map(|f| f.due));
+            assert!(
+                dues.iter().all(|&d| d < queued),
+                "{len} samples to {device_rate} Hz queue {queued}, windows at {dues:?}"
+            );
+        }
+    }
+}
+
+/// The pump creates the windows once per utterance, at the first chunk's rate.
+/// Should a later chunk arrive at another, the bins have to follow it.
+#[test]
+fn a_change_of_rate_starts_the_windows_over() {
+    let device = DeviceFormat {
+        sample_rate: 48_000,
+        channels: 1,
+    };
+    let mut windows = BandWindows::new(BACKEND_RATE, device);
+    assert!(windows.feed(&tone(512, 1), backend(1), 0).is_empty());
+
+    let other = AudioParams {
+        sample_rate: 48_000,
+        ..backend(1)
+    };
+    let frames = windows.feed(&tone(1_024, 1), other, 1_024);
+
+    assert_eq!(frames.len(), 1, "the 24 kHz remainder is not mixed in");
+    assert_eq!(frames[0].due, 1_024);
+    assert!((frames[0].sample_rate - 48_000.0).abs() < f32::EPSILON);
+}
