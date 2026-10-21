@@ -205,7 +205,7 @@ pub struct AppModel {
     /// The subset of [`Self::backends`] that can fill the synthesis stage, as
     /// `GET /pipeline/{stage}/backend/list` reports it.
     ///
-    /// What the "Load a backend" sheet may offer. Selecting a backend that
+    /// What the "Select a backend" sheet may offer. Selecting a backend that
     /// serves nothing this stage can run is refused by the daemon, so a sheet
     /// built from the full catalog offers picks that fail on click — and while
     /// synthesis is the only stage the two lists are identical, which is

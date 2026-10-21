@@ -69,9 +69,9 @@ pub enum ContextPage {
     /// (global vs per-model) is carried by `AppModel::language_picker_target`.
     LanguagePicker,
     /// Right-side sheet for choosing which installed backend to activate (the
-    /// Models page's "Load a backend" / "Switch backend" flow). Scoped to the
-    /// Models page; picking a backend activates it and closes the sheet.
-    LoadBackend,
+    /// Models page's "Select synthesis backend" flow). Scoped to the Models
+    /// page; picking a backend activates it and closes the sheet.
+    SelectBackend,
 }
 
 /// Where a transient action error belongs, so a failed save surfaces as an

@@ -84,17 +84,17 @@ impl AppModel {
                     .footer(views::models::add_backend_footer(self))
                 })
             }
-            // The "Load a backend" sheet is scoped to the Models page: it lists
-            // installed backends and activates the chosen one.
-            ContextPage::LoadBackend => {
+            // The "Select a backend" sheet is scoped to the Models page: it
+            // lists installed backends and activates the chosen one.
+            ContextPage::SelectBackend => {
                 let on_models_page = self.daemon_status == DaemonStatus::Connected
                     && matches!(self.nav.data::<Page>(self.nav.active()), Some(Page::Models));
                 on_models_page.then(|| {
                     context_drawer::context_drawer(
-                        views::models::load_backend_sheet(self),
-                        Message::Shell(ShellMessage::ToggleContextPage(ContextPage::LoadBackend)),
+                        views::models::select_backend_sheet(self),
+                        Message::Shell(ShellMessage::ToggleContextPage(ContextPage::SelectBackend)),
                     )
-                    .title("Load a backend")
+                    .title("Select synthesis backend")
                 })
             }
             // Language picker sheet — a search-box + scrollable selectable list

@@ -205,6 +205,9 @@ pub enum ModelsPageMessage {
     /// User picked a device in the active-backend card's device dropdown.
     /// Stages it for the Load button — does *not* call the daemon.
     StageActiveDevice(String),
+    /// User picked a device for the model already loaded. Moves it there: the
+    /// daemon reloads the running model onto the new device.
+    MoveLoadedModel(String),
     /// User clicked the Load button. Writes the staged device against the
     /// staged *model* when it differs from what the daemon already holds for
     /// it, then points the stage at that model. No-op when nothing is staged
