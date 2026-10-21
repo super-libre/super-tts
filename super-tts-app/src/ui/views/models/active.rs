@@ -7,10 +7,9 @@ use super_tts_shared::models::protocol::{DownloadProgress, LoadProgress, load_pr
 
 use crate::core::app::{AppModel, ModelOperationState};
 use crate::daemon::backends::BackendInfo;
-use crate::state::ContextPage;
 use crate::ui::icons;
 use crate::ui::messages::{
-    DownloadMessage, LanguageMessage, Message, ModelsPageMessage, ShellMessage, VoiceMessage,
+    DownloadMessage, LanguageMessage, Message, ModelsPageMessage, VoiceMessage,
 };
 
 use super::chips::{
@@ -315,20 +314,20 @@ pub(super) fn active_backend_card<'a>(
     let model_loaded = !app.current_source.is_empty() && app.current_source == backend.source;
     let missing = unmet_requirements(&app.backend_secret_configured, backend);
 
-    // Header: glyph + name/description, then the repo button, a "Switch
-    // backend" trigger (reopens the Load-a-backend sheet), Configure, and
+    // Header: glyph + name/description, then the repo button, Configure, and
     // Deselect. The repo button + description replace the old source caption.
+    // Changing backend is ✕ then pick again, as in Super STT: one way in, one
+    // way out, and no button that silently swaps what a loaded card is about.
     let description = super::surface::backend_description(app, &source);
     let actions = row![
         super::surface::repo_button(&source),
-        button::standard("Switch backend").on_press(Message::Shell(
-            ShellMessage::ToggleContextPage(ContextPage::LoadBackend),
-        )),
         button::standard("Configure").on_press(Message::ModelsPage(
             ModelsPageMessage::OpenBackendConfig(source.clone()),
         )),
-        button::destructive("Deselect")
-            .on_press(Message::ModelsPage(ModelsPageMessage::DeselectBackend)),
+        super::surface::deselect_button(
+            "Deselect this backend",
+            Message::ModelsPage(ModelsPageMessage::DeselectBackend),
+        ),
     ]
     .spacing(spacing.space_xs)
     .align_y(Alignment::Center);
@@ -428,39 +427,91 @@ pub(super) fn active_backend_card<'a>(
     card_surface(card, true)
 }
 
+/// The device dropdown for the loaded model, or `None` when there is nothing
+/// to offer.
+///
+/// Rendered on the loaded row, as Super STT's card does, because a running
+/// model's device can be changed in place: the daemon reloads it onto the new
+/// one. Hidden, that change took Unload, re-pick, Load.
+///
+/// The list and the selection are the daemon's answer for this model — its
+/// declared devices narrowed to what this install and host can do, and the
+/// preference it would load with. `None` covers the answer not having arrived
+/// and an empty one, which is what an online model gets: neither has anything
+/// to pick.
+fn running_device_dropdown<'a>(
+    backend: &'a BackendInfo,
+    app: &'a AppModel,
+) -> Option<Element<'a, Message>> {
+    let model = app.current_model.as_str();
+    let devices: Vec<String> = app.model_devices(&backend.source, model)?.to_vec();
+    if devices.is_empty() {
+        return None;
+    }
+    let selected = app
+        .model_device_preference(&backend.source, model)
+        .and_then(|d| devices.iter().position(|x| x == d));
+    let pick = devices.clone();
+    Some(
+        widget::dropdown(devices, selected, move |index| {
+            Message::ModelsPage(ModelsPageMessage::MoveLoadedModel(pick[index].clone()))
+        })
+        .placeholder("Device")
+        .into(),
+    )
+}
+
+/// What a loaded model is *running* on, when that is not simply the device the
+/// picker beside it already shows.
+///
+/// "cpu · cpu" is noise; a `gpu` choice running on `cuda`, or one that fell
+/// back to the CPU, is the thing worth saying. Empty when there is nothing to
+/// add, including for an online model, which runs on no local device.
+fn resolved_suffix(running: &str, chosen: Option<&str>) -> String {
+    if running.is_empty() || running == "none" || Some(running) == chosen {
+        return String::new();
+    }
+    format!(" \u{00b7} {running}")
+}
+
 /// Summary shown in the active-backend card when a model is currently
 /// loaded for this backend. Reads as e.g. "Active: kokoro-82m · cuda" with
-/// an Unload button on the right; the Unload click frees the device memory but
-/// keeps both the backend and the model it was pointed at.
+/// the model's device, voice and language beside it and Reload and Unload on
+/// the right; Unload frees the device memory but keeps both the backend and
+/// the model it was pointed at.
 ///
-/// The device named here is the accelerator the load actually resolved to, not
-/// the `cpu`/`gpu` preference that asked for it — a `gpu` choice that fell back
-/// to the CPU would otherwise have this line tell the user they are on a GPU
-/// they are not on.
+/// The device named on the label is the accelerator the load actually resolved
+/// to, not the `cpu`/`gpu` preference that asked for it — a `gpu` choice that
+/// fell back to the CPU would otherwise have this line tell the user they are
+/// on a GPU they are not on.
 ///
 /// Controls on one row, prose on the next. The row has less space than it
 /// looks: `page_container` caps the page at 800px however wide the window is,
-/// so this row is ~768px and never more, against ~500px of dropdown, language
-/// button, Reload and Unload. A sentence pushed in among them is the difference
-/// between fitting and not — and what overflows is the *end* of the row, which
-/// is Unload, the only way to reach a different model on this page. So
-/// [`voice_warning`] goes underneath, the way [`no_viable_device_warning`] and
-/// [`vram_warning`] already do for the idle half of this card. The accent label
-/// is the one `Length::Fill` here, so when the fixed controls do crowd it, what
-/// gives is the model name wrapping rather than a button leaving the card.
+/// so this row is ~768px and never more, against a device dropdown, a voice
+/// dropdown, a language button, Reload and Unload. Reload is a glyph rather
+/// than a word for that reason. A sentence pushed in among them is the
+/// difference between fitting and not — and what overflows is the *end* of the
+/// row, which is Unload, the only way to reach a different model on this page.
+/// So [`voice_warning`] goes underneath, the way [`no_viable_device_warning`]
+/// and [`vram_warning`] already do for the idle half of this card. The accent
+/// label is the one `Length::Fill` here, so when the fixed controls do crowd
+/// it, what gives is the model name wrapping rather than a button leaving the
+/// card.
 pub(super) fn loaded_model_summary<'a>(
     backend: &'a BackendInfo,
     app: &'a AppModel,
 ) -> Element<'a, Message> {
     let spacing = cosmic::theme::spacing();
-    let device_suffix = if app.current_device.is_empty() || app.current_device == "none" {
-        String::new()
-    } else {
-        format!(" · {}", app.current_device)
-    };
-    let label = text::body(format!("Active: {}{device_suffix}", app.current_model))
-        .class(cosmic::theme::Text::Accent)
-        .width(Length::Fill);
+    let label = text::body(format!(
+        "Active: {}{}",
+        app.current_model,
+        resolved_suffix(
+            &app.current_device,
+            app.model_device_preference(&backend.source, &app.current_model)
+        )
+    ))
+    .class(cosmic::theme::Text::Accent)
+    .width(Length::Fill);
     // Top-aligned, not centred: the label is the one thing here that can grow
     // to two lines, and centring against a wrapped one drags every control down
     // half a line with it. Anchored to the top, the row keeps its shape and the
@@ -468,7 +519,13 @@ pub(super) fn loaded_model_summary<'a>(
     let mut summary = row![label]
         .spacing(spacing.space_xs)
         .align_y(Alignment::Start);
-    // Per-model voice and language, inline before Unload. Voice first: it is
+    // The same device picker the unloaded card shows, in the same place.
+    // Changing it now moves the running model rather than staging a choice for
+    // a Load that is not coming.
+    if let Some(devices) = running_device_dropdown(backend, app) {
+        summary = summary.push(devices);
+    }
+    // Per-model voice and language, inline before Reload. Voice first: it is
     // the one a user changes between utterances, and the one that decides
     // whether a cloning model can speak at all.
     if let Some(voice) = voice_dropdown(backend, &app.current_model, app) {
@@ -481,16 +538,19 @@ pub(super) fn loaded_model_summary<'a>(
     // the same model back up on the same device, for the case the daemon cannot
     // see — a secret edited by another tool, a model file replaced underneath
     // it. Without it the only way to pick that change up is Unload, re-pick,
-    // Load. Disabled while a switch is in flight, so a second click cannot race
-    // the first.
-    summary = summary.push(
-        button::standard("Reload")
-            .leading_icon(icons::phosphor_handle(icons::ARROWS_CLOCKWISE))
+    // Load. A glyph with its word in the tooltip, like the header's ✕, so the
+    // device picker has room. Disabled while a switch is in flight, so a second
+    // click cannot race the first.
+    summary = summary.push(super::surface::rounded_tooltip(
+        widget::button::icon(icons::phosphor_handle(icons::ARROWS_CLOCKWISE))
+            .class(cosmic::theme::Button::Standard)
             .on_press_maybe(
                 app.is_model_ready()
                     .then_some(Message::ModelsPage(ModelsPageMessage::ReloadActiveModel)),
             ),
-    );
+        text::body("Reload this model"),
+        widget::tooltip::Position::Bottom,
+    ));
     // A leading stop glyph fronts the Unload label, mirroring the Load button's
     // play icon so load/unload read as a play/stop pair.
     let summary = summary.push(
@@ -864,6 +924,44 @@ mod vram_shortfall_tests {
     #[test]
     fn no_gpu_info_is_silent() {
         assert_eq!(vram_shortfall(Some("gpu"), 48 * GIB, None), None);
+    }
+}
+
+#[cfg(test)]
+mod resolved_suffix_tests {
+    //! The loaded label names the accelerator only when the picker beside it
+    //! does not already say it.
+    use super::resolved_suffix;
+
+    /// A `gpu` preference running on CUDA says where it actually is.
+    #[test]
+    fn an_accelerator_the_picker_does_not_name_is_shown() {
+        assert_eq!(resolved_suffix("cuda", Some("gpu")), " \u{00b7} cuda");
+    }
+
+    /// So is a fallback: a `gpu` preference that came up on the CPU.
+    #[test]
+    fn a_fallback_to_the_cpu_is_shown() {
+        assert_eq!(resolved_suffix("cpu", Some("gpu")), " \u{00b7} cpu");
+    }
+
+    /// "cpu · cpu" is the picker said twice.
+    #[test]
+    fn the_device_the_picker_shows_is_not_repeated() {
+        assert_eq!(resolved_suffix("cpu", Some("cpu")), "");
+    }
+
+    /// Nothing running locally, or not yet read back, adds nothing.
+    #[test]
+    fn no_local_device_adds_nothing() {
+        assert_eq!(resolved_suffix("", Some("gpu")), "");
+        assert_eq!(resolved_suffix("none", None), "");
+    }
+
+    /// With no answer for the picker yet, the accelerator still shows.
+    #[test]
+    fn an_unanswered_picker_still_names_the_accelerator() {
+        assert_eq!(resolved_suffix("cuda", None), " \u{00b7} cuda");
     }
 }
 

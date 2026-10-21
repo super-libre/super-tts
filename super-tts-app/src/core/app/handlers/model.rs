@@ -111,9 +111,14 @@ impl AppModel {
                 // preference can fall back to the CPU, so what the card names
                 // has to be read after the load rather than assumed from what
                 // was staged before it.
+                //
+                // The device answer is read too, for the loaded row's picker: a
+                // move to another device changes the preference it selects, and
+                // a load from the stage view never staged one to begin with.
                 let mut tasks = vec![
                     self.load_model_language(&source, model.clone()),
-                    self.load_model_voice(&source, model),
+                    self.load_model_voice(&source, model.clone()),
+                    self.load_model_device(&source, model),
                     self.load_running_device(),
                 ];
                 // The Voices page states what the loaded model can do with a
@@ -238,9 +243,11 @@ impl AppModel {
                 self.models_page.staged_model = None;
                 self.models_page.staged_device = None;
                 // Wire point 1: a model is up, so its language block can fill
-                // the card's language control.
+                // the card's language control, and its device answer the
+                // loaded row's picker.
                 tasks.push(self.load_model_language(&source, model.clone()));
-                tasks.push(self.load_model_voice(&source, model));
+                tasks.push(self.load_model_voice(&source, model.clone()));
+                tasks.push(self.load_model_device(&source, model));
             }
             (Some((model, source)), false) => {
                 // Selected but not running — the daemon kept the choice through

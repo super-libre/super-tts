@@ -6,7 +6,7 @@ mod configure;
 mod download;
 mod fmt;
 mod installed;
-mod load_sheet;
+mod select_sheet;
 mod status;
 mod surface;
 mod tabs;
@@ -31,7 +31,7 @@ use crate::ui::messages::Message;
 
 pub use add_sheet::{add_backend_footer, add_backend_sheet};
 pub use configure::configure_sheet;
-pub use load_sheet::load_backend_sheet;
+pub use select_sheet::select_backend_sheet;
 
 /// Re-exported so the Updates page's header badge (`ui/views/updates.rs`) can
 /// give its tooltip the same small corner radius as the GPU/status pills'
@@ -189,37 +189,66 @@ pub(crate) fn gpu_summary(app: &AppModel) -> Option<Element<'_, Message>> {
 
 // ── Models page ─────────────────────────────────────────────────────────────
 
-/// Models page view: the single active-backend card (its model picker,
-/// load/unload, Configure, Deselect, and a "Switch backend" trigger), or an
-/// empty state with a "Load a backend" button when none is active. Installing
-/// and managing backends lives on the Library page; activation happens here via
-/// the "Load a backend" side sheet.
+/// Models page view: a Synthesis section holding the active backend's card,
+/// or an empty state that opens the "Select synthesis backend" sheet.
+/// Installing and managing backends lives on the Library page; selecting them
+/// happens here.
+///
+/// Laid out as Super STT's page is — a heading per pipeline stage over that
+/// stage's card — with the one stage Super TTS has. The heading is what a
+/// second stage would sit beside, and until then it says what the card is for.
 pub fn page(app: &AppModel) -> Element<'_, Message> {
     let title_row = widget::row::with_capacity(1)
         .align_y(Alignment::Center)
         .push(text::title3("Models").width(Length::Fill));
 
     // The active backend's card when one is selected (and still installed);
-    // otherwise the empty state that opens the "Load a backend" sheet.
-    let body = match app
+    // otherwise the empty state that opens the "Select a backend" sheet.
+    let synthesis = match app
         .models_page
         .active_backend
         .as_deref()
         .and_then(|source| app.backends.iter().find(|b| b.source == source))
     {
         Some(backend) => page_container(active_backend_card(backend, app)),
-        None => page_container(load_sheet::no_backend_empty_state()),
+        None => page_container(select_sheet::no_backend_empty_state()),
     };
 
-    let mut page = widget::column::with_capacity(3).push(page_container(title_row));
-    // Above the card, where the control that failed is: a voice the daemon
+    let mut body = widget::column::with_capacity(3);
+    // Above the section, where the control that failed is: a voice the daemon
     // refused has to say so somewhere the user is already looking.
     if let Some(message) = app.action_error_for(crate::state::ErrorScope::Models) {
-        page = page.push(page_container(crate::ui::views::common::error_banner(
+        body = body.push(page_container(crate::ui::views::common::error_banner(
             message,
         )));
     }
-    page.push(body).height(Length::Fill).spacing(0).into()
+    body = body
+        .push(page_container(section_heading("Synthesis")))
+        .push(synthesis);
+
+    // The body scrolls and the title stays put. A card with its advisories
+    // open is taller than a short window, and a fixed-height column draws what
+    // does not fit clipped — the model picker or Unload cut off below the
+    // fold — where a scrollable gives it its natural height.
+    widget::column::with_capacity(2)
+        .push(page_container(title_row))
+        .push(
+            widget::scrollable(body)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .height(Length::Fill)
+        .spacing(0)
+        .into()
+}
+
+/// A Models-page section heading, in the weight and spacing Super STT's stage
+/// headings use.
+fn section_heading(label: &str) -> Element<'_, Message> {
+    widget::row::with_capacity(1)
+        .align_y(Alignment::Center)
+        .push(text::title4(label).width(Length::Fill))
+        .into()
 }
 
 /// Library page view: a fixed header (title + Installed/Browse tab bar) over a

@@ -17,9 +17,13 @@ use super::chips::{
 };
 use super::surface::muted_text_color;
 
-/// The Models-page empty state, shown when no backend is active: a soft glyph
-/// tile, a short prompt, and a primary "Load a backend" button that opens the
-/// [`load_backend_sheet`]. Fills the page so it sits centered.
+/// The Synthesis section's empty state, shown when no backend is selected: a
+/// soft glyph tile, a short prompt, and a primary "Select synthesis backend"
+/// button that opens the [`select_backend_sheet`].
+///
+/// Centered horizontally but sized to its content, under the section heading
+/// like the card it stands in for. Filling the page height instead would float
+/// it to the middle of the window, away from the heading that names it.
 pub(super) fn no_backend_empty_state<'a>() -> Element<'a, Message> {
     let spacing = cosmic::theme::spacing();
     let ring = super::active::glyph_tile(72.0, 34.0, true);
@@ -28,37 +32,37 @@ pub(super) fn no_backend_empty_state<'a>() -> Element<'a, Message> {
         .align_x(Alignment::Center)
         .spacing(spacing.space_xs)
         .push(ring)
-        .push(text::title4("No backend loaded"))
+        .push(text::title4("No backend selected"))
         .push(
-            text::body("Load a backend to start speaking.")
+            text::body("Select a backend to start speaking.")
                 .class(cosmic::theme::Text::Color(muted_text_color())),
         )
         .push(
-            button::suggested("Load a backend")
+            button::suggested("Select synthesis backend")
                 .leading_icon(icons::phosphor_handle(icons::PLAY))
                 .on_press(Message::Shell(ShellMessage::ToggleContextPage(
-                    ContextPage::LoadBackend,
+                    ContextPage::SelectBackend,
                 ))),
         );
 
     widget::container(col)
         .center_x(Length::Fill)
-        .center_y(Length::Fill)
         .width(Length::Fill)
-        .height(Length::Fill)
+        .padding([spacing.space_m, 0, spacing.space_m, 0])
         .into()
 }
 
-/// The "Load a backend" side sheet: a hint line plus one row per backend that
-/// can fill the synthesis stage. The active backend is flagged; every other row
-/// carries a Load button that activates it (and dismisses the sheet).
+/// The "Select synthesis backend" side sheet: a hint line plus one row per
+/// backend that can fill the synthesis stage. The active backend is flagged;
+/// every other row carries a Select button that activates it (and dismisses the
+/// sheet).
 ///
 /// Drawn from `stage_backends`, not the full installed catalog: the daemon
 /// refuses a backend that serves nothing this stage can run, so a sheet built
 /// from the catalog offers picks that fail the moment they are made. The two
 /// lists are identical while synthesis is the only stage — which is why reading
 /// the wrong one here would look right for as long as it took to add a second.
-pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
+pub fn select_backend_sheet(app: &AppModel) -> Element<'_, Message> {
     let spacing = cosmic::theme::spacing();
     let muted = muted_text_color();
     let active = app.models_page.active_backend.as_deref();
@@ -82,7 +86,7 @@ pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
     }
 
     for backend in &app.stage_backends {
-        col = col.push(load_backend_row(
+        col = col.push(select_backend_row(
             backend,
             active == Some(backend.source.as_str()),
         ));
@@ -90,9 +94,9 @@ pub fn load_backend_sheet(app: &AppModel) -> Element<'_, Message> {
     col.into()
 }
 
-/// One backend row inside the load sheet: glyph + name + capability chips, then
-/// either an "Active" flag or a Load button.
-fn load_backend_row(backend: &BackendInfo, is_active: bool) -> Element<'static, Message> {
+/// One backend row inside the sheet: glyph + name + capability chips, then
+/// either an "Active" flag or a Select button.
+fn select_backend_row(backend: &BackendInfo, is_active: bool) -> Element<'static, Message> {
     let spacing = cosmic::theme::spacing();
     let online = backend_is_online(backend);
     let egress = online.then(|| CloudEgress {
@@ -118,7 +122,7 @@ fn load_backend_row(backend: &BackendInfo, is_active: bool) -> Element<'static, 
             .class(cosmic::theme::Text::Accent)
             .into()
     } else {
-        button::suggested("Load")
+        button::suggested("Select")
             .leading_icon(icons::phosphor_handle(icons::PLAY))
             .on_press(Message::ModelsPage(ModelsPageMessage::SelectBackend(
                 backend.source.clone(),

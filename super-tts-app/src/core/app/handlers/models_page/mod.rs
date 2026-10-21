@@ -28,6 +28,7 @@ impl AppModel {
             ModelsPageMessage::ModelsTabActivated(_)
             | ModelsPageMessage::StageActiveModel(_)
             | ModelsPageMessage::StageActiveDevice(_)
+            | ModelsPageMessage::MoveLoadedModel(_)
             | ModelsPageMessage::LoadStagedModel
             | ModelsPageMessage::UnloadActiveModel
             | ModelsPageMessage::ReloadActiveModel => self.handle_models_tab_selection(message),
@@ -136,6 +137,8 @@ impl AppModel {
                 Task::none()
             }
 
+            ModelsPageMessage::MoveLoadedModel(device) => self.handle_move_loaded_model(device),
+
             ModelsPageMessage::LoadStagedModel => self.handle_load_staged_model(),
 
             ModelsPageMessage::UnloadActiveModel => self.handle_unload_active_model(),
@@ -212,6 +215,46 @@ impl AppModel {
                 }
             }),
         ])
+    }
+
+    /// Move the loaded model onto `device`: the daemon writes the preference
+    /// and reloads the running model there, answering once it is back up.
+    ///
+    /// The same shape as Reload, because to the card it is one: the model goes
+    /// down and comes back, so the controls are disabled for the length of it
+    /// and success is reported as a switch to the same model, which re-reads
+    /// the resolved accelerator, the language and the device answer. Nothing is
+    /// written optimistically — the label names the accelerator a load
+    /// confirmed, and the picker the preference the daemon holds.
+    fn handle_move_loaded_model(&mut self, device: String) -> Task<cosmic::Action<Message>> {
+        let (model, source) = (self.current_model.clone(), self.current_source.clone());
+        if model.is_empty() {
+            log::warn!("MoveLoadedModel ignored — no model is loaded");
+            return Task::none();
+        }
+        // Re-picking the device it already prefers is not a change. The daemon
+        // would skip the reload too, but only after a round trip that greys
+        // the card out for nothing.
+        if self.model_device_preference(&source, &model) == Some(device.as_str()) {
+            return Task::none();
+        }
+        if !self.is_model_ready() {
+            log::warn!("Model operation already in progress — ignoring device change");
+            return Task::none();
+        }
+        self.set_model_loading(model.clone(), format!("Moving to {device}..."));
+        Task::perform(
+            set_model_device(SYNTHESIS_STAGE, model.clone(), device),
+            move |result| match result {
+                Ok(()) => cosmic::Action::App(Message::Model(ModelMessage::ModelChanged {
+                    model: model.clone(),
+                    source: source.clone(),
+                })),
+                Err(e) => {
+                    cosmic::Action::App(Message::Device(DeviceMessage::DeviceError(e.to_string())))
+                }
+            },
+        )
     }
 
     fn handle_load_staged_model(&mut self) -> Task<cosmic::Action<Message>> {
@@ -352,7 +395,7 @@ impl AppModel {
                 self.clear_loaded_model();
                 self.clear_staged_model();
                 self.model_operation_state = ModelOperationState::Ready;
-                // Activation comes from the Models page's "Load a backend" sheet;
+                // Activation comes from the Models page's "Select a backend" sheet;
                 // dismiss it now that a choice was made.
                 self.core.window.show_context = false;
                 Task::perform(
