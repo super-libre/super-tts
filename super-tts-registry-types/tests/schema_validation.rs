@@ -105,3 +105,38 @@ fn accepts_registry_toml() {
         "registry.toml schema errors: {errors:#?}"
     );
 }
+
+/// `[[models]].prepare_files` is a v1 field, so the schema takes it on a v1
+/// manifest. The schema half of `prepare_files_parse_under_v1`.
+#[test]
+fn the_schema_accepts_prepare_files_under_v1() {
+    let doc = toml_to_json(
+        r#"
+[backend]
+source = "github.com/x/y"
+name = "Y"
+version = "1.0.0"
+kind = "subprocess"
+entrypoint = "y"
+product = "super-tts"
+contract = "v1"
+description = "Test backend."
+
+[[models]]
+name = "m"
+primary_language = "en"
+supported_languages = ["en"]
+supported_devices = ["cpu"]
+prepare_files = ["m/config.json"]
+files = [{ url = "https://h/config.json", destination = "m/config.json" }]
+"#,
+    );
+    let errors: Vec<String> = backend_validator()
+        .iter_errors(&doc)
+        .map(|e| format!("{} at {}", e, e.instance_path()))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "prepare_files under v1 must validate: {errors:#?}"
+    );
+}

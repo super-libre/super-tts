@@ -45,14 +45,17 @@ backend directory and the following environment:
 
 On startup the backend binds `SUPER_TTS_BACKEND_SOCKET`, begins serving
 `/v1`, and reports `state: "starting"` from `GET /v1/status` until a
-`POST /v1/load` arrives. It resolves a model's files from
+[`POST /v1/prepare`](./contract.md#post-v1prepare) or `POST /v1/load`
+arrives. It resolves a model's files from
 `SUPER_TTS_BACKEND_DIR` joined with the model's `dest`.
 
 The daemon polls for `ready` for **ten minutes** before giving up on a load,
 or for as long as the load keeps moving if the backend reports its progress
 (see [`GET /v1/status`](./contract.md#get-v1status)). Ten minutes is a
 generous budget on purpose: a backend that compiles its GPU kernels
-at runtime should do it during the load, not on the first request, because
+at runtime should do it during the load, or in a
+[prepare](./contract.md#post-v1prepare) that overlaps it with the download of
+the weights, and never on the first request, because
 `ready` is what the daemon shows the user and what it starts sending
 synthesis requests against. A load that fails must say so with `error`
 rather than leave the daemon waiting out the budget (see
@@ -85,7 +88,7 @@ unit. The backend cannot relax these restrictions; design against them:
 |-----------------------------------|----------------------------------------------------------------|
 | `PrivateNetwork=yes`              | No IP network of any kind. The Unix socket still works.        |
 | `ProtectSystem=strict`            | The entire filesystem is read-only …                           |
-| `ReadOnlyPaths=<backend dir>`     | … including the backend's own directory: the daemon provisions model files before the unit spawns, and the backend never writes there. |
+| `ReadOnlyPaths=<backend dir>`     | … including the backend's own directory: the daemon provisions model files into it, and the backend never writes there. A model with [`prepare_files`](./config.md#models) has its backend spawned once those files are on disk; the rest arrive while it runs, each under its final name only once it is complete and verified. |
 | `ReadWritePaths=<socket dir>`     | The socket directory is writable.                              |
 | `ReadWritePaths=<cache dir>`      | `SUPER_TTS_BACKEND_CACHE_DIR` is writable, and is the only writable path whose contents survive the process. Every cache the daemon points a library at lives under it, including the driver's. |
 | `ProtectHome=read-only`, `PrivateTmp=yes` | `$HOME` is readable but not writable; `/tmp` is private and writable, but it is discarded with the unit — scratch only, never a cache. |
@@ -97,8 +100,9 @@ Two consequences worth stating plainly:
 
 - **No network.** A subprocess backend can never reach the internet. Any
   file a model needs is downloaded by the daemon (which has network) into
-  the backend directory before `load`. This is why `allowed_hosts` must be
-  empty for subprocess backends.
+  the backend directory before `load`, and the files a
+  [prepare](./contract.md#post-v1prepare) reads before `prepare`. This is why
+  `allowed_hosts` must be empty for subprocess backends.
 - **GPU access is a deliberate hole.** Computing on an accelerator requires
   exposing the GPU device nodes, and the GPU driver is privileged kernel
   attack surface. This is inherent to GPU compute and is not closed by the
