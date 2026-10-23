@@ -121,7 +121,7 @@ the lowest generation whose fields you use.
 
 | Generation | Covers                                                                                                                                             | First supported by |
 |------------|------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| `v1`       | The contract as this document describes it: discovery from `backend.toml`, `POST /v1/load`, `POST /v1/synthesize`, `POST /v1/cancel`, and the cloned-voice registration routes for models that declare them. | Super TTS 0.1.0    |
+| `v1`       | The contract as this document describes it: discovery from `backend.toml`, `POST /v1/load`, `POST /v1/synthesize`, `POST /v1/cancel`, the cloned-voice registration routes for models that declare them, and [`POST /v1/prepare`](./contract.md#post-v1prepare) for models that declare [`prepare_files`](#models). | Super TTS 0.1.0    |
 
 `v1` is currently the only generation, so every manifest declares it and there
 is no second row to choose between. The machinery below is described anyway,
@@ -674,6 +674,7 @@ language = "en"
 | `clone_ref_seconds`      | number          | no       | Longest reference audio accepted for a cloned voice, in seconds. **Required** when `voice_kinds` contains `cloned`, forbidden otherwise. Must be positive. The daemon trims a longer recording to this before registering it, so the value is a budget rather than a filter. |
 | `clone_needs_transcript` | boolean         | no       | Whether registering a cloned voice also requires the reference clip's transcript. Default `false`; forbidden without `cloned` in `voice_kinds`. Set it for in-context cloning, which conditions on the words as well as the audio — the daemon then refuses to register a clip stored without one, instead of letting every synthesis fail. Speaker-embedding cloning leaves it unset. |
 | `voices`                 | array of table  | no       | Preset voices the model provides — see [`[[models.voices]]`](#voices). Empty for models whose voices are entirely cloned or described. |
+| `prepare_files`          | array of string | no       | The files the model's [prepare](./contract.md#post-v1prepare) reads, each a `destination` from the model's [`files`](#modelsfiles). The daemon downloads these first, starts the backend and sends `POST /v1/prepare`, then downloads the rest while the backend builds its kernels. Declaring it promises the backend serves `POST /v1/prepare` for this model, and that the prepare reads only these files. An entry that is not one of the model's `destination`s is refused. Default empty: no prepare. |
 | `provider`               | string          | no       | Compatibility field. Not part of model identity and read by nothing in the daemon; it is echoed back verbatim as `provider` in [`POST /v1/load`](./contract.md#post-v1load) so a backend that still validates it keeps loading. |
 
 > **Compatibility.** `provider` was part of model identity before it became
@@ -739,9 +740,10 @@ manifest is rejected.
 
 The files a model needs, and where to place them. `files` is an array in which
 each entry describes **one file**: a download URL and the path to write it to.
-The daemon fetches every file before calling `POST /v1/load`. Files are fetched
-the same way regardless of host — no source is given special treatment. Cloud
-models declare no files.
+The daemon fetches every file before calling `POST /v1/load`, one at a time in
+the order listed, except that the model's [`prepare_files`](#models) come
+first. Files are fetched the same way regardless of host — no source is given
+special treatment. Cloud models declare no files.
 
 Written compactly as an inline-table array on the model:
 

@@ -19,6 +19,8 @@ use tokio::net::UnixListener;
 
 struct AppState {
     loaded: AtomicBool,
+    /// A prepare finished and no load has started since.
+    prepared: AtomicBool,
 }
 
 #[tokio::main]
@@ -26,6 +28,7 @@ async fn main() {
     let socket = std::env::var("SUPER_TTS_BACKEND_SOCKET").expect("SUPER_TTS_BACKEND_SOCKET");
     let state = Arc::new(AppState {
         loaded: AtomicBool::new(false),
+        prepared: AtomicBool::new(false),
     });
     let app = Router::new()
         .route(
@@ -34,6 +37,7 @@ async fn main() {
         )
         .route("/v1/status", get(status))
         .route("/v1/load", post(load))
+        .route("/v1/prepare", post(prepare))
         .route("/v1/synthesize", post(synthesize))
         .route(
             "/v1/cancel",
@@ -69,12 +73,90 @@ async fn status(State(s): State<Arc<AppState>>) -> Json<Value> {
             "device": "cpu",
             "model": { "name": "mock" }
         }))
+    } else if s.prepared.load(Ordering::SeqCst) {
+        Json(json!({ "status": "success", "state": "prepared" }))
     } else {
         Json(json!({ "status": "success", "state": "starting" }))
     }
 }
 
+/// The model a test prepares to have the prepare fail, which must leave its
+/// load unharmed.
+const PREPARE_FAILS: &str = "mock-prepare-fails";
+
+/// The model a test prepares to have the backend exit during the prepare, so
+/// the daemon has to start it again before the load.
+const DIES_ON_PREPARE: &str = "mock-dies-on-prepare";
+
+/// The file a successful prepare leaves in the cache directory: the files the
+/// backend directory held when the prepare arrived, one per line, sorted. The
+/// daemon does not poll a prepare, so this is how a test sees that one ran
+/// and what was on disk for it.
+const PREPARED_MARKER: &str = "prepared";
+
+/// `POST /v1/prepare` — record what was on disk, unless the model is one that
+/// makes the prepare fail or the backend exit.
+async fn prepare(State(s): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+    if s.loaded.load(Ordering::SeqCst) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "status": "error", "message": "already_loading" })),
+        );
+    }
+    let name = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("name").and_then(Value::as_str).map(str::to_string));
+    match name.as_deref() {
+        // A failed prepare is only logged, and the state stays `starting`.
+        Some(PREPARE_FAILS) => eprintln!("mock: the prepare failed"),
+        Some(DIES_ON_PREPARE) => {
+            eprintln!("mock: the driver crashed while preparing");
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                std::process::exit(139);
+            });
+        }
+        _ => {
+            record_prepare();
+            s.prepared.store(true, Ordering::SeqCst);
+        }
+    }
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({ "status": "success", "message": "Preparing started" })),
+    )
+}
+
+/// Write [`PREPARED_MARKER`] into the cache directory.
+fn record_prepare() {
+    let (Ok(dir), Ok(cache)) = (
+        std::env::var("SUPER_TTS_BACKEND_DIR"),
+        std::env::var("SUPER_TTS_BACKEND_CACHE_DIR"),
+    ) else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let mut files = Vec::new();
+    let mut pending = vec![dir.clone()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(relative) = path.strip_prefix(&dir) {
+                files.push(relative.display().to_string());
+            }
+        }
+    }
+    files.sort();
+    let _ = std::fs::write(
+        std::path::Path::new(&cache).join(PREPARED_MARKER),
+        files.join("\n"),
+    );
+}
+
 async fn load(State(s): State<Arc<AppState>>, _body: String) -> impl IntoResponse {
+    s.prepared.store(false, Ordering::SeqCst);
     s.loaded.store(true, Ordering::SeqCst);
     (
         StatusCode::ACCEPTED,
