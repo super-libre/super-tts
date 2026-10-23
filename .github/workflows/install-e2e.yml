@@ -59,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: super-libre/super-engine/.github/actions/install-e2e@fc3aff799643960606d964bd2d0cd0a246dde2d5
+      - uses: super-libre/super-engine/.github/actions/install-e2e@109d0491b6f1f28765772ea430d10033784f1875
         with:
           slug: super-tts
           short-name: tts
