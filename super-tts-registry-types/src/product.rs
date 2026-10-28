@@ -739,6 +739,18 @@ mod tests {
         );
     }
 
+    /// `prepare_files` is a v1 field. No Super TTS backend shipped before it,
+    /// so the first generation has it, where Super STT's has it from its `v4`.
+    #[test]
+    fn prepare_files_parse_under_v1() {
+        let m = Manifest::parse(&with_model(
+            r#"prepare_files = ["m/config.json"]
+            files = [{ url = "https://h/config.json", destination = "m/config.json" }]"#,
+        ))
+        .expect("prepare_files under v1 parses");
+        assert_eq!(m.models[0].prepare_files, ["m/config.json"]);
+    }
+
     /// A manifest naming any product but Super TTS is refused. Super STT's
     /// backends name theirs from its `v4`, and before that leave it out, which
     /// the rule above refuses too.
